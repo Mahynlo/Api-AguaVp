@@ -1,6 +1,6 @@
 // File: src/controllers/rutasController.js
-const db = require('../../database/db');
-const ControllerIntegration = require('../sockets/enhanced/controllerIntegration');
+import db from '../../database/db.js';
+import ControllerIntegration from '../sockets/enhanced/controllerIntegration.js';
 
 const rutasController = {
     crearRuta: (req, res) => {
@@ -354,4 +354,4 @@ const rutasController = {
     withWebSocket: ControllerIntegration.withWebSocket
 }
 
-module.exports = rutasController;
+export default rutasController;

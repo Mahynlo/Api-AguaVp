@@ -1,6 +1,6 @@
 //file: src/controllers/lecturasController.js
-const db = require('../../database/db');
-const ControllerIntegration = require('../sockets/enhanced/controllerIntegration');
+import db from '../../database/db.js';
+import ControllerIntegration from '../sockets/enhanced/controllerIntegration.js';
 
 /**
  * Función auxiliar para generar factura automáticamente
@@ -613,4 +613,4 @@ const lecturasController = {
     withWebSocket: ControllerIntegration.withWebSocket
 };
 
-module.exports = lecturasController;
+export default lecturasController;

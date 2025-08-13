@@ -18,13 +18,11 @@
  * - Se utiliza sqlite3 para interactuar con la base de datos SQLite.
  */
 
+import express from 'express';
+import authController from '../controllers/authController.js';
+import appKeyMiddleware from '../middlewares/appKeyMiddleware.js';
 
-
-
-const express = require('express');
 const router = express.Router();
-const authController = require('../controllers/authController');
-const appKeyMiddleware = require('../middlewares/appKeyMiddleware');
 /**
  * @swagger
  * tags:
@@ -147,4 +145,4 @@ router.post('/logout',appKeyMiddleware,authController.logout);
  */
 router.get('/sesionesActivas/:usuarioId', appKeyMiddleware, authController.sesionesActivas);
 
-module.exports = router;
+export default router;

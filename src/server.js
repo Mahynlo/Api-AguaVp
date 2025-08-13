@@ -23,16 +23,20 @@
  * - Se utiliza bcryptjs para cifrar las contraseñas.
  * 
  */
-const express = require('express');
-const http = require('http');
-const cors = require('cors');
-const { Server } = require('socket.io');
-const setupSocket = require('./v1/sockets/socket');
-const SocketManager = require('./v1/sockets/enhanced/socketManager');
-const routes = require('./routes');
-//docuementación
-const swaggerUi = require('swagger-ui-express');
-const swaggerJsdoc = require('swagger-jsdoc');
+
+// Cargar variables de entorno
+import 'dotenv/config';
+
+import express from 'express';
+import http from 'http';
+import cors from 'cors';
+import { Server } from 'socket.io';
+import setupSocket from './v1/sockets/socket.js';
+import SocketManager from './v1/sockets/enhanced/socketManager.js';
+import routes from './routes/index.js';
+//documentación
+import swaggerUi from 'swagger-ui-express';
+import swaggerJsdoc from 'swagger-jsdoc';
 
 // Configuración de Swagger
 const swaggerOptions = {
@@ -126,4 +130,4 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
 setupSocket(io);  // Sistema básico para compatibilidad
 socketManager.initialize(io);  // Sistema mejorado con autenticación y roles
 
-module.exports = server;
+export default server;

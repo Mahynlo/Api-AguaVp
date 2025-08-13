@@ -14,11 +14,12 @@
  * - GET /health/system - Información del sistema
  */
 
-const express = require('express');
+import express from 'express';
+import healthController from '../controllers/healthController.js';
+import appKeyMiddleware from '../middlewares/appKeyMiddleware.js';
+import authMiddleware from '../middlewares/authMiddleware.js';
+
 const router = express.Router();
-const healthController = require('../controllers/healthController');
-const appKeyMiddleware = require('../middlewares/appKeyMiddleware');
-const authMiddleware = require('../middlewares/authMiddleware');
 
 /**
  * @swagger
@@ -212,4 +213,4 @@ router.get('/database', appKeyMiddleware, authMiddleware, healthController.check
  */
 router.get('/system', appKeyMiddleware, authMiddleware, healthController.getSystemDetails);
 
-module.exports = router;
+export default router;

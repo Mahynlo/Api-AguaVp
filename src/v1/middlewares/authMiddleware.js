@@ -24,7 +24,7 @@
  * 
  */
 
-const db = require("../../database/db");
+import db from "../../database/db.js";
 
 function authMiddleware(req, res, next) {
     const authHeader = req.headers.authorization; // Obtiene el encabezado de autorización
@@ -57,7 +57,7 @@ function authMiddleware(req, res, next) {
     });
 }
 
-module.exports = authMiddleware;
+export default authMiddleware;
 
 
 

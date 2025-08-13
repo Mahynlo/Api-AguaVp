@@ -1,5 +1,5 @@
-const db = require('../../database/db');
-const ControllerIntegration = require('../sockets/enhanced/controllerIntegration');
+import db from '../../database/db.js';
+import ControllerIntegration from '../sockets/enhanced/controllerIntegration.js';
 
 const facturasController = {
     generarFactura: async (req, res) => {
@@ -518,4 +518,4 @@ const facturasController = {
     withWebSocket: ControllerIntegration.withWebSocket
 };
 
-module.exports = facturasController;
+export default facturasController;

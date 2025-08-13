@@ -20,12 +20,13 @@
  * 
  * Pendiente de implementar:
  */
-const express = require("express");
+import express from "express";
+import authMiddleware from "../middlewares/authMiddleware.js";
+import clientesController from "../controllers/clientesController.js";
+import appKeyMiddleware from '../middlewares/appKeyMiddleware.js';
+import ControllerIntegration from '../sockets/enhanced/controllerIntegration.js';
+
 const router = express.Router();
-const authMiddleware = require("../middlewares/authMiddleware");
-const clientesController = require("../controllers/clientesController");
-const appKeyMiddleware = require('../middlewares/appKeyMiddleware');
-const ControllerIntegration = require('../sockets/enhanced/controllerIntegration');
 
 console.log("Clientes router loaded");
 // Middleware para verificar la autenticación
@@ -137,4 +138,4 @@ router.get("/listar", appKeyMiddleware, authMiddleware, ControllerIntegration.wi
 
 router.put("/modificar/:id", appKeyMiddleware, authMiddleware, ControllerIntegration.withWebSocket, clientesController.modificarCliente);
 
-module.exports = router;
+export default router;

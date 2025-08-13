@@ -34,167 +34,192 @@
  * 
 */
 
-const bcrypt = require('bcryptjs');
-const db = require('../../database/db');
-const generateToken = require('../../utils/generateToken');
-const ControllerIntegration = require('../sockets/enhanced/controllerIntegration');
+import bcrypt from "bcryptjs";
+import db from "../../database/db.js"; // conexión con createClient()
+import generateToken from "../../utils/generateToken.js";
+import ControllerIntegration from "../sockets/enhanced/controllerIntegration.js";
 
 const authController = {
-    login: (req, res) => {
-        const { correo, contraseña,dispositivo } = req.body;
+    login: async (req, res) => {
+        try {
+            const { correo, contraseña, dispositivo } = req.body;
 
-        if (!correo || !contraseña) {
-            return res.status(400).json({ error: 'Correo y contraseña requeridos' });
-        }
+            if (!correo || !contraseña) {
+                return res.status(400).json({ error: "Correo y contraseña requeridos" });
+            }
 
-        const query = `SELECT * FROM usuarios WHERE correo = ?`;
-        db.get(query, [correo], async (err, user) => {
-            if (err) return res.status(500).json({ error: 'Error en el servidor' });
-            if (!user) return res.status(401).json({ error: 'Usuario no encontrado' });
+            const query = `SELECT * FROM usuarios WHERE correo = ?`;
+            const user = await new Promise((resolve, reject) => {
+                db.get(query, [correo], (err, row) => {
+                    if (err) reject(err);
+                    else resolve(row);
+                });
+            });
+
+            if (!user) return res.status(401).json({ error: "Usuario no encontrado" });
 
             const validPassword = await bcrypt.compare(contraseña, user.contraseña);
-            if (!validPassword) return res.status(401).json({ error: 'Contraseña incorrecta' });
+            if (!validPassword) return res.status(401).json({ error: "Contraseña incorrecta" });
 
             const token = generateToken(user);
 
             // Guardar sesión
             const insertQuery = `
-        INSERT INTO sesiones (usuario_id, token, direccion_ip, dispositivo)
-        VALUES (?, ?, ?, ?)
-      `;
-            const ip = req.ip || '';
-            //const dispositivo = req.headers['user-agent'] || '';
+                INSERT INTO sesiones (usuario_id, token, direccion_ip, dispositivo)
+                VALUES (?, ?, ?, ?)
+            `;
+            const ip = req.ip || "";
+            db.run(insertQuery, [user.id, token, ip, dispositivo], function(err) {
+                if (err) {
+                    console.error("Error al guardar sesión:", err);
+                }
+            });
 
-            db.run(insertQuery, [user.id, token, ip, dispositivo], function (err) {
-                if (err) return res.status(500).json({ error: 'Error al guardar sesión' });
+            // Datos para WebSocket
+            const userData = {
+                id: user.id,
+                email: user.correo,
+                name: user.nombre,
+                username: user.username,
+                role: user.rol,
+                login_time: new Date().toISOString(),
+                ip: ip,
+                dispositivo: dispositivo
+            };
 
-                // Datos del usuario para WebSocket
-                const userData = {
+            try {
+                if (res.websocket && typeof res.websocket.trackOperation === "function") {
+                    ControllerIntegration.onUserLogin(userData);
+                    res.websocket.trackOperation("user_login", {
+                        user_id: user.id,
+                        username: user.username
+                    });
+                }
+            } catch (error) {
+                console.log("WebSocket no disponible para login - esto es normal:", error.message);
+            }
+
+            res.json({
+                success: true,
+                mensaje: "Inicio de sesión exitoso",
+                token,
+                user: {
                     id: user.id,
                     email: user.correo,
-                    name: user.nombre,
+                    nombre: user.nombre,
                     username: user.username,
-                    role: user.rol,
-                    login_time: new Date().toISOString(),
-                    ip: ip,
-                    dispositivo: dispositivo
-                };
-
-                // Emitir evento de login (solo si WebSocket está disponible)
-                try {
-                    if (res.websocket && typeof res.websocket.trackOperation === 'function') {
-                        ControllerIntegration.onUserLogin(userData); // Notificar a WebSocket 
-                        res.websocket.trackOperation('user_login', {
-                            user_id: user.id,
-                            username: user.username
-                        });
-                    }
-                } catch (error) {
-                    console.log('WebSocket no disponible para login - esto es normal:', error.message);
+                    rol: user.rol,
+                    activo: user.activo
                 }
-
-                res.json({
-                    success: true,
-                    mensaje: 'Inicio de sesión exitoso',
-                    token,
-                    user: {
-                        id: user.id,
-                        email: user.correo,
-                        nombre: user.nombre,
-                        username: user.username,
-                        rol: user.rol,
-                        activo: user.activo
-                    }
-                });
-
             });
-        });
+
+        } catch (err) {
+            console.error("Error en login:", err);
+            res.status(500).json({ error: "Error en el servidor" });
+        }
     },
 
-    registrar: (req, res) => {
-        const { correo, nombre, contrasena, username, rol } = req.body;
+    registrar: async (req, res) => {
+        try {
+            const { correo, nombre, contrasena, username, rol } = req.body;
 
+            if (!correo || !contrasena || !username || !rol) {
+                return res.status(400).json({ error: "Todos los campos son obligatorios" });
+            }
 
-        if (!correo || !contrasena || !username || !rol) {
-            return res.status(400).json({ error: 'Todos los campos son obligatorios' });
-        }
+            const hashedPassword = bcrypt.hashSync(contrasena, 10);
 
-        const hashedPassword = bcrypt.hashSync(contrasena, 10);// Cifrar la contraseña
+            const query = `
+                INSERT INTO usuarios (correo, nombre, contraseña, username, rol)
+                VALUES (?, ?, ?, ?, ?)
+            `;
 
-        const query = `
-        INSERT INTO usuarios (correo,nombre, contraseña, username, rol)
-        VALUES (?, ?, ?, ?,?)
-        `;
-
-        db.run(query, [correo, nombre, hashedPassword, username, rol], function (err) {
-            if (err) {
-                if (err.message.includes('UNIQUE')) {
-                    return res.status(409).json({ error: 'Correo o username ya existe' });
+            db.run(query, [correo, nombre, hashedPassword, username, rol], function(err) {
+                if (err) {
+                    throw err;
                 }
-                return res.status(500).json({ error: 'Error al registrar usuario' });
-            }
+            });
 
-            res.status(201).json({ mensaje: 'Usuario registrado con éxito', id: this.lastID });
-        });
+            res.status(201).json({ mensaje: "Usuario registrado con éxito" });
+
+        } catch (err) {
+            if (err.message.includes("UNIQUE")) {
+                return res.status(409).json({ error: "Correo o username ya existe" });
+            }
+            console.error("Error al registrar usuario:", err);
+            res.status(500).json({ error: "Error al registrar usuario" });
+        }
     },
 
-    logout: (req, res) => {
-        const { token } = req.body;
+    logout: async (req, res) => {
+        try {
+            const { token } = req.body;
 
-        if (!token) {
-            return res.status(400).json({ error: 'Token requerido' });
-        }
-
-        const updateQuery = `
-            UPDATE sesiones
-            SET activo = 0,
-                fecha_fin = datetime('now')
-            WHERE token = ? AND activo = 1
-        `;
-
-        db.run(updateQuery, [token], function (err) {
-            if (err) return res.status(500).json({ error: 'Error al cerrar sesión' });
-
-            if (this.changes === 0) { // no se actualizó ninguna fila
-                return res.status(404).json({ error: 'Sesión no encontrada o ya cerrada' });
+            if (!token) {
+                return res.status(400).json({ error: "Token requerido" });
             }
 
-            res.status(200).json({ mensaje: 'Sesión cerrada con éxito' });
-        });
+            const updateQuery = `
+                UPDATE sesiones
+                SET activo = 0,
+                    fecha_fin = datetime('now')
+                WHERE token = ? AND activo = 1
+            `;
+
+            db.run(updateQuery, [token], function(err) {
+                if (err) {
+                    console.error("Error al cerrar sesión:", err);
+                }
+            });
+
+            if (result.rowsAffected === 0) {
+                return res.status(404).json({ error: "Sesión no encontrada o ya cerrada" });
+            }
+
+            res.status(200).json({ mensaje: "Sesión cerrada con éxito" });
+
+        } catch (err) {
+            console.error("Error al cerrar sesión:", err);
+            res.status(500).json({ error: "Error al cerrar sesión" });
+        }
     },
 
-    //sessiones activas del usuario
-    sesionesActivas: (req, res) => {
-        const { usuarioId } = req.params;
-        console.log(usuarioId);
+    sesionesActivas: async (req, res) => {
+        try {
+            const { usuarioId } = req.params;
 
-        if (!usuarioId) {
-            return res.status(400).json({ error: 'ID de usuario requerido' });
-        }
+            if (!usuarioId) {
+                return res.status(400).json({ error: "ID de usuario requerido" });
+            }
 
-        //regresar todas las seciones sin el token generado 
-        const query = `
-            SELECT id, usuario_id, direccion_ip, dispositivo, fecha_inicio,ubicacion
-            FROM sesiones
-            WHERE usuario_id = ? AND activo = 1
-        `;
+            const query = `
+                SELECT id, usuario_id, direccion_ip, dispositivo, fecha_inicio, ubicacion
+                FROM sesiones
+                WHERE usuario_id = ? AND activo = 1
+            `;
 
-        db.all(query, [usuarioId], (err, sesiones) => {
-            if (err) return res.status(500).json({ error: 'Error al obtener sesiones activas' });
+            const sesiones = await new Promise((resolve, reject) => {
+                db.all(query, [usuarioId], (err, rows) => {
+                    if (err) reject(err);
+                    else resolve(rows || []);
+                });
+            });
 
             if (sesiones.length === 0) {
-                return res.status(404).json({ mensaje: 'No se encontraron sesiones activas' });
+                return res.status(404).json({ mensaje: "No se encontraron sesiones activas" });
             }
 
             res.json(sesiones);
-        });
+
+        } catch (err) {
+            console.error("Error al obtener sesiones activas:", err);
+            res.status(500).json({ error: "Error al obtener sesiones activas" });
+        }
     }
-
-
 };
 
+export default authController;
 
-module.exports = authController;
 
 
 

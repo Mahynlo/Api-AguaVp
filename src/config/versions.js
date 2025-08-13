@@ -105,7 +105,7 @@ const getVersionsInfo = () => {
   };
 };
 
-module.exports = {
+export {
   versions,
   getVersionInfo,
   getAvailableVersions,

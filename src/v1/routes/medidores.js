@@ -21,12 +21,13 @@
  * 
  * Pendiente de implementar:
  */
-const express = require("express");
+import express from "express";
+import authMiddleware from "../middlewares/authMiddleware.js";
+import appKeyMiddleware from '../middlewares/appKeyMiddleware.js';
+import MedidorController from "../controllers/medidorController.js";
+import { withWebSocket } from '../sockets/enhanced/controllerIntegration.js';
+
 const router = express.Router();
-const authMiddleware = require("../middlewares/authMiddleware");
-const appKeyMiddleware = require('../middlewares/appKeyMiddleware');
-const MedidorController = require("../controllers/medidorController");
-const { withWebSocket } = require('../sockets/enhanced/controllerIntegration');
 
 /**
  * @swagger
@@ -150,4 +151,4 @@ router.get("/listar", appKeyMiddleware, authMiddleware, withWebSocket, MedidorCo
 
 router.put("/modificar/:id", appKeyMiddleware, authMiddleware, withWebSocket, MedidorController.modificarMedidor);
 
-module.exports = router;
+export default router;

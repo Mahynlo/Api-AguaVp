@@ -4,13 +4,14 @@
  * File: src/routes/index.js
  */
 
-const express = require('express');
-const router = express.Router();
-const { getVersionsInfo, getCurrentVersion } = require('../config/versions');
+import express from 'express';
+import { getVersionsInfo, getCurrentVersion } from '../config/versions.js';
 
 // Importar rutas
-const v1Routes = require('../v1');
-const healthRoutes = require('../v1/routes/health');
+import v1Routes from '../v1/index.js';
+import healthRoutes from '../v1/routes/health.js';
+
+const router = express.Router();
 
 // Health Check (sin versión para compatibilidad)
 router.use('/health', healthRoutes);
@@ -59,5 +60,5 @@ router.get('/', (req, res) => {
   }
 });
 
-module.exports = router;
+export default router;
 

@@ -14,7 +14,7 @@
  * * - Se utiliza jsonwebtoken para generar el token.
  * * - Se utiliza dotenv para cargar las variables de entorno.
  */
-const jwt = require('jsonwebtoken');
+import jwt from 'jsonwebtoken';
 
 function generateToken(user) {
   return jwt.sign(
@@ -31,4 +31,4 @@ function generateToken(user) {
   );
 }
 
-module.exports = generateToken;
+export default generateToken;

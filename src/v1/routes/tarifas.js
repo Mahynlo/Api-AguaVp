@@ -1,10 +1,11 @@
 //file: src/routes/tarifas.js
-const express = require("express");
+import express from "express";
+import authMiddleware from '../middlewares/authMiddleware.js';
+import tarifasController from "../controllers/tarifasController.js";
+import appKeyMiddleware from '../middlewares/appKeyMiddleware.js';
+import ControllerIntegration from '../sockets/enhanced/controllerIntegration.js';
+
 const router = express.Router();
-const authMiddleware = require('../middlewares/authMiddleware');
-const tarifasController = require("../controllers/tarifasController");
-const appKeyMiddleware = require('../middlewares/appKeyMiddleware');
-const ControllerIntegration = require('../sockets/enhanced/controllerIntegration');
 
 /**
  * @swagger
@@ -22,4 +23,4 @@ router.get("/listarHistorico", appKeyMiddleware, authMiddleware, ControllerInteg
 router.put("/modificar/:id", appKeyMiddleware, authMiddleware, tarifasController.modificarTarifa);
 router.put("/modificar-rangos/:id", appKeyMiddleware, authMiddleware, tarifasController.modificarRangosTarifa);
 
-module.exports = router;
+export default router;

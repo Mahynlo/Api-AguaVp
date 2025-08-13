@@ -13,9 +13,9 @@
  * - getSystemInfo: Información del sistema
  */
 
-const db = require('../../database/db');
-const os = require('os');
-const ControllerIntegration = require('../sockets/enhanced/controllerIntegration');
+import db from '../../database/db.js';
+import os from 'os';
+import ControllerIntegration from '../sockets/enhanced/controllerIntegration.js';
 
 /**
  * Health Check completo de la API
@@ -172,7 +172,7 @@ const getSystemDetails = (req, res) => {
   });
 };
 
-module.exports = {
+export default {
   checkHealth,
   checkSimpleHealth,
   checkDatabase,

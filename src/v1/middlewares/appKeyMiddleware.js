@@ -1,5 +1,5 @@
-const jwt = require("jsonwebtoken");
-const db = require("../../database/db");
+import jwt from "jsonwebtoken";
+import db from "../../database/db.js";
 
 const SECRET_APP_KEY = process.env.SECRET_APP_KEY //secret para firmar el token
 
@@ -38,6 +38,6 @@ function appKeyMiddleware(req, res, next) {
     }
 }
 
-module.exports = appKeyMiddleware;
+export default appKeyMiddleware;
 
 

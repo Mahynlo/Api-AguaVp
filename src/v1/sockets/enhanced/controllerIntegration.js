@@ -8,7 +8,7 @@
  * existentes de la API Agua-VP
  */
 
-const socketManager = require('./socketManager');
+// import socketManager from './socketManager.js';
 
 class ControllerIntegration {
   constructor() {
@@ -711,4 +711,5 @@ class ControllerIntegration {
   }
 }
 
-module.exports = ControllerIntegration;
+export default ControllerIntegration;
+export const { withWebSocket } = ControllerIntegration;

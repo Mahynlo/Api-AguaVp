@@ -1,11 +1,12 @@
-const express = require("express");
+import express from "express";
+import appController from "../controllers/appController.js";
+
 const router = express.Router();
-const appController = require("../controllers/appController");
 
 // Ruta de instalación inicial
 router.post("/registrarApp", appController.registrarApp);
 
-module.exports = router;
+export default router;
 /**
  * @swagger
  * /api/app/registrarApp:

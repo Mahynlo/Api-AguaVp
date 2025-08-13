@@ -7,8 +7,8 @@
  * para el sistema de WebSockets de la API Agua-VP
  */
 
-const jwt = require('jsonwebtoken');
-const NotificationManager = require('./notificationManager');
+import jwt from 'jsonwebtoken';
+import NotificationManager from './notificationManager.js';
 
 class SocketManager {
   constructor() {
@@ -520,4 +520,4 @@ class SocketManager {
   }
 }
 
-module.exports = SocketManager;
+export default SocketManager;

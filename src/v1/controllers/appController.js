@@ -1,11 +1,11 @@
-const jwt = require("jsonwebtoken");
-const { v4: uuidv4 } = require("uuid");
-const db = require("../../database/db");
+import jwt from "jsonwebtoken";
+import { v4 as uuidv4 } from "uuid";
+import db from "../../database/db.js";
 
 const SECRET_APP_KEY = process.env.SECRET_APP_KEY //secret para firmar el token
 const APPKEY_INICIAL = process.env.APPKEY_INICIAL // token inicial para registrar la app 
 
-exports.registrarApp = (req, res) => {
+export const registrarApp = (req, res) => {
     const authHeader = req.headers["x-app-key"];
 
     if (!authHeader || !authHeader.startsWith("AppKey ")) {
@@ -24,7 +24,8 @@ exports.registrarApp = (req, res) => {
     console.log("Nuevo App ID:", nuevoAppId);
     console.log("Nuevo Token:", nuevoToken);
     console.log("IP de registro:", req.ip);
-    console.log("Nombre de la app:", req.body.nombre || "Sin nombre");
+    console.log("Body recibido:", req.body);
+    console.log("Nombre de la app:", req.body?.nombre || "Sin nombre");
 
     const ip = req.headers["x-forwarded-for"] || req.ip; // Obtener la IP del cliente si está detrás de un proxy
 
@@ -33,7 +34,7 @@ exports.registrarApp = (req, res) => {
         VALUES (?, ?, ?, ?)
     `;
 
-    db.run(query, [nuevoAppId, nuevoToken, req.body.nombre || null, ip], function (err) {
+    db.run(query, [nuevoAppId, nuevoToken, req.body?.nombre || null, ip], function (err) {
         if (err) {
             return res.status(500).json({ error: "Error al registrar la nueva app" });
         }
@@ -47,7 +48,7 @@ exports.registrarApp = (req, res) => {
 };
 
 //recuperacion de token por expiracion,  o perdida de token
-exports.recuperarToken = (req, res) => {
+export const recuperarToken = (req, res) => {
     const authHeader = req.headers["x-app-key"];
 
     if (!authHeader || !authHeader.startsWith("AppKey ")) {
@@ -83,4 +84,9 @@ exports.recuperarToken = (req, res) => {
             });
         });
     });
+};
+
+export default {
+    registrarApp,
+    recuperarToken
 };

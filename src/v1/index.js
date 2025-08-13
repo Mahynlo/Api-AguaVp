@@ -20,9 +20,21 @@
  * - /api/v1/app - Rutas específicas de la aplicación
  */
 
-const express = require('express');
+import express from 'express';
+import { getVersionInfo } from '../config/versions.js';
+
+// Importar rutas
+import appRoutes from './routes/appRoutes.js';
+import authRoutes from './routes/authroutes.js';
+import clientesRoutes from './routes/clientes.js';
+import medidoresRoutes from './routes/medidores.js';
+import tarifasRoutes from './routes/tarifas.js';
+import lecturasRoutes from './routes/lecturas.js';
+import facturasRoutes from './routes/facturas.js';
+import pagosRoutes from './routes/pagos.js';
+import rutasRoutes from './routes/rutas.js';
+
 const router = express.Router();
-const { getVersionInfo } = require('../config/versions');
 
 // Ruta principal de la versión v1
 router.get('/', (req, res) => {
@@ -58,15 +70,15 @@ router.get('/', (req, res) => {
 });
 
 // Rutas agrupadas de la v1
-router.use('/app', require('./routes/appRoutes'));           // Rutas específicas de la app
-router.use('/auth', require('./routes/authroutes'));         // Autenticación
-router.use('/clientes', require('./routes/clientes'));       // Clientes
-router.use('/medidores', require('./routes/medidores'));     // Medidores
-router.use('/tarifas', require('./routes/tarifas'));         // Tarifas
-router.use('/lecturas', require('./routes/lecturas'));       // Lecturas
-router.use('/facturas', require('./routes/facturas'));       // Facturas
-router.use('/pagos', require('./routes/pagos'));             // Pagos
-router.use('/rutas', require('./routes/rutas'));             // Rutas de medidores
+router.use('/app', appRoutes);           // Rutas específicas de la app
+router.use('/auth', authRoutes);         // Autenticación
+router.use('/clientes', clientesRoutes);       // Clientes
+router.use('/medidores', medidoresRoutes);     // Medidores
+router.use('/tarifas', tarifasRoutes);         // Tarifas
+router.use('/lecturas', lecturasRoutes);       // Lecturas
+router.use('/facturas', facturasRoutes);       // Facturas
+router.use('/pagos', pagosRoutes);             // Pagos
+router.use('/rutas', rutasRoutes);             // Rutas de medidores
 
 // Exporta el router de la v1
-module.exports = router;
+export default router;

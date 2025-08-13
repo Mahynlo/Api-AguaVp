@@ -1,14 +1,15 @@
-const express = require('express');
+import express from 'express';
+import authMiddleware from '../middlewares/authMiddleware.js';
+import appKeyMiddleware from '../middlewares/appKeyMiddleware.js';
+import facturasController from '../controllers/facturasController.js';
+import ControllerIntegration from '../sockets/enhanced/controllerIntegration.js';
+
 const router = express.Router();
-const authMiddleware = require('../middlewares/authMiddleware');
-const appKeyMiddleware = require('../middlewares/appKeyMiddleware');
-const facturasController = require('../controllers/facturasController');
-const ControllerIntegration = require('../sockets/enhanced/controllerIntegration');
 
 router.post('/generar', appKeyMiddleware, authMiddleware, ControllerIntegration.withWebSocket, facturasController.generarFactura);
 router.get('/listar', appKeyMiddleware, authMiddleware, ControllerIntegration.withWebSocket, facturasController.obtenerFacturas);
 router.get('/listar/:id', appKeyMiddleware, authMiddleware, ControllerIntegration.withWebSocket, facturasController.obtenerFacturas);
 router.put('/modificar/:id', appKeyMiddleware, authMiddleware, ControllerIntegration.withWebSocket, facturasController.modificarFactura);
 
-module.exports = router;
+export default router;
 

@@ -22,7 +22,7 @@ let connectionStats = {
   lastDisconnection: null
 };
 
-module.exports = (io) => {
+export default (io) => {
   io.on('connection', (socket) => {
     connectedClients++;
     connectionStats.totalConnections++;

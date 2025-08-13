@@ -1,5 +1,5 @@
-const db = require('../../database/db');
-const ControllerIntegration = require('../sockets/enhanced/controllerIntegration');
+import db from '../../database/db.js';
+import ControllerIntegration from '../sockets/enhanced/controllerIntegration.js';
 
 const tarifasController = {
     registrarTarifa: (req, res) => {
@@ -408,6 +408,6 @@ const tarifasController = {
     withWebSocket: ControllerIntegration.withWebSocket
 }
 
-module.exports = tarifasController;
+export default tarifasController;
 
 

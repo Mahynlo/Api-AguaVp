@@ -1,10 +1,11 @@
 //file: src/routes/lecturas.js
-const express = require("express");
+import express from "express";
+import authMiddleware from '../middlewares/authMiddleware.js';
+import appKeyMiddleware from '../middlewares/appKeyMiddleware.js';
+import lecturasController from "../controllers/lecturasController.js";
+import ControllerIntegration from '../sockets/enhanced/controllerIntegration.js';
+
 const router = express.Router();
-const authMiddleware = require('../middlewares/authMiddleware');
-const appKeyMiddleware = require('../middlewares/appKeyMiddleware');
-const lecturasController = require("../controllers/lecturasController");
-const ControllerIntegration = require('../sockets/enhanced/controllerIntegration');
 
 /**
  * @swagger
@@ -24,5 +25,5 @@ router.get("/por-ruta", appKeyMiddleware, authMiddleware, ControllerIntegration.
 // 🧾 Generar facturas para lecturas sin factura (procesamiento masivo)
 router.post("/generar-facturas-masivo", appKeyMiddleware, authMiddleware, ControllerIntegration.withWebSocket, lecturasController.generarFacturasParaLecturasSinFactura);
 
-module.exports = router;
+export default router;
 

@@ -17,8 +17,8 @@
  * - Se utiliza dotenv para cargar las variables de entorno.
  * * - Se utiliza express para crear el servidor.
  */
-require('dotenv').config();
-const server = require('./server');
+
+import server from './server.js';
 
 const PORT = process.env.PORT || 3000;
 
