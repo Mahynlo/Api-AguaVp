@@ -72,81 +72,54 @@ Esta API proporciona un backend robusto y completo para la gestión de servicios
 
 ```
 api-AguaVP/
-├── 📁 public/                    # Recursos estáticos
+├── � package.json                # Dependencias y scripts
+├── 📄 README.md                   # Este archivo
+├── �📁 public/                     # Recursos estáticos
 │   └── assets/
-│       ├── icons/                # Iconos de la aplicación
+│       ├── icons/                 # Iconos de la aplicación
 │       │   └── icon.ico
-│       └── images/               # Imágenes del sistema
+│       └── images/                # Imágenes del sistema
 │           └── icon.png
-├── 📁 examples/                  # Ejemplos de uso
-│   └── websocket-usage-example.js
-├── 📁 src/                       # Código fuente principal
-│   ├── 📄 index.js              # Punto de entrada principal
-│   ├── 📄 server.js             # Configuración del servidor Express
-│   ├── 📁 config/               # Configuraciones del sistema
-│   │   └── versions.js          # Gestión de versiones de API
-│   ├── 📁 controllers/          # Controladores globales
-│   │   └── healthController.js  # Health checks del sistema
-│   ├── 📁 database/             # Capa de persistencia
-│   │   ├── app.db              # Base de datos SQLite principal
-│   │   └── db.js               # Configuración y conexión DB
-│   ├── 📁 routes/               # Sistema de enrutado
-│   │   ├── api-router.js       # Router principal de API
-│   │   ├── health.js           # Rutas de salud del sistema
-│   │   ├── index.js            # Agregador de rutas
-│   │   └── v1/                 # Rutas de la versión 1.0
-│   ├── 📁 sockets/              # Sistema WebSocket completo
-│   │   ├── socket.js           # Configuración básica Socket.IO
-│   │   └── enhanced/           # Sistema WebSocket mejorado
-│   │       ├── socketManager.js          # Gestor principal de conexiones
-│   │       ├── notificationManager.js   # Sistema de notificaciones
-│   │       └── controllerIntegration.js # Integración con controladores
-│   ├── 📁 utils/                # Utilidades compartidas
-│   │   └── generateToken.js    # Generación de tokens JWT
-│   └── 📁 v1/                   # Versión 1.0 de la API
-│       ├── 📁 controllers/      # Lógica de negocio v1
-│       ├── 📁 middlewares/      # Middleware específicos v1
-│       ├── 📁 routes/           # Rutas específicas v1
-│       └── index.js            # Router principal v1
-├── 📄 package.json              # Dependencias y scripts
-└── 📄 README.md                 # Este archivo
+├── 📁 src/                        # Código fuente principal
+│   ├── 📄 index.js                # Punto de entrada principal
+│   ├── 📄 server.js               # Configuración del servidor Express y tiempo real
+│   ├── 📁 config/                 # Configuración global y versionado
+│   │   └── versions.js            # Gestión de versiones de API
+│   ├── 📁 controllers/            # Controladores globales (ej: health)
+│   │   └── healthController.js    # Health checks del sistema
+│   ├── 📁 database/               # Persistencia y conexión a BD
+│   │   ├── app.db                # Base de datos SQLite principal
+│   │   ├── db.js                 # Configuración y conexión DB
+│   │   ├── db-local.js           # Conexión local
+│   │   └── db-turso.js           # Conexión Turso (v2)
+│   ├── 📁 routes/                 # Enrutado principal y health checks
+│   │   ├── api-router.js         # Router principal de API
+│   │   ├── health.js             # Rutas de salud del sistema
+│   │   ├── index.js              # Agregador de rutas
+│   │   └── v1/                   # Rutas de la versión 1.0
+│   ├── 📁 utils/                  # Utilidades compartidas
+│   │   └── generateToken.js      # Generación de tokens JWT
+│   ├── 📁 v1/                     # Versión 1.0 de la API (MVC clásico, WebSockets)
+│   │   ├── 📁 controllers/        # Lógica de negocio v1
+│   │   ├── 📁 middlewares/        # Middlewares v1
+│   │   ├── 📁 routes/             # Endpoints RESTful v1
+│   │   ├── 📁 sockets/            # WebSocket y notificaciones
+│   │   │   ├── socket.js
+│   │   │   └── enhanced/
+│   │   │       ├── socketManager.js
+│   │   │       ├── notificationManager.js
+│   │   │       └── controllerIntegration.js
+│   │   └── index.js              # Router principal v1
+│   └── 📁 v2/                     # Versión 2.0 de la API (arquitectura moderna, SSE, Turso)
+│       ├── 📁 controllers/        # Lógica de negocio v2 (Turso, SSE)
+│       ├── 📁 middlewares/        # Seguridad y validaciones v2
+│       ├── 📁 routes/             # Endpoints RESTful v2
+│       ├── 📁 sse/                # Server-Sent Events y notificaciones
+│       │   ├── notificationManager.js
+│       │   ├── sseManager.js
+│       │   └── ...
+│       └── index.js              # Router principal v2
 ```
-│   ├── controllers/          # Lógica de negocio
-│   │   ├── appController.js
-│   │   ├── authController.js
-│   │   ├── clientesController.js
-│   │   ├── facturasController.js
-│   │   ├── lecturasController.js
-│   │   ├── medidorController.js
-│   │   ├── pagosController.js
-│   │   ├── rutasController.js
-│   │   └── tarifasController.js
-│   ├── database/             # Base de datos y configuración
-│   │   ├── app.db           # Base de datos SQLite
-│   │   ├── db.js            # Configuración de la BD
-│   │   └── pruebaDB.js      # Scripts de prueba
-│   ├── middlewares/          # Middlewares de seguridad
-│   │   ├── appKeyMiddleware.js
-│   │   └── authMiddleware.js
-│   ├── routes/               # Definición de rutas
-│   │   ├── index.js         # Router principal
-│   │   ├── appRoutes.js
-│   │   ├── authroutes.js
-│   │   ├── clientes.js
-│   │   ├── facturas.js
-│   │   ├── lecturas.js
-│   │   ├── medidores.js
-│   │   ├── pagos.js
-│   │   ├── rutas.js
-│   │   └── tarifas.js
-│   ├── sockets/              # WebSocket configuration
-│   │   └── socket.js
-│   └── utils/                # Utilidades
-│       └── generateToken.js
-├── package.json
-└── README.md
-```
-
 ## 🏃‍♂️ Instalación y Configuración
 
 ### ✅ Prerrequisitos
@@ -687,11 +660,6 @@ app.use(cors({
 ### Puerto
 El puerto por defecto es 3000, pero puede modificarse mediante la variable de entorno `PORT`.
 
-## 📞 Soporte
-
-Para soporte técnico o reportar problemas, contactar al equipo de desarrollo.
-
----
 
 **Desarrollado para la gestión eficiente de servicios de agua potable** 🚰
 
