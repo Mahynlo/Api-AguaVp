@@ -1,125 +1,146 @@
+
 # 🚰 API REST para Agua-VP
 
-API REST completa para la gestión integral de servicios de agua potable, desarrollada para trabajar en conjunto con la aplicación de escritorio Agua-VP (Electron). Sistema moderno con arquitectura escalable y comunicación en tiempo real.
+API REST para la gestión integral de servicios de agua potable, diseñada para integrarse con la app de escritorio Agua-VP (Electron). Arquitectura modular, versionada y con soporte para tiempo real.
 
-## 📋 Descripción
+---
 
-Esta API proporciona un backend robusto y completo para la gestión de servicios de agua potable, incluyendo:
+## 📑 Índice
 
-### 🏢 **Gestión Empresarial**
-- Sistema completo de clientes y medidores
-- Control avanzado de lecturas y facturación automática
-- Sistema dinámico de tarifas por rangos de consumo
-- Registro y seguimiento de pagos
-- Gestión de rutas de lectura optimizadas
+- [Información General](#información-general)
+- [Estructura del Proyecto](#estructura-del-proyecto)
+- [API v1 – WebSockets y SQLite3](#api-v1--websockets-y-sqlite3)
+  - [Características](#características)
+  - [Endpoints principales v1](#endpoints-principales-v1)
+- [API v2 – SSE y Turso DB](#api-v2--sse-y-turso-db)
+  - [Características](#características-1)
+  - [Endpoints principales v2](#endpoints-principales-v2)
+  - [Seguridad v2](#seguridad-v2)
+  - [Notificaciones y SSE](#notificaciones-y-sse)
+  - [Ejemplo de uso v2](#ejemplo-de-uso-v2-registro-de-cliente)
+  - [Diferencias clave v1 vs v2](#diferencias-clave-v1-vs-v2)
+- [Instalación y Configuración](#instalación-y-configuración)
+- [Documentación de la API](#documentación-de-la-api)
+- [Autenticación y Seguridad](#autenticación-y-seguridad)
+- [Sistema WebSocket Avanzado](#sistema-websocket-avanzado)
+- [Configuración Avanzada](#configuración-avanzada)
+- [Códigos de Error Comunes](#códigos-de-error-comunes)
+- [Monitoreo y Métricas](#monitoreo-y-métricas)
+- [Desarrollo y Contribución](#desarrollo-y-contribución)
+- [Resolución de Problemas](#resolución-de-problemas)
+- [Changelog y Versiones](#changelog-y-versiones)
+- [Soporte y Contacto](#soporte-y-contacto)
+- [Integración con Aplicación Electron](#integración-con-aplicación-electron)
 
-### 🔐 **Seguridad y Autenticación**
-- Autenticación JWT con roles diferenciados (superadmin, administrador, operador)
-- Middleware de validación de API Key para aplicaciones
-- Sistema de permisos basado en roles
-- Autenticación dual para WebSockets (App Key + User Token)
+---
 
-### 📡 **Comunicación en Tiempo Real**
-- **WebSockets avanzados** con Socket.IO
-- Sistema de notificaciones inteligente
-- Salas (rooms) organizadas por roles y permisos
-- Comunicación bidireccional para operadores de campo
-- Dashboard en tiempo real para administradores
+## Información General
 
-### 📊 **Monitoreo y Analytics**
-- Métricas automáticas del sistema
-- Seguimiento de eventos y estadísticas
-- Health checks y monitoreo de conexiones
-- Dashboard de control para administradores
-
-## 🚀 Características Principales
-
-- **API RESTful versionada** (v1.0) con endpoints completos
-- **Base de datos SQLite** optimizada para rendimiento local
-- **Sistema de WebSockets mejorado** con gestión avanzada de conexiones
-- **Autenticación JWT multinivel** con roles y permisos
-- **Documentación Swagger** automática y completa
-- **Sistema de notificaciones** inteligente y contextual
-- **Arquitectura modular** preparada para escalabilidad
-- **Gestión de sesiones** con desconexión automática por inactividad
-- **Sistema de emergencias** con broadcast inmediato
-
-## 🛠️ Tecnologías Utilizadas
-
-### **Backend Core**
-- **Node.js** (v18+) - Runtime de JavaScript de alto rendimiento
-- **Express.js** (v5.1.0) - Framework web minimalista y flexible
-- **SQLite3** (v5.1.7) - Base de datos embebida y optimizada
-
-### **Comunicación en Tiempo Real**
-- **Socket.IO** (v4.8.1) - WebSockets con fallbacks automáticos
-- **Sistema de Rooms** - Organización por roles y permisos
-- **Notificaciones Push** - Sistema de alertas contextual
-
-### **Seguridad y Autenticación**
-- **JWT** (v9.0.2) - Tokens seguros con expiración
-- **bcrypt** (v6.0.0) - Hashing seguro de contraseñas
-- **CORS** (v2.8.5) - Control de acceso cross-origin
-- **UUID** (v11.1.0) - Identificadores únicos universales
-
-### **Documentación y Desarrollo**
-- **Swagger UI** (v5.0.1) - Interfaz interactiva de documentación
-- **Swagger JSDoc** (v6.2.8) - Generación automática de docs
-- **Nodemon** (v3.1.10) - Desarrollo con recarga automática
-- **dotenv** (v16.5.0) - Gestión de variables de entorno
+- **Versionado:** v1 (WebSockets, SQLite3), v2 (SSE, Turso DB)
+- **Seguridad:** JWT + API Key, roles, middlewares avanzados
+- **Documentación:** Swagger UI (`/api-docs`), README técnicos por versión
+- **Integración:** Compatible con Electron y clientes web
 
 ## 📁 Estructura del Proyecto
 
 ```
 api-AguaVP/
-├── � package.json                # Dependencias y scripts
-├── 📄 README.md                   # Este archivo
-├── �📁 public/                     # Recursos estáticos
+├── package.json                # Dependencias y scripts
+├── README.md                   # Este archivo
+├── public/                     # Recursos estáticos
 │   └── assets/
-│       ├── icons/                 # Iconos de la aplicación
-│       │   └── icon.ico
-│       └── images/                # Imágenes del sistema
-│           └── icon.png
-├── 📁 src/                        # Código fuente principal
-│   ├── 📄 index.js                # Punto de entrada principal
-│   ├── 📄 server.js               # Configuración del servidor Express y tiempo real
-│   ├── 📁 config/                 # Configuración global y versionado
-│   │   └── versions.js            # Gestión de versiones de API
-│   ├── 📁 controllers/            # Controladores globales (ej: health)
-│   │   └── healthController.js    # Health checks del sistema
-│   ├── 📁 database/               # Persistencia y conexión a BD
-│   │   ├── app.db                # Base de datos SQLite principal
-│   │   ├── db.js                 # Configuración y conexión DB
-│   │   ├── db-local.js           # Conexión local
-│   │   └── db-turso.js           # Conexión Turso (v2)
-│   ├── 📁 routes/                 # Enrutado principal y health checks
-│   │   ├── api-router.js         # Router principal de API
-│   │   ├── health.js             # Rutas de salud del sistema
-│   │   ├── index.js              # Agregador de rutas
-│   │   └── v1/                   # Rutas de la versión 1.0
-│   ├── 📁 utils/                  # Utilidades compartidas
-│   │   └── generateToken.js      # Generación de tokens JWT
-│   ├── 📁 v1/                     # Versión 1.0 de la API (MVC clásico, WebSockets)
-│   │   ├── 📁 controllers/        # Lógica de negocio v1
-│   │   ├── 📁 middlewares/        # Middlewares v1
-│   │   ├── 📁 routes/             # Endpoints RESTful v1
-│   │   ├── 📁 sockets/            # WebSocket y notificaciones
-│   │   │   ├── socket.js
-│   │   │   └── enhanced/
-│   │   │       ├── socketManager.js
-│   │   │       ├── notificationManager.js
-│   │   │       └── controllerIntegration.js
-│   │   └── index.js              # Router principal v1
-│   └── 📁 v2/                     # Versión 2.0 de la API (arquitectura moderna, SSE, Turso)
-│       ├── 📁 controllers/        # Lógica de negocio v2 (Turso, SSE)
-│       ├── 📁 middlewares/        # Seguridad y validaciones v2
-│       ├── 📁 routes/             # Endpoints RESTful v2
-│       ├── 📁 sse/                # Server-Sent Events y notificaciones
-│       │   ├── notificationManager.js
-│       │   ├── sseManager.js
-│       │   └── ...
-│       └── index.js              # Router principal v2
+│       ├── icons/
+│       └── images/
+├── src/                        # Código fuente principal
+│   ├── index.js                # Punto de entrada principal
+│   ├── server.js               # Configuración Express y tiempo real
+│   ├── config/                 # Configuración global y versionado
+│   ├── controllers/            # Controladores globales
+│   ├── database/               # Persistencia y conexión a BD
+│   ├── routes/                 # Enrutado principal y health checks
+│   ├── utils/                  # Utilidades compartidas
+│   ├── v1/                     # Versión 1.0 (WebSockets, SQLite3)
+│   └── v2/                     # Versión 2.0 (SSE, Turso DB)
 ```
+
+---
+
+## 🟦 API v1 – WebSockets y SQLite3
+
+### Características
+- Arquitectura MVC clásica
+- WebSockets (Socket.IO) para tiempo real
+- Base de datos SQLite3 local
+- Seguridad JWT + API Key
+- Modularidad parcial
+
+### Endpoints principales v1
+
+**Base URL:** `/api/v1`
+
+...existing code...
+
+---
+
+## 🟩 API v2 – SSE y Turso DB
+
+### Características
+- Arquitectura modular avanzada (MVC + SSE)
+- Server-Sent Events (SSE) para notificaciones en tiempo real
+- Base de datos distribuida Turso DB (@libsql/client)
+- Seguridad multicapa: JWT + AppKey, roles y middlewares
+- Compatibilidad y migración progresiva desde v1
+
+### Endpoints principales v2
+
+**Base URL:** `/api/v2`
+
+- `/auth` – Autenticación y gestión de usuarios
+- `/clientes` – Gestión de clientes
+- `/medidores` – Gestión de medidores
+- `/lecturas` – Gestión de lecturas
+- `/facturas` – Facturación
+- `/pagos` – Pagos
+- `/tarifas` – Tarifas
+- `/rutas` – Rutas de lectura
+- `/events` – Server-Sent Events (SSE): notificaciones y eventos en tiempo real
+- `/app/status` – Health check v2
+- `/app/version` – Versión de la API
+
+### Seguridad v2
+- **AppKey:** Header `x-app-key: AppKey <token>`
+- **JWT:** Header `Authorization: Bearer <token>`
+- **Roles:** superadmin, administrador, operador
+- **Protección:** Todos los endpoints críticos requieren autenticación y validación de app key.
+
+### Notificaciones y SSE
+- **Conexión SSE:**
+```bash
+curl -N -H "Accept: text/event-stream" -H "Authorization: Bearer TU_TOKEN" http://localhost:3000/api/v2/events/stream
+```
+- **Eventos soportados:** `cliente_creado`, `lectura_registrada`, `factura_generada`, `pago_registrado`, `alerta_sistema`, etc.
+
+### Ejemplo de uso v2 (registro de cliente)
+```bash
+curl -X POST http://localhost:3000/api/v2/clientes/registrar \
+  -H "x-app-key: AppKey TU_APP_KEY" \
+  -H "Authorization: Bearer TU_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"nombre":"Juan Perez","direccion":"Calle 123","telefono":"555-1234","ciudad":"Ciudad","tarifa_id":1}'
+```
+
+### Diferencias clave v1 vs v2
+
+| Característica         | v1 (actual)         | v2 (moderna)           |
+|------------------------|---------------------|------------------------|
+| Base de datos          | SQLite3             | Turso DB (@libsql)     |
+| Tiempo real            | WebSockets          | Server-Sent Events     |
+| Seguridad              | JWT + API Key       | JWT + API Key          |
+| Modularidad            | Parcial             | Total (MVC + SSE)      |
+| Compatibilidad         | Solo v1             | v1 y v2 coexistentes   |
+| Documentación          | Swagger básica      | Swagger + README v2    |
+
+---
 ## 🏃‍♂️ Instalación y Configuración
 
 ### ✅ Prerrequisitos
@@ -286,6 +307,67 @@ La documentación interactiva completa está disponible mediante **Swagger UI**:
 |--------|----------|-------------|------|---------------|
 | `GET` | `/health` | Estado de la API | ❌ | - |
 | `GET` | `/health/detailed` | Estado detallado del sistema | ✅ | Administrador+ |
+
+## 🚀 API v2 – Arquitectura Moderna y Tiempo Real
+
+La versión 2 de la API (v2) está activa y lista para producción. Incorpora mejoras clave:
+
+- **Base de datos distribuida:** Turso DB (@libsql/client), compatible con SQLite pero escalable y cloud-native.
+- **Notificaciones en tiempo real:** Server-Sent Events (SSE) reemplaza WebSockets para mayor compatibilidad y simplicidad.
+- **Seguridad multicapa:** JWT + AppKey, roles y middlewares avanzados.
+- **Arquitectura modular:** Separación estricta de controladores, rutas, middlewares y eventos.
+- **Compatibilidad:** v1 y v2 pueden usarse en paralelo, facilitando migraciones graduales.
+
+### 📡 Endpoints principales v2
+
+**Base URL:** `/api/v2`
+
+- `/auth` – Autenticación y gestión de usuarios
+- `/clientes` – Gestión de clientes
+- `/medidores` – Gestión de medidores
+- `/lecturas` – Gestión de lecturas
+- `/facturas` – Facturación
+- `/pagos` – Pagos
+- `/tarifas` – Tarifas
+- `/rutas` – Rutas de lectura
+- `/events` – Server-Sent Events (SSE): notificaciones y eventos en tiempo real
+- `/app/status` – Health check v2
+- `/app/version` – Versión de la API
+
+### 🔐 Seguridad v2
+- **AppKey:** Header `x-app-key: AppKey <token>`
+- **JWT:** Header `Authorization: Bearer <token>`
+- **Roles:** superadmin, administrador, operador
+- **Protección:** Todos los endpoints críticos requieren autenticación y validación de app key.
+
+### 📡 Notificaciones y SSE
+- **Conexión SSE:**
+```bash
+curl -N -H "Accept: text/event-stream" -H "Authorization: Bearer TU_TOKEN" http://localhost:3000/api/v2/events/stream
+```
+- **Eventos soportados:** `cliente_creado`, `lectura_registrada`, `factura_generada`, `pago_registrado`, `alerta_sistema`, etc.
+
+### 🧪 Ejemplo de uso v2 (registro de cliente)
+```bash
+curl -X POST http://localhost:3000/api/v2/clientes/registrar \
+   -H "x-app-key: AppKey TU_APP_KEY" \
+   -H "Authorization: Bearer TU_TOKEN" \
+   -H "Content-Type: application/json" \
+   -d '{"nombre":"Juan Perez","direccion":"Calle 123","telefono":"555-1234","ciudad":"Ciudad","tarifa_id":1}'
+```
+
+### 📊 Diferencias clave v1 vs v2
+
+| Característica         | v1 (actual)         | v2 (moderna)           |
+|------------------------|---------------------|------------------------|
+| Base de datos          | SQLite3             | Turso DB (@libsql)     |
+| Tiempo real            | WebSockets          | Server-Sent Events     |
+| Seguridad              | JWT + API Key       | JWT + API Key          |
+| Modularidad            | Parcial             | Total (MVC + SSE)      |
+| Compatibilidad         | Solo v1             | v1 y v2 coexistentes   |
+| Documentación          | Swagger básica      | Swagger + README v2    |
+
+---
 
 ## 🔒 Autenticación y Seguridad
 
@@ -587,50 +669,6 @@ Este proyecto está bajo la Licencia ISC. Ver el archivo `LICENSE` para más det
 
 ---
 
-## 🎯 **Resumen Rápido**
-
-```powershell
-# Instalación rápida
-git clone [REPO_URL]
-cd api-AguaVP
-npm install
-cp .env.example .env  # Configurar variables
-npm run dev
-
-# URLs importantes
-# API: http://localhost:3000/api/v1
-# Docs: http://localhost:3000/api-docs
-# Health: http://localhost:3000/api/health
-```
-
-**🚰 API Agua-VP** - Sistema completo de gestión de agua potable con WebSockets en tiempo real, autenticación JWT, roles y permisos, y documentación interactiva completa.
-
----
-
-*Desarrollado con ❤️ para la gestión eficiente de servicios de agua potable*
-
-## 🌐 WebSockets
-
-La API incluye soporte para WebSockets que permite:
-- Comunicación en tiempo real
-- Actualizaciones automáticas de datos
-- Notificaciones instantáneas
-
-Conexión: `ws://localhost:3000`
-
-## 🗄️ Base de Datos
-
-La aplicación utiliza SQLite como base de datos local con las siguientes tablas principales:
-
-- **clientes** - Información de clientes
-- **medidores** - Datos de medidores
-- **lecturas** - Registros de lecturas
-- **facturas** - Facturas generadas
-- **pagos** - Registros de pagos
-- **tarifas** - Estructura de tarifas
-- **rutas** - Rutas de lectura
-- **usuarios** - Usuarios del sistema
-
 ## 📝 Scripts Disponibles
 
 - `npm start` - Ejecutar en modo producción
@@ -646,21 +684,6 @@ Esta API está diseñada específicamente para trabajar con la aplicación de es
 - Backup automático de datos
 - Interface consistente entre plataformas
 
-## 🔧 Configuración Adicional
 
-### CORS
-La API está configurada para aceptar peticiones desde cualquier origen. Para producción, modificar la configuración en `src/server.js`:
-
-```javascript
-app.use(cors({
-  origin: 'http://tu-dominio.com'
-}));
-```
-
-### Puerto
-El puerto por defecto es 3000, pero puede modificarse mediante la variable de entorno `PORT`.
-
-
-**Desarrollado para la gestión eficiente de servicios de agua potable** 🚰
 
 
