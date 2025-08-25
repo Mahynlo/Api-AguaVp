@@ -9,6 +9,7 @@ import { getVersionsInfo, getCurrentVersion } from '../config/versions.js';
 
 // Importar rutas
 import v1Routes from '../v1/index.js';
+import v2Routes from '../v2/index.js'; // Nueva v2
 import healthRoutes from '../v1/routes/health.js';
 
 const router = express.Router();
@@ -18,6 +19,9 @@ router.use('/health', healthRoutes);
 
 // Versión 1 de la API
 router.use('/v1', v1Routes);
+
+// Versión 2 de la API - Nueva
+router.use('/v2', v2Routes);
 
 // Información de versiones
 router.get('/versions', (req, res) => {
@@ -46,6 +50,8 @@ router.get('/', (req, res) => {
       versions: getVersionsInfo(),
       endpoints: {
         [currentVersion]: `/api/${currentVersion}`,
+        'v1': '/api/v1',
+        'v2': '/api/v2', // Nueva v2
         health: '/api/health',
         versions: '/api/versions',
         documentation: '/api-docs'

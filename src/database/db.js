@@ -190,9 +190,10 @@ AFTER INSERT ON pagos
 FOR EACH ROW
 BEGIN
     UPDATE facturas
-    SET saldo_pendiente = saldo_pendiente - NEW.monto
+    SET saldo_pendiente = ROUND(saldo_pendiente - NEW.monto, 2)
     WHERE id = NEW.factura_id;
 END;
+
 
 -- 🚀 Trigger: validar pago contra saldo
 CREATE TRIGGER IF NOT EXISTS validar_pago_contra_saldo
@@ -201,21 +202,24 @@ FOR EACH ROW
 BEGIN
   SELECT 
     CASE 
-      WHEN (SELECT saldo_pendiente FROM facturas WHERE id = NEW.factura_id) < NEW.monto
+      WHEN (SELECT ROUND(saldo_pendiente, 2) FROM facturas WHERE id = NEW.factura_id) < ROUND(NEW.monto, 2)
       THEN RAISE(ABORT, 'El monto del pago excede el saldo pendiente de la factura')
     END;
 END;
 
--- 🚀 Trigger: actualizar estado
+
+-- 🚀 Trigger: actualizar estado (asegura saldo limpio)
 CREATE TRIGGER IF NOT EXISTS actualizar_estado_factura
 AFTER UPDATE OF saldo_pendiente ON facturas
 FOR EACH ROW
 WHEN NEW.saldo_pendiente <= 0
 BEGIN
     UPDATE facturas
-    SET estado = 'Pagado'
+    SET estado = 'Pagado',
+        saldo_pendiente = 0.00 -- fuerza a cero exacto
     WHERE id = NEW.id;
 END;
+
 
 -- 🚀 Historial de cambios ###################################################################
 CREATE TABLE IF NOT EXISTS historial_cambios (

@@ -37,15 +37,44 @@ const versions = {
       breaking_changes: [],
       deprecated: false,
       support_until: null
+    },
+    v2: {
+      version: '2.0.0',
+      status: 'stable',
+      releaseDate: '2025-08-16',
+      description: 'Segunda versión con SSE y migración a Turso',
+      features: [
+        'Gestión de clientes',
+        'Gestión de medidores',
+        'Control de lecturas',
+        'Sistema de facturación',
+        'Gestión de pagos',
+        'Sistema de tarifas',
+        'Rutas de lectura',
+        'Autenticación JWT',
+        'Server-Sent Events (SSE)',
+        'Turso Database (@libsql/client)',
+        'Health check endpoints',
+        'Real-time notifications via SSE'
+      ],
+      endpoints: {
+        base: '/api/v2',
+        documentation: '/api-docs',
+        health: '/api/health',
+        events: '/api/v2/events'
+      },
+      breaking_changes: ['WebSockets reemplazados por SSE', 'Migración de SQLite3 a Turso'],
+      deprecated: false,
+      support_until: null
     }
   },
   deprecated: [],
   planned: {
-    v2: {
-      version: '2.0.0',
+    v3: {
+      version: '3.0.0',
       status: 'planned',
-      expected_release: '2025-06-01',
-      description: 'Segunda versión con mejoras de performance y nuevas funcionalidades',
+      expected_release: '2025-12-01',
+      description: 'Tercera versión con mejoras de performance y nuevas funcionalidades',
       planned_features: [
         'GraphQL support',
         'Real-time notifications',

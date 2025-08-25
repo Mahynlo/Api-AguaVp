@@ -33,6 +33,8 @@ import cors from 'cors';
 import { Server } from 'socket.io';
 import setupSocket from './v1/sockets/socket.js';
 import SocketManager from './v1/sockets/enhanced/socketManager.js';
+import SSEManager from './v2/sse/sseManager.js';
+import SSENotificationManager from './v2/sse/notificationManager.js';
 import routes from './routes/index.js';
 //documentación
 import swaggerUi from 'swagger-ui-express';
@@ -94,12 +96,18 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Inicializar Socket Manager mejorado
+// Inicializar Socket Manager mejorado (v1)
 const socketManager = new SocketManager();
 
-// Hacer disponible el objeto io y socketManager en toda la aplicación
+// Inicializar SSE Manager (v2)
+const sseManager = new SSEManager();
+const sseNotificationManager = new SSENotificationManager(sseManager);
+
+// Hacer disponible los objetos en toda la aplicación
 app.set('io', io);
 app.set('socketManager', socketManager);
+app.set('sseManager', sseManager); // Nuevo para v2
+app.set('notificationManager', sseNotificationManager); // Nuevo para v2
 
 // Rutas
 app.use('/api', routes);
@@ -126,8 +134,12 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
 }));
 
 
-// WebSocket - Sistema dual: básico + mejorado
+// WebSocket - Sistema dual: básico + mejorado (v1)
 setupSocket(io);  // Sistema básico para compatibilidad
 socketManager.initialize(io);  // Sistema mejorado con autenticación y roles
+
+console.log('🚀 Sistemas inicializados:');
+console.log('   - WebSockets (v1): Activo');
+console.log('   - SSE (v2): Activo');
 
 export default server;
