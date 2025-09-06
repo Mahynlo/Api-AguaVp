@@ -189,6 +189,9 @@ const clientesController = {
         console.log("Datos recibidos para modificar cliente:", req.body);
         console.log("ID del cliente a modificar:", clienteId);
         console.log("ID del usuario que modifica:", modificado_por);
+        console.log("Tipo de tarifa_id:", typeof tarifa_id, "Valor:", tarifa_id);
+        console.log("Tipo de medidor_id:", typeof medidor_id, "Valor:", medidor_id);
+        console.log("Tipo de medidores_liberados:", typeof medidores_liberados, "Valor:", medidores_liberados);
 
         if (!nombre && !direccion && !telefono && !ciudad && !correo && !estado_cliente && tarifa_id === undefined && medidor_id === undefined && medidores_liberados === undefined) {
             return res.status(400).json({ error: "Al menos un campo es obligatorio" });
@@ -208,12 +211,28 @@ const clientesController = {
 
             const clienteAnterior = clienteResult.rows[0];
 
+            // Asegurar que los valores sean del tipo correcto para Turso
+            const safeNombre = nombre || null;
+            const safeDireccion = direccion || null;
+            const safeTelefono = telefono || null;
+            const safeCiudad = ciudad || null;
+            const safeCorreo = correo || null;
+            const safeEstadoCliente = estado_cliente || null;
+            const safeTarifaId = tarifa_id !== undefined ? Number(tarifa_id) || null : null;
+            const safeModificadoPor = Number(modificado_por);
+            const safeClienteId = Number(clienteId);
+
+            console.log("Valores preparados para la consulta:", {
+                safeNombre, safeDireccion, safeTelefono, safeCiudad, 
+                safeCorreo, safeEstadoCliente, safeTarifaId, safeModificadoPor, safeClienteId
+            });
+
             // Verificar si la tarifa existe (si se proporciona)
-            if (tarifa_id) {
+            if (safeTarifaId) {
                 const verificarTarifaQuery = `SELECT * FROM tarifas WHERE id = ?`;
                 const tarifaResult = await dbTurso.execute({
                     sql: verificarTarifaQuery,
-                    args: [tarifa_id]
+                    args: [safeTarifaId]
                 });
 
                 if (tarifaResult.rows.length === 0) {
@@ -221,15 +240,15 @@ const clientesController = {
                 }
             }
 
-            // Construir cambios para historial
+            // Construir cambios para historial (usar valores seguros)
             const cambios = {};
-            if (nombre && nombre !== clienteAnterior.nombre) cambios.nombre = { antes: clienteAnterior.nombre, despues: nombre };
-            if (direccion && direccion !== clienteAnterior.direccion) cambios.direccion = { antes: clienteAnterior.direccion, despues: direccion };
-            if (telefono && telefono !== clienteAnterior.telefono) cambios.telefono = { antes: clienteAnterior.telefono, despues: telefono };
-            if (ciudad && ciudad !== clienteAnterior.ciudad) cambios.ciudad = { antes: clienteAnterior.ciudad, despues: ciudad };
-            if (correo && correo !== clienteAnterior.correo) cambios.correo = { antes: clienteAnterior.correo, despues: correo };
-            if (estado_cliente && estado_cliente !== clienteAnterior.estado_cliente) cambios.estado_cliente = { antes: clienteAnterior.estado_cliente, despues: estado_cliente };
-            if (tarifa_id !== undefined && tarifa_id !== clienteAnterior.tarifa_id) cambios.tarifa_id = { antes: clienteAnterior.tarifa_id, despues: tarifa_id };
+            if (safeNombre && safeNombre !== clienteAnterior.nombre) cambios.nombre = { antes: clienteAnterior.nombre, despues: safeNombre };
+            if (safeDireccion && safeDireccion !== clienteAnterior.direccion) cambios.direccion = { antes: clienteAnterior.direccion, despues: safeDireccion };
+            if (safeTelefono && safeTelefono !== clienteAnterior.telefono) cambios.telefono = { antes: clienteAnterior.telefono, despues: safeTelefono };
+            if (safeCiudad && safeCiudad !== clienteAnterior.ciudad) cambios.ciudad = { antes: clienteAnterior.ciudad, despues: safeCiudad };
+            if (safeCorreo && safeCorreo !== clienteAnterior.correo) cambios.correo = { antes: clienteAnterior.correo, despues: safeCorreo };
+            if (safeEstadoCliente && safeEstadoCliente !== clienteAnterior.estado_cliente) cambios.estado_cliente = { antes: clienteAnterior.estado_cliente, despues: safeEstadoCliente };
+            if (safeTarifaId !== null && safeTarifaId !== clienteAnterior.tarifa_id) cambios.tarifa_id = { antes: clienteAnterior.tarifa_id, despues: safeTarifaId };
 
             // Actualizar cliente
             const updateQuery = `
@@ -247,7 +266,7 @@ const clientesController = {
 
             await dbTurso.execute({
                 sql: updateQuery,
-                args: [nombre, direccion, telefono, ciudad, correo, estado_cliente, tarifa_id, tarifa_id, modificado_por, clienteId]
+                args: [safeNombre, safeDireccion, safeTelefono, safeCiudad, safeCorreo, safeEstadoCliente, safeTarifaId, safeTarifaId, safeModificadoPor, safeClienteId]
             });
 
             // Gestionar medidores
