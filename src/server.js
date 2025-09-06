@@ -31,8 +31,8 @@ import express from 'express';
 import http from 'http';
 import cors from 'cors';
 import { Server } from 'socket.io';
-import setupSocket from './v1/sockets/socket.js';
-import SocketManager from './v1/sockets/enhanced/socketManager.js';
+// import setupSocket from './v1/sockets/socket.js'; // DESACTIVADO TEMPORALMENTE
+// import SocketManager from './v1/sockets/enhanced/socketManager.js'; // DESACTIVADO TEMPORALMENTE
 import SSEManager from './v2/sse/sseManager.js';
 import SSENotificationManager from './v2/sse/notificationManager.js';
 import routes from './routes/index.js';
@@ -55,12 +55,12 @@ const swaggerOptions = {
     },
     servers: [
       {
-        url: 'http://localhost:3000/api/v1',
-        description: 'Servidor de desarrollo - API v1'
+        url: 'http://localhost:3000/api/v2',
+        description: 'Servidor de desarrollo - API v2 (ACTIVA)'
       },
       {
         url: 'http://localhost:3000/api',
-        description: 'Servidor de desarrollo - Sin versión (redirige a v1)'
+        description: 'Servidor de desarrollo - Rutas base'
       }
     ],
     components: {
@@ -78,7 +78,7 @@ const swaggerOptions = {
       }
     }
   },
-  apis: ['./src/v1/routes/*.js'], // <--- importante: ruta a las rutas versionadas
+  apis: ['./src/v2/routes/*.js'], // Cambiado a v2 - v1 desactivada temporalmente
 };
 
 
@@ -96,8 +96,8 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Inicializar Socket Manager mejorado (v1)
-const socketManager = new SocketManager();
+// Inicializar Socket Manager mejorado (v1) - DESACTIVADO TEMPORALMENTE
+// const socketManager = new SocketManager();
 
 // Inicializar SSE Manager (v2)
 const sseManager = new SSEManager();
@@ -105,9 +105,9 @@ const sseNotificationManager = new SSENotificationManager(sseManager);
 
 // Hacer disponible los objetos en toda la aplicación
 app.set('io', io);
-app.set('socketManager', socketManager);
-app.set('sseManager', sseManager); // Nuevo para v2
-app.set('notificationManager', sseNotificationManager); // Nuevo para v2
+// app.set('socketManager', socketManager); // DESACTIVADO TEMPORALMENTE
+app.set('sseManager', sseManager); // Activo para v2
+app.set('notificationManager', sseNotificationManager); // Activo para v2
 
 // Rutas
 app.use('/api', routes);
@@ -115,12 +115,12 @@ app.use('/api', routes);
 
 const swaggerSpec = swaggerJsdoc(swaggerOptions);
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
-  customSiteTitle: 'API Agua Potable v1.0',
+  customSiteTitle: 'API Agua Potable v2.0 (v1 Desactivada)',
   customfavIcon: './public/assets/images/icon.png',
   customCss: `
-    .swagger-ui .topbar { background-color: #0d6efd; }
+    .swagger-ui .topbar { background-color: #198754; }
     .topbar-wrapper span { color: #fff !important; font-weight: bold; }
-    .swagger-ui .info .title { font-size: 2em; color: #0d6efd; }
+    .swagger-ui .info .title { font-size: 2em; color: #198754; }
     .swagger-ui .info .description { margin: 20px 0; }
   `,
   swaggerOptions: {
@@ -134,12 +134,14 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
 }));
 
 
-// WebSocket - Sistema dual: básico + mejorado (v1)
-setupSocket(io);  // Sistema básico para compatibilidad
-socketManager.initialize(io);  // Sistema mejorado con autenticación y roles
+// WebSocket - Sistema desactivado temporalmente (v1)
+// setupSocket(io);  // Sistema básico para compatibilidad - DESACTIVADO
+// socketManager.initialize(io);  // Sistema mejorado con autenticación y roles - DESACTIVADO
 
 console.log('🚀 Sistemas inicializados:');
-console.log('   - WebSockets (v1): Activo');
-console.log('   - SSE (v2): Activo');
+console.log('   - WebSockets (v1): ❌ DESACTIVADO TEMPORALMENTE');
+console.log('   - SSE (v2): ✅ ACTIVO');
+console.log('   - API v1: ❌ DESACTIVADA TEMPORALMENTE');
+console.log('   - API v2: ✅ ACTIVA');
 
 export default server;

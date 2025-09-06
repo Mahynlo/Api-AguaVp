@@ -10,13 +10,13 @@
  */
 
 const versions = {
-  current: 'v1',
+  current: 'v2', // Cambiado a v2 como versión actual
   available: {
     v1: {
       version: '1.0.0',
-      status: 'stable',
+      status: 'disabled', // Cambiado de 'stable' a 'disabled'
       releaseDate: '2025-01-30',
-      description: 'Primera versión estable de la API',
+      description: 'Primera versión estable de la API - TEMPORALMENTE DESACTIVADA',
       features: [
         'Gestión de clientes',
         'Gestión de medidores',
@@ -35,8 +35,9 @@ const versions = {
         health: '/api/health'
       },
       breaking_changes: [],
-      deprecated: false,
-      support_until: null
+      deprecated: true, // Marcada como deprecated
+      support_until: null,
+      note: "TEMPORALMENTE DESACTIVADA - Usar v2"
     },
     v2: {
       version: '2.0.0',
