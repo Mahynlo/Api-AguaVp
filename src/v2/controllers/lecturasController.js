@@ -81,26 +81,51 @@ const generarFacturaAutomatica = async (params) => {
 
         const rangos = rangosResult.rows;
 
-        // Calcular total basado en rangos (misma lógica de V1)
-        const primerRango = rangos[0];
-        const ultimoRango = rangos[rangos.length - 1];
+        // Calcular total basado en tarifa progresiva/escalonada
+        // Estructura: consumo_min y consumo_max definen el rango, precio_por_m3 es lo que se cobra
         let total = 0;
         const consumoEntero = Math.floor(consumo_m3);
-
-        if (consumoEntero >= primerRango.consumo_min && consumoEntero <= primerRango.consumo_max) {
-            total = primerRango.precio_por_m3;
-        } else if (consumoEntero >= ultimoRango.consumo_min) {
-            total = consumo_m3 * ultimoRango.precio_por_m3;
-        } else {
-            const rangoIntermedio = rangos.find(rango =>
-                consumoEntero >= rango.consumo_min && consumoEntero <= rango.consumo_max
-            );
-
-            if (rangoIntermedio) {
-                total = consumo_m3 * rangoIntermedio.precio_por_m3;
-            } else {
-                return { success: false, error: 'Consumo fuera de los rangos definidos' };
+        let rangoEncontrado = false;
+        
+        for (const rango of rangos) {
+            const consumo_min = Number(rango.consumo_min);
+            const consumo_max = Number(rango.consumo_max);
+            const precio_por_m3 = Number(rango.precio_por_m3);
+            
+            if (consumoEntero > consumo_max) {
+                // El consumo supera este rango completamente
+                if (consumo_min === 0) {
+                    // Primer rango (base): se cobra el precio completo del rango
+                    total += precio_por_m3;
+                } else {
+                    // Rangos superiores: se cobra precio × metros del rango
+                    const metros_en_rango = consumo_max - consumo_min + 1;
+                    total += metros_en_rango * precio_por_m3;
+                }
+            } else if (consumoEntero >= consumo_min) {
+                // El consumo está dentro de este rango (rango final)
+                if (consumo_min === 0) {
+                    // Primer rango (base): se cobra el precio completo del rango base
+                    total += precio_por_m3;
+                } else {
+                    // Rangos superiores: se cobra precio × metros consumidos en este rango
+                    const metros_consumidos_en_rango = consumoEntero - consumo_min + 1;
+                    total += metros_consumidos_en_rango * precio_por_m3;
+                }
+                rangoEncontrado = true;
+                break; // Ya encontramos el rango final, salir del bucle
             }
+        }
+        
+        // Si el consumo excede todos los rangos, usar el último rango para el excedente
+        if (!rangoEncontrado && rangos.length > 0) {
+            const ultimoRango = rangos[rangos.length - 1];
+            const ultimo_consumo_max = Number(ultimoRango.consumo_max);
+            const ultimo_precio_por_m3 = Number(ultimoRango.precio_por_m3);
+            
+            // Calcular excedente usando el último rango
+            const excedente = consumoEntero - ultimo_consumo_max;
+            total += excedente * ultimo_precio_por_m3;
         }
 
         total = parseFloat(total.toFixed(2));
