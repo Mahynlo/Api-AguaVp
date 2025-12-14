@@ -451,6 +451,23 @@ const authController = {
             // Generar nuevo access token
             const newAccessToken = generateAccessToken(user, 'user');
 
+            // Guardar el nuevo access token en la tabla sesiones
+            const insertSessionQuery = `
+                INSERT INTO sesiones (usuario_id, token, direccion_ip, dispositivo)
+                VALUES (?, ?, ?, ?)
+            `;
+            const ip = req.ip || "";
+            
+            await dbTurso.execute({
+                sql: insertSessionQuery,
+                args: [
+                    user.id,
+                    newAccessToken,
+                    ip,
+                    req.headers['user-agent'] || 'refresh'
+                ]
+            });
+
             // Actualizar último uso del refresh token
             const updateQuery = `
                 UPDATE refresh_tokens 
