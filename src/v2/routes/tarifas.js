@@ -822,4 +822,276 @@ router.get("/listarHistorico", appKeyMiddleware, configureSSE, authMiddleware, t
 router.put("/modificar/:id", appKeyMiddleware, configureSSE, authMiddleware, tarifasController.modificarTarifa);
 router.put("/modificar-rangos/:id", appKeyMiddleware, configureSSE, authMiddleware, tarifasController.modificarRangosTarifa);
 
+/**
+ * @swagger
+ * /api/v2/tarifas/{id}:
+ *   get:
+ *     summary: Obtener tarifa por ID con detalles completos
+ *     description: |
+ *       Retorna información completa de una tarifa específica incluyendo
+ *       rangos de precios asociados y lista de clientes que la utilizan.
+ *       
+ *       **Incluye:**
+ *       - Datos básicos de la tarifa
+ *       - Estado de vigencia (activa/inactiva)
+ *       - Rangos de consumo y precios
+ *       - Lista de clientes asignados
+ *     tags: [Tarifas V2]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - name: id
+ *         in: path
+ *         required: true
+ *         description: ID de la tarifa
+ *         schema:
+ *           type: integer
+ *           example: 1
+ *     responses:
+ *       200:
+ *         description: Tarifa obtenida exitosamente
+ *       404:
+ *         description: Tarifa no encontrada
+ *       500:
+ *         description: Error interno del servidor
+ */
+router.get("/:id", appKeyMiddleware, configureSSE, authMiddleware, tarifasController.obtenerTarifaPorId);
+
+/**
+ * @swagger
+ * /api/v2/tarifas/activas/listar:
+ *   get:
+ *     summary: Obtener solo tarifas activas (vigentes)
+ *     description: |
+ *       Retorna únicamente las tarifas que están actualmente vigentes,
+ *       es decir, aquellas cuya fecha de inicio ya pasó y la fecha de fin
+ *       aún no ha llegado (o es NULL).
+ *       
+ *       **Criterios de vigencia:**
+ *       - fecha_inicio <= hoy
+ *       - fecha_fin >= hoy OR fecha_fin IS NULL
+ *       
+ *       **Incluye para cada tarifa:**
+ *       - Datos básicos
+ *       - Rangos de consumo
+ *       - Cantidad de clientes asignados
+ *     tags: [Tarifas V2]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Tarifas activas obtenidas exitosamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 total:
+ *                   type: integer
+ *                   example: 5
+ *                 tarifas:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: integer
+ *                       nombre:
+ *                         type: string
+ *                       descripcion:
+ *                         type: string
+ *                       fecha_inicio:
+ *                         type: string
+ *                         format: date
+ *                       fecha_fin:
+ *                         type: string
+ *                         format: date
+ *                         nullable: true
+ *                       total_clientes:
+ *                         type: integer
+ *                       rangos:
+ *                         type: array
+ *                         items:
+ *                           type: object
+ *       401:
+ *         description: No autorizado
+ *       500:
+ *         description: Error interno del servidor
+ */
+router.get("/activas/listar", appKeyMiddleware, configureSSE, authMiddleware, tarifasController.obtenerTarifasActivas);
+
+/**
+ * @swagger
+ * /api/v2/tarifas/{id}/historial:
+ *   get:
+ *     summary: Obtener historial de cambios de precios de una tarifa
+ *     description: |
+ *       Retorna el historial completo de cambios de precios realizados
+ *       en los rangos de una tarifa específica. Útil para auditoría y
+ *       análisis de evolución de precios.
+ *       
+ *       **Información incluida:**
+ *       - Fecha de cada cambio
+ *       - Precio anterior y nuevo
+ *       - Cambio porcentual
+ *       - Rango afectado
+ *       - Rangos actuales para comparación
+ *     tags: [Tarifas V2]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - name: id
+ *         in: path
+ *         required: true
+ *         description: ID de la tarifa
+ *         schema:
+ *           type: integer
+ *           example: 1
+ *     responses:
+ *       200:
+ *         description: Historial obtenido exitosamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 tarifa:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: integer
+ *                     nombre:
+ *                       type: string
+ *                 rangos_actuales:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                 historial:
+ *                   type: object
+ *                   properties:
+ *                     total_cambios:
+ *                       type: integer
+ *                       example: 15
+ *                     cambios:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           id:
+ *                             type: integer
+ *                           fecha_cambio:
+ *                             type: string
+ *                             format: date-time
+ *                           precio_anterior:
+ *                             type: number
+ *                           precio_nuevo:
+ *                             type: number
+ *                           cambio_porcentual:
+ *                             type: string
+ *                             example: "+15.50%"
+ *       404:
+ *         description: Tarifa no encontrada
+ *       500:
+ *         description: Error interno del servidor
+ */
+router.get("/:id/historial", appKeyMiddleware, configureSSE, authMiddleware, tarifasController.obtenerHistorialTarifa);
+
+/**
+ * @swagger
+ * /api/v2/tarifas/estadisticas/general:
+ *   get:
+ *     summary: Obtener estadísticas generales de tarifas
+ *     description: |
+ *       Retorna estadísticas completas sobre el sistema de tarifas,
+ *       incluyendo distribución de clientes, rangos de precios,
+ *       tarifas activas/inactivas y cambios recientes.
+ *       
+ *       **Métricas incluidas:**
+ *       - Total de tarifas y estado
+ *       - Distribución de clientes por tarifa
+ *       - Rangos de precios (mín, máx, promedio)
+ *       - Tarifa más utilizada
+ *       - Cambios en últimos 30 días
+ *       
+ *       **Útil para:**
+ *       - Dashboards administrativos
+ *       - Reportes de gestión
+ *       - Análisis de estructura tarifaria
+ *     tags: [Tarifas V2]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Estadísticas obtenidas exitosamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 resumen:
+ *                   type: object
+ *                   properties:
+ *                     total_tarifas:
+ *                       type: integer
+ *                       example: 8
+ *                     tarifas_activas:
+ *                       type: integer
+ *                       example: 5
+ *                     tarifas_inactivas:
+ *                       type: integer
+ *                       example: 3
+ *                     clientes_sin_tarifa:
+ *                       type: integer
+ *                       example: 12
+ *                     total_rangos:
+ *                       type: integer
+ *                       example: 24
+ *                     promedio_rangos_por_tarifa:
+ *                       type: number
+ *                       example: 3.5
+ *                     cambios_ultimos_30_dias:
+ *                       type: integer
+ *                       example: 7
+ *                 precios:
+ *                   type: object
+ *                   properties:
+ *                     minimo:
+ *                       type: number
+ *                       example: 1500
+ *                     maximo:
+ *                       type: number
+ *                       example: 5000
+ *                     promedio:
+ *                       type: string
+ *                       example: "2750.00"
+ *                 distribucion_clientes:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       tarifa_id:
+ *                         type: integer
+ *                       tarifa_nombre:
+ *                         type: string
+ *                       total_clientes:
+ *                         type: integer
+ *                 tarifa_mas_usada:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: integer
+ *                     nombre:
+ *                       type: string
+ *                     clientes:
+ *                       type: integer
+ *                 fecha_generacion:
+ *                   type: string
+ *                   format: date-time
+ *       401:
+ *         description: No autorizado
+ *       500:
+ *         description: Error interno del servidor
+ */
+router.get("/estadisticas/general", appKeyMiddleware, configureSSE, authMiddleware, tarifasController.estadisticas);
+
 export default router;

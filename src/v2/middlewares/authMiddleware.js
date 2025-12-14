@@ -32,7 +32,20 @@ async function authMiddleware(req, res, next) {
     const token = authHeader.split(" ")[1]; // Extrae solo el token
 
     try {
-        // Verifica si el token es válido y está activo en la base de datos
+        // 1. Verificar si el token está revocado explícitamente
+        const revokeCheck = await dbTurso.execute({
+            sql: `SELECT id FROM tokens_revocados WHERE token = ? LIMIT 1`,
+            args: [token]
+        });
+
+        if (revokeCheck.rows.length > 0) {
+            return res.status(401).json({ 
+                error: "Token revocado",
+                code: "TOKEN_REVOKED"
+            });
+        }
+
+        // 2. Verifica si el token es válido y está activo en la base de datos
         const query = `SELECT * FROM sesiones WHERE token = ? AND activo = 1`;
         const result = await dbTurso.execute({
             sql: query,
@@ -44,6 +57,27 @@ async function authMiddleware(req, res, next) {
         }
 
         const session = result.rows[0];
+
+        // 3. Verificar si algún refresh token del usuario fue revocado recientemente
+        const refreshCheck = await dbTurso.execute({
+            sql: `
+                SELECT id 
+                FROM refresh_tokens 
+                WHERE usuario_id = ? 
+                  AND revocado = 1
+                  AND datetime(revocado_en) > datetime(?, 'unixepoch')
+                LIMIT 1
+            `,
+            args: [session.usuario_id, Math.floor(Date.now() / 1000) - 900] // 15 min atrás
+        });
+
+        // Si se revocó un refresh token hace menos de 15 min, invalidar sesión
+        if (refreshCheck.rows.length > 0) {
+            return res.status(401).json({ 
+                error: "Sesión revocada",
+                code: "SESSION_REVOKED"
+            });
+        }
 
         req.usuario = { // Agrega la información del usuario a la solicitud
             id: session.usuario_id, // ID del usuario asociado a la sesión 

@@ -689,6 +689,407 @@ const lecturasController = {
             console.error('Error en generación masiva de facturas v2:', error);
             return res.status(500).json({ error: 'Error interno del servidor' });
         }
+    },
+
+    // Obtener lecturas por medidor (historial completo)
+    obtenerLecturasPorMedidor: async (req, res) => {
+        const medidor_id = req.params.id;
+        const { limit = 100 } = req.query; // Limitar resultados por defecto
+
+        try {
+            // Verificar si el medidor existe
+            const verificarMedidorQuery = `
+                SELECT m.id, m.numero_serie, m.cliente_id, c.nombre as cliente_nombre
+                FROM medidores m
+                LEFT JOIN clientes c ON m.cliente_id = c.id
+                WHERE m.id = ?
+            `;
+            const medidorResult = await dbTurso.execute({
+                sql: verificarMedidorQuery,
+                args: [medidor_id]
+            });
+
+            if (medidorResult.rows.length === 0) {
+                return res.status(404).json({ error: 'Medidor no encontrado' });
+            }
+
+            const medidor = medidorResult.rows[0];
+
+            // Obtener lecturas con información completa
+            const lecturasQuery = `
+                SELECT 
+                    l.id,
+                    l.consumo_m3,
+                    l.periodo,
+                    l.fecha_lectura,
+                    f.id as factura_id,
+                    f.total as monto_total,
+                    f.estado as factura_estado
+                FROM lecturas l
+                LEFT JOIN facturas f ON l.id = f.lectura_id
+                WHERE l.medidor_id = ?
+                ORDER BY l.fecha_lectura DESC
+                LIMIT ?
+            `;
+
+            const lecturasResult = await dbTurso.execute({
+                sql: lecturasQuery,
+                args: [medidor_id, parseInt(limit)]
+            });
+
+            const lecturas = lecturasResult.rows.map(row => ({
+                id: Number(row.id),
+                consumo_m3: Number(row.consumo_m3),
+                periodo: row.periodo,
+                fecha_lectura: row.fecha_lectura,
+                factura: row.factura_id ? {
+                    id: Number(row.factura_id),
+                    monto_total: Number(row.monto_total),
+                    estado: row.factura_estado
+                } : null
+            }));
+
+            // Calcular estadísticas
+            const consumos = lecturas.map(l => l.consumo_m3);
+            const promedio_consumo = consumos.length > 0 
+                ? (consumos.reduce((a, b) => a + b, 0) / consumos.length).toFixed(2)
+                : 0;
+
+            const consumo_minimo = consumos.length > 0 ? Math.min(...consumos) : 0;
+            const consumo_maximo = consumos.length > 0 ? Math.max(...consumos) : 0;
+
+            // Detección de anomalías (consumo > 2x promedio o < 50% promedio)
+            const anomalias = lecturas.filter(l => {
+                const promedio = parseFloat(promedio_consumo);
+                return l.consumo_m3 > (promedio * 2) || l.consumo_m3 < (promedio * 0.5);
+            });
+
+            // Grafica de consumo por periodo (últimos 12 periodos)
+            const grafica = lecturas.slice(0, 12).reverse().map(l => ({
+                periodo: l.periodo,
+                consumo: l.consumo_m3
+            }));
+
+            res.json({
+                medidor: {
+                    id: Number(medidor.id),
+                    numero_serie: medidor.numero_serie,
+                    cliente_id: medidor.cliente_id ? Number(medidor.cliente_id) : null,
+                    cliente_nombre: medidor.cliente_nombre
+                },
+                estadisticas: {
+                    total_lecturas: lecturas.length,
+                    promedio_consumo: parseFloat(promedio_consumo),
+                    consumo_minimo,
+                    consumo_maximo,
+                    anomalias_detectadas: anomalias.length
+                },
+                lecturas_con_anomalia: anomalias.map(l => ({
+                    id: l.id,
+                    periodo: l.periodo,
+                    consumo: l.consumo_m3,
+                    promedio: parseFloat(promedio_consumo),
+                    desviacion: ((l.consumo_m3 / parseFloat(promedio_consumo) - 1) * 100).toFixed(2) + '%'
+                })),
+                grafica_consumo: grafica,
+                historial: lecturas
+            });
+
+        } catch (err) {
+            console.error('Error obteniendo lecturas por medidor v2:', err);
+            res.status(500).json({ error: 'Error al obtener lecturas del medidor' });
+        }
+    },
+
+    // Obtener lecturas por cliente (todos los medidores)
+    obtenerLecturasPorCliente: async (req, res) => {
+        const cliente_id = req.params.id;
+        const { periodo } = req.query; // Filtro opcional por periodo
+
+        try {
+            // Verificar si el cliente existe
+            const verificarClienteQuery = `SELECT id, nombre FROM clientes WHERE id = ?`;
+            const clienteResult = await dbTurso.execute({
+                sql: verificarClienteQuery,
+                args: [cliente_id]
+            });
+
+            if (clienteResult.rows.length === 0) {
+                return res.status(404).json({ error: 'Cliente no encontrado' });
+            }
+
+            const cliente = clienteResult.rows[0];
+
+            // Obtener medidores del cliente
+            const medidoresQuery = `
+                SELECT id, numero_serie, ubicacion 
+                FROM medidores 
+                WHERE cliente_id = ?
+            `;
+            const medidoresResult = await dbTurso.execute({
+                sql: medidoresQuery,
+                args: [cliente_id]
+            });
+
+            if (medidoresResult.rows.length === 0) {
+                return res.status(404).json({ 
+                    error: 'Cliente no tiene medidores asignados',
+                    cliente: {
+                        id: Number(cliente.id),
+                        nombre: cliente.nombre
+                    }
+                });
+            }
+
+            const medidores = medidoresResult.rows.map(m => Number(m.id));
+
+            // Construir query con filtro de periodo opcional
+            let lecturasQuery = `
+                SELECT 
+                    l.id,
+                    l.medidor_id,
+                    m.numero_serie,
+                    m.ubicacion,
+                    l.consumo_m3,
+                    l.periodo,
+                    l.fecha_lectura,
+                    f.id as factura_id,
+                    f.total as monto_total,
+                    f.estado as factura_estado
+                FROM lecturas l
+                INNER JOIN medidores m ON l.medidor_id = m.id
+                LEFT JOIN facturas f ON l.id = f.lectura_id
+                WHERE l.medidor_id IN (${medidores.map(() => '?').join(',')})
+            `;
+
+            const args = [...medidores];
+
+            if (periodo) {
+                lecturasQuery += ` AND l.periodo = ?`;
+                args.push(periodo);
+            }
+
+            lecturasQuery += ` ORDER BY l.fecha_lectura DESC`;
+
+            const lecturasResult = await dbTurso.execute({
+                sql: lecturasQuery,
+                args
+            });
+
+            const lecturas = lecturasResult.rows.map(row => ({
+                id: Number(row.id),
+                medidor: {
+                    id: Number(row.medidor_id),
+                    numero_serie: row.numero_serie,
+                    ubicacion: row.ubicacion
+                },
+                consumo_m3: Number(row.consumo_m3),
+                periodo: row.periodo,
+                fecha_lectura: row.fecha_lectura,
+                factura: row.factura_id ? {
+                    id: Number(row.factura_id),
+                    monto_total: Number(row.monto_total),
+                    estado: row.factura_estado
+                } : null
+            }));
+
+            // Calcular consumo total por periodo
+            const consumoPorPeriodo = lecturas.reduce((acc, l) => {
+                if (!acc[l.periodo]) {
+                    acc[l.periodo] = {
+                        periodo: l.periodo,
+                        consumo_total: 0,
+                        cantidad_lecturas: 0,
+                        monto_total: 0
+                    };
+                }
+                acc[l.periodo].consumo_total += l.consumo_m3;
+                acc[l.periodo].cantidad_lecturas += 1;
+                if (l.factura) {
+                    acc[l.periodo].monto_total += l.factura.monto_total;
+                }
+                return acc;
+            }, {});
+
+            const consumoTotal = lecturas.reduce((sum, l) => sum + l.consumo_m3, 0);
+            const montoTotalFacturado = lecturas
+                .filter(l => l.factura)
+                .reduce((sum, l) => sum + l.factura.monto_total, 0);
+
+            res.json({
+                cliente: {
+                    id: Number(cliente.id),
+                    nombre: cliente.nombre,
+                    total_medidores: medidoresResult.rows.length
+                },
+                resumen: {
+                    total_lecturas: lecturas.length,
+                    consumo_total: consumoTotal.toFixed(2),
+                    promedio_por_lectura: lecturas.length > 0 
+                        ? (consumoTotal / lecturas.length).toFixed(2) 
+                        : 0,
+                    monto_total_facturado: montoTotalFacturado.toFixed(2)
+                },
+                consumo_por_periodo: Object.values(consumoPorPeriodo).sort((a, b) => 
+                    b.periodo.localeCompare(a.periodo)
+                ),
+                lecturas
+            });
+
+        } catch (err) {
+            console.error('Error obteniendo lecturas por cliente v2:', err);
+            res.status(500).json({ error: 'Error al obtener lecturas del cliente' });
+        }
+    },
+
+    // Estadísticas generales de lecturas
+    estadisticas: async (req, res) => {
+        try {
+            // 1. Total de lecturas
+            const totalQuery = `SELECT COUNT(*) as total FROM lecturas`;
+            const totalResult = await dbTurso.execute({ sql: totalQuery });
+            const totalLecturas = Number(totalResult.rows[0].total);
+
+            // 2. Lecturas por periodo (últimos 12 periodos)
+            const porPeriodoQuery = `
+                SELECT 
+                    periodo,
+                    COUNT(*) as cantidad_lecturas,
+                    SUM(consumo_m3) as consumo_total,
+                    AVG(consumo_m3) as consumo_promedio
+                FROM lecturas
+                GROUP BY periodo
+                ORDER BY periodo DESC
+                LIMIT 12
+            `;
+            const porPeriodoResult = await dbTurso.execute({ sql: porPeriodoQuery });
+            const lecturasPorPeriodo = porPeriodoResult.rows.map(row => ({
+                periodo: row.periodo,
+                cantidad_lecturas: Number(row.cantidad_lecturas),
+                consumo_total: Number(row.consumo_total).toFixed(2),
+                consumo_promedio: Number(row.consumo_promedio).toFixed(2)
+            }));
+
+            // 3. Lecturas con y sin factura
+            const facturacionQuery = `
+                SELECT 
+                    COUNT(*) as total_lecturas,
+                    SUM(CASE WHEN f.id IS NOT NULL THEN 1 ELSE 0 END) as con_factura,
+                    SUM(CASE WHEN f.id IS NULL THEN 1 ELSE 0 END) as sin_factura
+                FROM lecturas l
+                LEFT JOIN facturas f ON l.id = f.lectura_id
+            `;
+            const facturacionResult = await dbTurso.execute({ sql: facturacionQuery });
+            const facturacion = facturacionResult.rows[0];
+
+            // 4. Consumo total y promedios
+            const consumoQuery = `
+                SELECT 
+                    SUM(consumo_m3) as consumo_total,
+                    AVG(consumo_m3) as consumo_promedio,
+                    MIN(consumo_m3) as consumo_minimo,
+                    MAX(consumo_m3) as consumo_maximo
+                FROM lecturas
+            `;
+            const consumoResult = await dbTurso.execute({ sql: consumoQuery });
+            const consumo = consumoResult.rows[0];
+
+            // 5. Top 10 mayores consumos
+            const topConsumosQuery = `
+                SELECT 
+                    l.id,
+                    l.consumo_m3,
+                    l.periodo,
+                    m.numero_serie,
+                    c.nombre as cliente_nombre
+                FROM lecturas l
+                INNER JOIN medidores m ON l.medidor_id = m.id
+                LEFT JOIN clientes c ON m.cliente_id = c.id
+                ORDER BY l.consumo_m3 DESC
+                LIMIT 10
+            `;
+            const topConsumosResult = await dbTurso.execute({ sql: topConsumosQuery });
+            const topConsumos = topConsumosResult.rows.map(row => ({
+                lectura_id: Number(row.id),
+                consumo_m3: Number(row.consumo_m3),
+                periodo: row.periodo,
+                numero_serie: row.numero_serie,
+                cliente_nombre: row.cliente_nombre || 'Sin asignar'
+            }));
+
+            // 6. Lecturas del mes actual
+            const mesActualQuery = `
+                SELECT COUNT(*) as total
+                FROM lecturas
+                WHERE periodo = strftime('%Y-%m', 'now')
+            `;
+            const mesActualResult = await dbTurso.execute({ sql: mesActualQuery });
+            const lecturasMesActual = Number(mesActualResult.rows[0].total);
+
+            // 7. Medidores sin lecturas recientes (sin lectura en el periodo actual)
+            const sinLecturaQuery = `
+                SELECT COUNT(*) as total
+                FROM medidores m
+                WHERE m.estado_medidor = 'Activo'
+                AND NOT EXISTS (
+                    SELECT 1 FROM lecturas l 
+                    WHERE l.medidor_id = m.id 
+                    AND l.periodo = strftime('%Y-%m', 'now')
+                )
+            `;
+            const sinLecturaResult = await dbTurso.execute({ sql: sinLecturaQuery });
+            const medidoresSinLectura = Number(sinLecturaResult.rows[0].total);
+
+            // 8. Distribución de rangos de consumo
+            const rangosConsumoQuery = `
+                SELECT 
+                    CASE 
+                        WHEN consumo_m3 < 10 THEN '0-10 m³'
+                        WHEN consumo_m3 < 20 THEN '10-20 m³'
+                        WHEN consumo_m3 < 30 THEN '20-30 m³'
+                        WHEN consumo_m3 < 50 THEN '30-50 m³'
+                        ELSE '50+ m³'
+                    END as rango,
+                    COUNT(*) as cantidad
+                FROM lecturas
+                GROUP BY rango
+                ORDER BY rango
+            `;
+            const rangosConsumoResult = await dbTurso.execute({ sql: rangosConsumoQuery });
+            const distribucionConsumo = rangosConsumoResult.rows.map(row => ({
+                rango: row.rango,
+                cantidad: Number(row.cantidad)
+            }));
+
+            res.json({
+                resumen: {
+                    total_lecturas: totalLecturas,
+                    lecturas_mes_actual: lecturasMesActual,
+                    medidores_sin_lectura_mes: medidoresSinLectura,
+                    lecturas_con_factura: Number(facturacion.con_factura),
+                    lecturas_sin_factura: Number(facturacion.sin_factura),
+                    porcentaje_facturacion: totalLecturas > 0 
+                        ? ((Number(facturacion.con_factura) / totalLecturas) * 100).toFixed(2) 
+                        : 0
+                },
+                consumo: {
+                    total: Number(consumo.consumo_total).toFixed(2),
+                    promedio: Number(consumo.consumo_promedio).toFixed(2),
+                    minimo: Number(consumo.consumo_minimo).toFixed(2),
+                    maximo: Number(consumo.consumo_maximo).toFixed(2)
+                },
+                distribucion_consumo: distribucionConsumo,
+                tendencias: {
+                    por_periodo: lecturasPorPeriodo
+                },
+                top_consumos: topConsumos,
+                fecha_generacion: new Date().toISOString()
+            });
+
+        } catch (err) {
+            console.error('Error obteniendo estadísticas de lecturas:', err);
+            res.status(500).json({ error: 'Error al obtener estadísticas' });
+        }
     }
 };
 

@@ -266,7 +266,16 @@ const MedidorController = {
 
             const updateResult = await dbTurso.execute({
                 sql: updateQuery,
-                args: [cliente_id, numero_serie, ubicacion, fecha_instalacion, latitud, longitud, estado_medidor, id]
+                args: [
+                    cliente_id ?? null, 
+                    numero_serie ?? null, 
+                    ubicacion ?? null, 
+                    fecha_instalacion ?? null, 
+                    latitud ?? null, 
+                    longitud ?? null, 
+                    estado_medidor ?? null, 
+                    id
+                ]
             });
 
             // Registrar cambios en historial

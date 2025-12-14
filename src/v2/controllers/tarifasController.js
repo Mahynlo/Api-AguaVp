@@ -480,6 +480,386 @@ const tarifasController = {
                 detalle: error.message 
             });
         }
+    },
+
+    // Obtener tarifa por ID con rangos y clientes asociados
+    obtenerTarifaPorId: async (req, res) => {
+        const tarifa_id = req.params.id;
+
+        try {
+            // Obtener datos de la tarifa
+            const tarifaQuery = `
+                SELECT 
+                    id, nombre, descripcion, fecha_inicio, fecha_fin,
+                    modificado_por, fecha_creacion
+                FROM tarifas
+                WHERE id = ?
+            `;
+            const tarifaResult = await dbTurso.execute({
+                sql: tarifaQuery,
+                args: [tarifa_id]
+            });
+
+            if (tarifaResult.rows.length === 0) {
+                return res.status(404).json({ error: 'Tarifa no encontrada' });
+            }
+
+            const tarifa = tarifaResult.rows[0];
+
+            // Obtener rangos asociados
+            const rangosQuery = `
+                SELECT id, consumo_min, consumo_max, precio_por_m3
+                FROM rangos_tarifas
+                WHERE tarifa_id = ?
+                ORDER BY consumo_min ASC
+            `;
+            const rangosResult = await dbTurso.execute({
+                sql: rangosQuery,
+                args: [tarifa_id]
+            });
+
+            const rangos = rangosResult.rows.map(row => ({
+                id: Number(row.id),
+                consumo_min: Number(row.consumo_min),
+                consumo_max: row.consumo_max ? Number(row.consumo_max) : null,
+                precio_por_m3: Number(row.precio_por_m3)
+            }));
+
+            // Obtener clientes usando esta tarifa
+            const clientesQuery = `
+                SELECT 
+                    id, nombre, ciudad, estado_cliente
+                FROM clientes
+                WHERE tarifa_id = ?
+            `;
+            const clientesResult = await dbTurso.execute({
+                sql: clientesQuery,
+                args: [tarifa_id]
+            });
+
+            const clientes = clientesResult.rows.map(row => ({
+                id: Number(row.id),
+                nombre: row.nombre,
+                ciudad: row.ciudad,
+                estado_cliente: row.estado_cliente
+            }));
+
+            // Determinar si la tarifa está activa
+            const hoy = new Date();
+            const fechaInicio = new Date(tarifa.fecha_inicio);
+            const fechaFin = tarifa.fecha_fin ? new Date(tarifa.fecha_fin) : null;
+            const estaActiva = fechaInicio <= hoy && (!fechaFin || fechaFin >= hoy);
+
+            res.json({
+                tarifa: {
+                    id: Number(tarifa.id),
+                    nombre: tarifa.nombre,
+                    descripcion: tarifa.descripcion,
+                    fecha_inicio: tarifa.fecha_inicio,
+                    fecha_fin: tarifa.fecha_fin,
+                    modificado_por: tarifa.modificado_por ? Number(tarifa.modificado_por) : null,
+                    fecha_creacion: tarifa.fecha_creacion,
+                    esta_activa: estaActiva
+                },
+                rangos: rangos,
+                clientes: {
+                    total: clientes.length,
+                    lista: clientes
+                }
+            });
+
+        } catch (err) {
+            console.error('Error obteniendo tarifa por ID:', err);
+            res.status(500).json({ error: 'Error al obtener tarifa' });
+        }
+    },
+
+    // Obtener solo tarifas activas (vigentes)
+    obtenerTarifasActivas: async (req, res) => {
+        try {
+            const query = `
+                SELECT 
+                    t.id, t.nombre, t.descripcion, t.fecha_inicio, t.fecha_fin,
+                    COUNT(c.id) as total_clientes
+                FROM tarifas t
+                LEFT JOIN clientes c ON t.id = c.tarifa_id
+                WHERE t.fecha_inicio <= date('now')
+                  AND (t.fecha_fin IS NULL OR t.fecha_fin >= date('now'))
+                GROUP BY t.id, t.nombre, t.descripcion, t.fecha_inicio, t.fecha_fin
+                ORDER BY t.fecha_inicio DESC
+            `;
+
+            const result = await dbTurso.execute({ sql: query });
+
+            const tarifasActivas = result.rows.map(row => ({
+                id: Number(row.id),
+                nombre: row.nombre,
+                descripcion: row.descripcion,
+                fecha_inicio: row.fecha_inicio,
+                fecha_fin: row.fecha_fin,
+                total_clientes: Number(row.total_clientes)
+            }));
+
+            // Para cada tarifa, obtener sus rangos
+            const tarifasConRangos = await Promise.all(
+                tarifasActivas.map(async (tarifa) => {
+                    const rangosQuery = `
+                        SELECT consumo_min, consumo_max, precio_por_m3
+                        FROM rangos_tarifas
+                        WHERE tarifa_id = ?
+                        ORDER BY consumo_min ASC
+                    `;
+                    const rangosResult = await dbTurso.execute({
+                        sql: rangosQuery,
+                        args: [tarifa.id]
+                    });
+
+                    const rangos = rangosResult.rows.map(r => ({
+                        consumo_min: Number(r.consumo_min),
+                        consumo_max: r.consumo_max ? Number(r.consumo_max) : null,
+                        precio_por_m3: Number(r.precio_por_m3)
+                    }));
+
+                    return {
+                        ...tarifa,
+                        rangos
+                    };
+                })
+            );
+
+            res.json({
+                total: tarifasConRangos.length,
+                tarifas: tarifasConRangos
+            });
+
+        } catch (err) {
+            console.error('Error obteniendo tarifas activas:', err);
+            res.status(500).json({ error: 'Error al obtener tarifas activas' });
+        }
+    },
+
+    // Obtener historial de cambios de precios
+    obtenerHistorialTarifa: async (req, res) => {
+        const tarifa_id = req.params.id;
+
+        try {
+            // Verificar si la tarifa existe
+            const verificarQuery = `SELECT id, nombre FROM tarifas WHERE id = ?`;
+            const tarifaResult = await dbTurso.execute({
+                sql: verificarQuery,
+                args: [tarifa_id]
+            });
+
+            if (tarifaResult.rows.length === 0) {
+                return res.status(404).json({ error: 'Tarifa no encontrada' });
+            }
+
+            const tarifa = tarifaResult.rows[0];
+
+            // Obtener historial de cambios
+            const historialQuery = `
+                SELECT 
+                    h.id,
+                    h.fecha_cambio,
+                    h.consumo_min,
+                    h.consumo_max,
+                    h.precio_anterior,
+                    h.precio_nuevo,
+                    r.id as rango_id
+                FROM historial_tarifas h
+                LEFT JOIN rangos_tarifas r ON h.rango_id = r.id
+                WHERE h.tarifa_id = ?
+                ORDER BY h.fecha_cambio DESC
+            `;
+
+            const historialResult = await dbTurso.execute({
+                sql: historialQuery,
+                args: [tarifa_id]
+            });
+
+            const historial = historialResult.rows.map(row => ({
+                id: Number(row.id),
+                fecha_cambio: row.fecha_cambio,
+                rango: {
+                    id: row.rango_id ? Number(row.rango_id) : null,
+                    consumo_min: row.consumo_min ? Number(row.consumo_min) : null,
+                    consumo_max: row.consumo_max ? Number(row.consumo_max) : null
+                },
+                precio_anterior: row.precio_anterior ? Number(row.precio_anterior) : null,
+                precio_nuevo: Number(row.precio_nuevo),
+                cambio_porcentual: row.precio_anterior 
+                    ? (((Number(row.precio_nuevo) - Number(row.precio_anterior)) / Number(row.precio_anterior)) * 100).toFixed(2) + '%'
+                    : 'N/A'
+            }));
+
+            // Rangos actuales
+            const rangosActualesQuery = `
+                SELECT 
+                    id, consumo_min, consumo_max, precio_por_m3
+                FROM rangos_tarifas
+                WHERE tarifa_id = ?
+                ORDER BY consumo_min ASC
+            `;
+
+            const rangosActualesResult = await dbTurso.execute({
+                sql: rangosActualesQuery,
+                args: [tarifa_id]
+            });
+
+            const rangosActuales = rangosActualesResult.rows.map(row => ({
+                id: Number(row.id),
+                consumo_min: Number(row.consumo_min),
+                consumo_max: row.consumo_max ? Number(row.consumo_max) : null,
+                precio_por_m3: Number(row.precio_por_m3)
+            }));
+
+            res.json({
+                tarifa: {
+                    id: Number(tarifa.id),
+                    nombre: tarifa.nombre
+                },
+                rangos_actuales: rangosActuales,
+                historial: {
+                    total_cambios: historial.length,
+                    cambios: historial
+                }
+            });
+
+        } catch (err) {
+            console.error('Error obteniendo historial de tarifa:', err);
+            res.status(500).json({ error: 'Error al obtener historial' });
+        }
+    },
+
+    // Estadísticas generales de tarifas
+    estadisticas: async (req, res) => {
+        try {
+            // 1. Total de tarifas
+            const totalQuery = `SELECT COUNT(*) as total FROM tarifas`;
+            const totalResult = await dbTurso.execute({ sql: totalQuery });
+            const totalTarifas = Number(totalResult.rows[0].total);
+
+            // 2. Tarifas activas vs inactivas
+            const estadoQuery = `
+                SELECT 
+                    COUNT(CASE 
+                        WHEN fecha_inicio <= date('now') 
+                        AND (fecha_fin IS NULL OR fecha_fin >= date('now'))
+                        THEN 1 END) as activas,
+                    COUNT(CASE 
+                        WHEN fecha_inicio > date('now') 
+                        OR (fecha_fin IS NOT NULL AND fecha_fin < date('now'))
+                        THEN 1 END) as inactivas
+                FROM tarifas
+            `;
+            const estadoResult = await dbTurso.execute({ sql: estadoQuery });
+            const estados = estadoResult.rows[0];
+
+            // 3. Distribución de clientes por tarifa
+            const distribucionQuery = `
+                SELECT 
+                    t.id,
+                    t.nombre,
+                    COUNT(c.id) as total_clientes
+                FROM tarifas t
+                LEFT JOIN clientes c ON t.id = c.tarifa_id
+                GROUP BY t.id, t.nombre
+                ORDER BY total_clientes DESC
+            `;
+            const distribucionResult = await dbTurso.execute({ sql: distribucionQuery });
+            const distribucion = distribucionResult.rows.map(row => ({
+                tarifa_id: Number(row.id),
+                tarifa_nombre: row.nombre,
+                total_clientes: Number(row.total_clientes)
+            }));
+
+            // 4. Clientes sin tarifa asignada
+            const sinTarifaQuery = `
+                SELECT COUNT(*) as total
+                FROM clientes
+                WHERE tarifa_id IS NULL
+            `;
+            const sinTarifaResult = await dbTurso.execute({ sql: sinTarifaQuery });
+            const clientesSinTarifa = Number(sinTarifaResult.rows[0].total);
+
+            // 5. Total de rangos en todas las tarifas
+            const rangosQuery = `SELECT COUNT(*) as total FROM rangos_tarifas`;
+            const rangosResult = await dbTurso.execute({ sql: rangosQuery });
+            const totalRangos = Number(rangosResult.rows[0].total);
+
+            // 6. Promedio de rangos por tarifa
+            const promedioRangosQuery = `
+                SELECT AVG(cantidad_rangos) as promedio
+                FROM (
+                    SELECT tarifa_id, COUNT(*) as cantidad_rangos
+                    FROM rangos_tarifas
+                    GROUP BY tarifa_id
+                )
+            `;
+            const promedioRangosResult = await dbTurso.execute({ sql: promedioRangosQuery });
+            const promedioRangos = Number(promedioRangosResult.rows[0].promedio || 0).toFixed(2);
+
+            // 7. Rango de precios (mínimo y máximo)
+            const preciosQuery = `
+                SELECT 
+                    MIN(precio_por_m3) as precio_minimo,
+                    MAX(precio_por_m3) as precio_maximo,
+                    AVG(precio_por_m3) as precio_promedio
+                FROM rangos_tarifas
+            `;
+            const preciosResult = await dbTurso.execute({ sql: preciosQuery });
+            const precios = preciosResult.rows[0];
+
+            // 8. Historial de cambios recientes (últimos 30 días)
+            const cambiosRecientesQuery = `
+                SELECT COUNT(*) as total
+                FROM historial_tarifas
+                WHERE fecha_cambio >= date('now', '-30 days')
+            `;
+            const cambiosRecientesResult = await dbTurso.execute({ sql: cambiosRecientesQuery });
+            const cambiosRecientes = Number(cambiosRecientesResult.rows[0].total);
+
+            // 9. Tarifa más usada
+            const masUsadaQuery = `
+                SELECT 
+                    t.id, t.nombre, COUNT(c.id) as clientes
+                FROM tarifas t
+                INNER JOIN clientes c ON t.id = c.tarifa_id
+                GROUP BY t.id, t.nombre
+                ORDER BY clientes DESC
+                LIMIT 1
+            `;
+            const masUsadaResult = await dbTurso.execute({ sql: masUsadaQuery });
+            const tarifaMasUsada = masUsadaResult.rows.length > 0 ? {
+                id: Number(masUsadaResult.rows[0].id),
+                nombre: masUsadaResult.rows[0].nombre,
+                clientes: Number(masUsadaResult.rows[0].clientes)
+            } : null;
+
+            res.json({
+                resumen: {
+                    total_tarifas: totalTarifas,
+                    tarifas_activas: Number(estados.activas),
+                    tarifas_inactivas: Number(estados.inactivas),
+                    clientes_sin_tarifa: clientesSinTarifa,
+                    total_rangos: totalRangos,
+                    promedio_rangos_por_tarifa: parseFloat(promedioRangos),
+                    cambios_ultimos_30_dias: cambiosRecientes
+                },
+                precios: {
+                    minimo: precios.precio_minimo ? Number(precios.precio_minimo) : 0,
+                    maximo: precios.precio_maximo ? Number(precios.precio_maximo) : 0,
+                    promedio: precios.precio_promedio ? Number(precios.precio_promedio).toFixed(2) : '0.00'
+                },
+                distribucion_clientes: distribucion,
+                tarifa_mas_usada: tarifaMasUsada,
+                fecha_generacion: new Date().toISOString()
+            });
+
+        } catch (err) {
+            console.error('Error obteniendo estadísticas de tarifas:', err);
+            res.status(500).json({ error: 'Error al obtener estadísticas' });
+        }
     }
 };
 

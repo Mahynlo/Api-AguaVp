@@ -1,0 +1,46 @@
+// src/database/schema/clientes.js
+import { sqliteTable, integer, text } from 'drizzle-orm/sqlite-core';
+import { sql } from 'drizzle-orm';
+import { usuarios } from './usuarios.js';
+import { tarifas } from './tarifas.js';
+
+export const clientes = sqliteTable('clientes', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  nombre: text('nombre').notNull(),
+  direccion: text('direccion').notNull(),
+  telefono: text('telefono').notNull(),
+  ciudad: text('ciudad').notNull(),
+  correo: text('correo'),
+  estado_cliente: text('estado_cliente', { 
+    enum: ['Activo', 'Inactivo', 'Eliminado'] 
+  }).notNull().default('Activo'),
+  tarifa_id: integer('tarifa_id').references(() => tarifas.id),
+  modificado_por: integer('modificado_por').references(() => usuarios.id),
+  fecha_creacion: text('fecha_creacion').default(sql`(datetime('now'))`),
+  fecha_eliminacion: text('fecha_eliminacion'),
+  eliminado_por: integer('eliminado_por').references(() => usuarios.id),
+  razon_eliminacion: text('razon_eliminacion'),
+});
+
+export const medidores = sqliteTable('medidores', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  cliente_id: integer('cliente_id').references(() => clientes.id),
+  numero_serie: text('numero_serie').notNull().unique(),
+  ubicacion: text('ubicacion'),
+  fecha_instalacion: text('fecha_instalacion'),
+  latitud: text('latitud'),
+  longitud: text('longitud'),
+  estado_medidor: text('estado_medidor', { 
+    enum: ['Activo', 'Inactivo', 'Retirado', 'No instalado'] 
+  }).notNull(),
+  fecha_creacion: text('fecha_creacion').default(sql`(datetime('now'))`),
+});
+
+export const cliente_medidor_historial = sqliteTable('cliente_medidor_historial', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  cliente_id: integer('cliente_id').notNull().references(() => clientes.id),
+  medidor_id: integer('medidor_id').notNull().references(() => medidores.id),
+  fecha_inicio: text('fecha_inicio').notNull().default(sql`(date('now'))`),
+  fecha_fin: text('fecha_fin'),
+  asignado_por: integer('asignado_por').references(() => usuarios.id),
+});

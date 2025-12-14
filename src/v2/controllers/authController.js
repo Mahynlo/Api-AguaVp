@@ -17,7 +17,8 @@
 
 import bcrypt from "bcryptjs";
 import dbTurso from "../../database/db-turso.js";
-import generateToken from "../../utils/generateToken.js";
+import { generateTokenPair, generateAccessToken } from "../../utils/generateToken.js";
+import { validatePassword, formatValidationErrors } from "../../utils/passwordValidator.js";
 
 // Helper para obtener los managers SSE
 let sseManager = null;
@@ -57,8 +58,8 @@ const authController = {
                 return res.status(401).json({ error: "Contraseña incorrecta" });
             }
 
-            // Generar token
-            const token = generateToken(user);
+            // Generar par de tokens (access + refresh)
+            const { accessToken, refreshToken, refreshExpiresAt } = generateTokenPair(user, 'user');
 
             // Guardar sesión en Turso
             const insertQuery = `
@@ -69,7 +70,24 @@ const authController = {
             
             await dbTurso.execute({
                 sql: insertQuery,
-                args: [user.id, token, ip, dispositivo || 'unknown']
+                args: [user.id, accessToken, ip, dispositivo || 'unknown']
+            });
+
+            // Guardar refresh token en la base de datos
+            const insertRefreshQuery = `
+                INSERT INTO refresh_tokens (token, usuario_id, expira_en, user_agent, ip)
+                VALUES (?, ?, ?, ?, ?)
+            `;
+            
+            await dbTurso.execute({
+                sql: insertRefreshQuery,
+                args: [
+                    refreshToken,
+                    user.id,
+                    refreshExpiresAt,
+                    req.headers['user-agent'] || 'unknown',
+                    ip
+                ]
             });
 
             // Datos para SSE
@@ -103,7 +121,10 @@ const authController = {
             res.json({
                 success: true,
                 mensaje: "Inicio de sesión exitoso",
-                token,
+                accessToken,
+                refreshToken,
+                expiresIn: '15m',
+                refreshExpiresIn: '7d',
                 user: {
                     id: user.id,
                     email: user.correo,
@@ -125,6 +146,28 @@ const authController = {
 
             if (!correo || !contrasena || !username || !rol) {
                 return res.status(400).json({ error: "Todos los campos son obligatorios" });
+            }
+
+            // Validar que el rol sea uno de los permitidos (case-insensitive)
+            const rolesPermitidos = ['superadmin', 'administrador', 'operador'];
+            const rolNormalizado = rol.toLowerCase().trim();
+            
+            if (!rolesPermitidos.includes(rolNormalizado)) {
+                return res.status(400).json({ 
+                    error: "Rol no válido",
+                    rolesPermitidos: rolesPermitidos,
+                    rolRecibido: rol
+                });
+            }
+
+            // Validar fortaleza de la contraseña
+            const validation = validatePassword(contrasena);
+            if (!validation.valid) {
+                return res.status(400).json({ 
+                    error: "Contraseña no válida",
+                    detalles: validation.errors,
+                    mensaje: formatValidationErrors(validation.errors)
+                });
             }
 
             // Verificar si el usuario ya existe (correo o username)
@@ -149,7 +192,7 @@ const authController = {
 
             const insertResult = await dbTurso.execute({
                 sql: insertQuery,
-                args: [correo, nombre, hashedPassword, username, rol]
+                args: [correo, nombre, hashedPassword, username, rolNormalizado]
             });
 
             const nuevoUsuarioId = Number(insertResult.lastInsertRowid); // Convertir BigInt a Number
@@ -160,7 +203,7 @@ const authController = {
                 correo,
                 nombre,
                 username,
-                rol,
+                rol: rolNormalizado,
                 fecha_creacion: new Date().toISOString()
             };
 
@@ -200,6 +243,43 @@ const authController = {
 
             if (!token) {
                 return res.status(400).json({ error: "Token requerido" });
+            }
+
+            // Obtener información de la sesión a cerrar
+            const sesionQuery = `
+                SELECT usuario_id FROM sesiones 
+                WHERE token = ? AND activo = 1
+            `;
+            
+            const sesionResult = await dbTurso.execute({
+                sql: sesionQuery,
+                args: [token]
+            });
+
+            if (sesionResult.rows.length === 0) {
+                return res.status(404).json({ error: "Sesión no encontrada o ya cerrada" });
+            }
+
+            const sesionUsuarioId = sesionResult.rows[0].usuario_id;
+
+            // Verificar permisos: solo el mismo usuario o superadmin pueden cerrar la sesión
+            const usuarioAutenticadoId = req.usuario.id;
+            
+            // Obtener rol del usuario autenticado
+            const rolQuery = `SELECT rol FROM usuarios WHERE id = ?`;
+            const rolResult = await dbTurso.execute({
+                sql: rolQuery,
+                args: [usuarioAutenticadoId]
+            });
+
+            const rolUsuario = rolResult.rows[0]?.rol;
+
+            // Validar permisos
+            if (sesionUsuarioId !== usuarioAutenticadoId && rolUsuario !== 'superadmin') {
+                return res.status(403).json({ 
+                    error: "No autorizado para cerrar esta sesión",
+                    mensaje: "Solo puedes cerrar tus propias sesiones, o ser superadmin"
+                });
             }
 
             // Marcar sesión como inactiva en Turso
@@ -318,6 +398,312 @@ const authController = {
         } catch (error) {
             console.error('Error al obtener sesiones activas v2:', error);
             res.status(500).json({ error: "Error al obtener sesiones activas" });
+        }
+    },
+
+    /**
+     * Refresh Token - Renueva el access token usando un refresh token válido
+     * POST /api/v2/auth/refresh
+     * Body: { refreshToken }
+     */
+    refresh: async (req, res) => {
+        try {
+            const { refreshToken } = req.body;
+
+            if (!refreshToken) {
+                return res.status(400).json({ error: "Refresh token requerido" });
+            }
+
+            // Verificar que el refresh token existe y está activo
+            const query = `
+                SELECT rt.*, u.id, u.correo, u.nombre, u.username, u.rol, u.fecha_creacion
+                FROM refresh_tokens rt
+                JOIN usuarios u ON rt.usuario_id = u.id
+                WHERE rt.token = ? 
+                  AND rt.revocado = 0 
+                  AND datetime(rt.expira_en) > datetime('now')
+            `;
+
+            const result = await dbTurso.execute({
+                sql: query,
+                args: [refreshToken]
+            });
+
+            if (result.rows.length === 0) {
+                return res.status(401).json({ 
+                    error: "Refresh token inválido o expirado",
+                    code: "INVALID_REFRESH_TOKEN"
+                });
+            }
+
+            const tokenData = result.rows[0];
+            
+            // Construir objeto de usuario
+            const user = {
+                id: tokenData.id,
+                correo: tokenData.correo,
+                nombre: tokenData.nombre,
+                username: tokenData.username,
+                rol: tokenData.rol,
+                fecha_creacion: tokenData.fecha_creacion
+            };
+
+            // Generar nuevo access token
+            const newAccessToken = generateAccessToken(user, 'user');
+
+            // Actualizar último uso del refresh token
+            const updateQuery = `
+                UPDATE refresh_tokens 
+                SET ultimo_uso = datetime('now')
+                WHERE token = ?
+            `;
+
+            await dbTurso.execute({
+                sql: updateQuery,
+                args: [refreshToken]
+            });
+
+            // Enviar notificación SSE
+            if (notificationManager) {
+                try {
+                    notificationManager.alertaSistema(
+                        `Token renovado para usuario ${user.nombre}`,
+                        'info',
+                        { 
+                            usuario_id: user.id,
+                            accion: 'refresh_token'
+                        }
+                    );
+                } catch (sseError) {
+                    console.warn('Error enviando notificación SSE de refresh:', sseError);
+                }
+            }
+
+            res.json({
+                success: true,
+                accessToken: newAccessToken,
+                expiresIn: '15m',
+                user: {
+                    id: user.id,
+                    email: user.correo,
+                    nombre: user.nombre,
+                    username: user.username,
+                    rol: user.rol
+                }
+            });
+
+        } catch (error) {
+            console.error('Error en refresh token v2:', error);
+            res.status(500).json({ error: "Error al renovar token" });
+        }
+    },
+
+    /**
+     * Revoke Refresh Token - Revoca un refresh token específico
+     * POST /api/v2/auth/revoke
+     * Body: { refreshToken }
+     * Headers: Authorization: Bearer <access_token>
+     */
+    revokeRefreshToken: async (req, res) => {
+        try {
+            const { refreshToken } = req.body;
+
+            if (!refreshToken) {
+                return res.status(400).json({ error: "Refresh token requerido" });
+            }
+
+            // Verificar que el refresh token pertenece al usuario autenticado
+            const query = `
+                SELECT usuario_id 
+                FROM refresh_tokens 
+                WHERE token = ? AND revocado = 0
+            `;
+
+            const result = await dbTurso.execute({
+                sql: query,
+                args: [refreshToken]
+            });
+
+            if (result.rows.length === 0) {
+                return res.status(404).json({ error: "Refresh token no encontrado" });
+            }
+
+            const tokenUserId = result.rows[0].usuario_id;
+
+            // Verificar que el usuario del token coincide con el usuario autenticado
+            if (tokenUserId !== req.user.id) {
+                return res.status(403).json({ 
+                    error: "No autorizado para revocar este token" 
+                });
+            }
+
+            // Revocar el token
+            const updateQuery = `
+                UPDATE refresh_tokens 
+                SET revocado = 1,
+                    revocado_en = datetime('now'),
+                    razon_revocacion = 'Revocación manual por usuario'
+                WHERE token = ?
+            `;
+
+            await dbTurso.execute({
+                sql: updateQuery,
+                args: [refreshToken]
+            });
+
+            res.json({
+                success: true,
+                mensaje: "Refresh token revocado exitosamente"
+            });
+
+        } catch (error) {
+            console.error('Error revocando refresh token v2:', error);
+            res.status(500).json({ error: "Error al revocar token" });
+        }
+    },
+
+    // Cerrar una sesión específica por ID
+    cerrarSesion: async (req, res) => {
+        try {
+            const { sesionId } = req.params;
+
+            if (!sesionId) {
+                return res.status(400).json({ error: "ID de sesión requerido" });
+            }
+
+            // Obtener información de la sesión a cerrar
+            const sesionQuery = `
+                SELECT usuario_id FROM sesiones 
+                WHERE id = ? AND activo = 1
+            `;
+            
+            const sesionResult = await dbTurso.execute({
+                sql: sesionQuery,
+                args: [sesionId]
+            });
+
+            if (sesionResult.rows.length === 0) {
+                return res.status(404).json({ error: "Sesión no encontrada o ya cerrada" });
+            }
+
+            const sesionUsuarioId = sesionResult.rows[0].usuario_id;
+
+            // Verificar permisos: solo el mismo usuario o superadmin
+            const usuarioAutenticadoId = req.usuario.id;
+            
+            const rolQuery = `SELECT rol FROM usuarios WHERE id = ?`;
+            const rolResult = await dbTurso.execute({
+                sql: rolQuery,
+                args: [usuarioAutenticadoId]
+            });
+
+            const rolUsuario = rolResult.rows[0]?.rol;
+
+            // Validar permisos
+            if (sesionUsuarioId !== usuarioAutenticadoId && rolUsuario !== 'superadmin') {
+                return res.status(403).json({ 
+                    error: "No autorizado para cerrar esta sesión",
+                    mensaje: "Solo puedes cerrar tus propias sesiones, o ser superadmin"
+                });
+            }
+
+            // Cerrar la sesión
+            const updateQuery = `
+                UPDATE sesiones 
+                SET activo = 0, fecha_fin = datetime('now')
+                WHERE id = ? AND activo = 1
+            `;
+
+            const result = await dbTurso.execute({
+                sql: updateQuery,
+                args: [sesionId]
+            });
+
+            if (result.rowsAffected === 0) {
+                return res.status(404).json({ error: "Sesión no encontrada o ya cerrada" });
+            }
+
+            res.json({
+                success: true,
+                mensaje: "Sesión cerrada exitosamente",
+                sesion_id: sesionId
+            });
+
+        } catch (error) {
+            console.error('Error cerrando sesión v2:', error);
+            res.status(500).json({ error: "Error al cerrar sesión" });
+        }
+    },
+
+    // Cerrar todas las sesiones de un usuario
+    cerrarTodasSesiones: async (req, res) => {
+        try {
+            const { usuarioId } = req.params;
+            const { excepto_actual } = req.query; // Opcional: mantener sesión actual
+
+            if (!usuarioId) {
+                return res.status(400).json({ error: "ID de usuario requerido" });
+            }
+
+            // Verificar permisos: solo el mismo usuario o superadmin
+            const usuarioAutenticadoId = req.usuario.id;
+            
+            const rolQuery = `SELECT rol FROM usuarios WHERE id = ?`;
+            const rolResult = await dbTurso.execute({
+                sql: rolQuery,
+                args: [usuarioAutenticadoId]
+            });
+
+            const rolUsuario = rolResult.rows[0]?.rol;
+
+            // Validar permisos
+            if (Number(usuarioId) !== usuarioAutenticadoId && rolUsuario !== 'superadmin') {
+                return res.status(403).json({ 
+                    error: "No autorizado para cerrar sesiones de este usuario",
+                    mensaje: "Solo puedes cerrar tus propias sesiones, o ser superadmin"
+                });
+            }
+
+            // Construir query según si se excluye la sesión actual
+            let updateQuery;
+            let args;
+
+            if (excepto_actual === 'true') {
+                // Cerrar todas EXCEPTO la sesión actual
+                const tokenActual = req.usuario.token;
+                updateQuery = `
+                    UPDATE sesiones 
+                    SET activo = 0, fecha_fin = datetime('now')
+                    WHERE usuario_id = ? AND activo = 1 AND token != ?
+                `;
+                args = [usuarioId, tokenActual];
+            } else {
+                // Cerrar TODAS las sesiones
+                updateQuery = `
+                    UPDATE sesiones 
+                    SET activo = 0, fecha_fin = datetime('now')
+                    WHERE usuario_id = ? AND activo = 1
+                `;
+                args = [usuarioId];
+            }
+
+            const result = await dbTurso.execute({
+                sql: updateQuery,
+                args: args
+            });
+
+            const sesiones_cerradas = Number(result.rowsAffected) || 0;
+
+            res.json({
+                success: true,
+                mensaje: `${sesiones_cerradas} sesión(es) cerrada(s) exitosamente`,
+                sesiones_cerradas: sesiones_cerradas,
+                usuario_id: usuarioId
+            });
+
+        } catch (error) {
+            console.error('Error cerrando todas las sesiones v2:', error);
+            res.status(500).json({ error: "Error al cerrar sesiones" });
         }
     }
 };

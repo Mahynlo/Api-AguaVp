@@ -7,18 +7,28 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "nodemon src/index.js",
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "test:password": "node src/utils/testPasswordValidator.js",
+    "migrate": "node src/database/migrations/runMigration.js",
+    "db:pull": "drizzle-kit pull",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "node src/database/migrations/migrateWithDrizzle.js",
+    "db:push": "drizzle-kit push --force",
+    "db:studio": "drizzle-kit studio",
+    "db:triggers": "node src/database/migrations/applyTriggers.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@libsql/client": "^0.15.10",
+    "@libsql/client": "^0.15.15",
     "bcrypt": "^6.0.0",
     "bcryptjs": "^3.0.2",
     "cors": "^2.8.5",
-    "dotenv": "^16.5.0",
+    "dotenv": "^16.6.1",
+    "drizzle-orm": "^0.45.1",
     "express": "^5.1.0",
+    "express-rate-limit": "^8.2.1",
     "jsonwebtoken": "^9.0.2",
     "socket.io": "^4.8.1",
     "sqlite3": "^5.1.7",
@@ -27,6 +37,7 @@
     "uuid": "^11.1.0"
   },
   "devDependencies": {
+    "drizzle-kit": "^0.31.8",
     "jest": "^30.0.5",
     "nodemon": "^3.1.10",
     "supertest": "^7.1.4",

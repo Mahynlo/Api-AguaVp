@@ -1,0 +1,20 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1765513748646,
+      "tag": "0000_robust_living_tribunal",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1765513769035,
+      "tag": "0001_exotic_molecule_man",
+      "breakpoints": true
+    }
+  ]
+}

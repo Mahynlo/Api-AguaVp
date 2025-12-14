@@ -36,10 +36,10 @@ const appController = {
             }
 
             const nuevoAppId = uuidv4();
-            const nuevoToken = jwt.sign({ app_id: nuevoAppId }, SECRET_APP_KEY, { expiresIn: "365d" });
+            const nuevoToken = jwt.sign({ app_id: nuevoAppId }, SECRET_APP_KEY, { expiresIn: "90d" });
 
             console.log("Nuevo App ID:", nuevoAppId);
-            console.log("Nuevo Token:", nuevoToken);
+            console.log("Token generado exitosamente - Expira en 90 días");
             console.log("IP de registro:", req.ip);
             console.log("Body recibido:", req.body);
             console.log("Nombre de la app:", req.body?.nombre || "Sin nombre");
@@ -86,9 +86,9 @@ const appController = {
                     return res.status(403).json({ error: "Token inválido o expirado" });
                 }
 
-                const nuevoToken = jwt.sign({ app_id: decoded.app_id }, SECRET_APP_KEY, { expiresIn: "365d" });
+                const nuevoToken = jwt.sign({ app_id: decoded.app_id }, SECRET_APP_KEY, { expiresIn: "90d" });
 
-                console.log("Nuevo Token:", nuevoToken);
+                console.log("Token renovado exitosamente - Expira en 90 días");
 
                 const query = `
                     UPDATE apps

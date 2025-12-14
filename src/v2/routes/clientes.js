@@ -334,6 +334,391 @@ router.get("/listar", configureSSE, authMiddleware, clientesController.obtenerCl
  */
 router.put("/modificar/:id", configureSSE, authMiddleware, clientesController.modificarCliente);
 
+/**
+ * @swagger
+ * /api/v2/clientes/{id}/asignar-tarifa:
+ *   put:
+ *     summary: Asignar tarifa a un cliente
+ *     description: |
+ *       Operación especializada para cambiar la tarifa de un cliente.
+ *       Valida que la tarifa exista y registra el cambio en el historial.
+ *       Envía notificación SSE automáticamente.
+ *       
+ *       **Características:**
+ *       - Validación de existencia de cliente y tarifa
+ *       - Previene asignación duplicada
+ *       - Registro completo en historial de cambios
+ *       - Notificación en tiempo real vía SSE
+ *     tags: [Clientes V2]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - name: id
+ *         in: path
+ *         required: true
+ *         description: ID del cliente
+ *         schema:
+ *           type: integer
+ *           example: 1
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - tarifa_id
+ *             properties:
+ *               tarifa_id:
+ *                 type: integer
+ *                 description: ID de la tarifa a asignar
+ *                 example: 2
+ *     responses:
+ *       200:
+ *         description: Tarifa asignada exitosamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 mensaje:
+ *                   type: string
+ *                   example: "Tarifa asignada exitosamente"
+ *                 cliente_id:
+ *                   type: integer
+ *                   example: 1
+ *                 tarifa_anterior:
+ *                   type: integer
+ *                   nullable: true
+ *                   example: 1
+ *                 tarifa_nueva:
+ *                   type: integer
+ *                   example: 2
+ *                 tarifa_nombre:
+ *                   type: string
+ *                   example: "Tarifa Residencial Alta"
+ *                 tarifa_descripcion:
+ *                   type: string
+ *                   example: "Tarifa para consumo residencial elevado"
+ *       400:
+ *         description: Tarifa ya asignada o datos inválidos
+ *       404:
+ *         description: Cliente o tarifa no encontrada
+ *       500:
+ *         description: Error interno del servidor
+ */
+router.put("/:id/asignar-tarifa", configureSSE, authMiddleware, clientesController.asignarTarifa);
+
+/**
+ * @swagger
+ * /api/v2/clientes/estadisticas:
+ *   get:
+ *     summary: Obtener estadísticas y analíticas de clientes
+ *     description: |
+ *       Retorna estadísticas completas sobre los clientes del sistema.
+ *       Incluye métricas de registro, distribución geográfica, estados,
+ *       asignación de medidores y tendencias temporales.
+ *       
+ *       **Métricas incluidas:**
+ *       - Total de clientes y registros recientes
+ *       - Distribución por estado (activos/inactivos)
+ *       - Distribución geográfica por ciudad
+ *       - Distribución por tipo de tarifa
+ *       - Tendencias de registro (mensual y anual)
+ *       - Estadísticas de medidores asignados
+ *       
+ *       **Útil para:**
+ *       - Dashboards administrativos
+ *       - Reportes gerenciales
+ *       - Análisis de crecimiento
+ *       - Gráficas y visualizaciones
+ *     tags: [Clientes V2]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Estadísticas obtenidas exitosamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 resumen:
+ *                   type: object
+ *                   properties:
+ *                     total_clientes:
+ *                       type: integer
+ *                       example: 150
+ *                     clientes_ultimo_mes:
+ *                       type: integer
+ *                       example: 12
+ *                     clientes_activos:
+ *                       type: integer
+ *                       example: 140
+ *                     clientes_inactivos:
+ *                       type: integer
+ *                       example: 10
+ *                     clientes_con_medidores:
+ *                       type: integer
+ *                       example: 135
+ *                     clientes_sin_medidores:
+ *                       type: integer
+ *                       example: 15
+ *                     total_medidores_asignados:
+ *                       type: integer
+ *                       example: 145
+ *                 distribucion:
+ *                   type: object
+ *                   properties:
+ *                     por_estado:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           estado:
+ *                             type: string
+ *                             example: "Activo"
+ *                           cantidad:
+ *                             type: integer
+ *                             example: 140
+ *                     por_ciudad:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           ciudad:
+ *                             type: string
+ *                             example: "Bogotá"
+ *                           cantidad:
+ *                             type: integer
+ *                             example: 85
+ *                     por_tarifa:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           tarifa_nombre:
+ *                             type: string
+ *                             example: "Tarifa Residencial"
+ *                           tarifa_descripcion:
+ *                             type: string
+ *                             example: "Tarifa para uso residencial básico"
+ *                           cantidad_clientes:
+ *                             type: integer
+ *                             example: 120
+ *                 tendencias:
+ *                   type: object
+ *                   properties:
+ *                     registros_por_mes:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           mes:
+ *                             type: string
+ *                             example: "2024-12"
+ *                           cantidad:
+ *                             type: integer
+ *                             example: 8
+ *                     registros_ano_actual:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           mes:
+ *                             type: string
+ *                             example: "Ene"
+ *                           cantidad:
+ *                             type: integer
+ *                             example: 10
+ *                 medidores:
+ *                   type: object
+ *                   properties:
+ *                     clientes_con_medidores:
+ *                       type: integer
+ *                       example: 135
+ *                     clientes_sin_medidores:
+ *                       type: integer
+ *                       example: 15
+ *                     total_medidores_asignados:
+ *                       type: integer
+ *                       example: 145
+ *                     porcentaje_con_medidores:
+ *                       type: string
+ *                       example: "90.00"
+ *                 fecha_generacion:
+ *                   type: string
+ *                   format: date-time
+ *                   example: "2024-12-09T10:30:00.000Z"
+ *       401:
+ *         description: No autorizado
+ *       500:
+ *         description: Error interno del servidor
+ */
+router.get("/estadisticas", configureSSE, authMiddleware, clientesController.estadisticas);
+
+// ===================================================================
+// SOFT DELETE ENDPOINTS
+// ===================================================================
+
+/**
+ * @swagger
+ * /api/v2/clientes/{id}/eliminar:
+ *   delete:
+ *     summary: Eliminar cliente (soft delete)
+ *     description: Marca un cliente como eliminado sin borrar sus datos. Preserva el historial de facturas y medidores.
+ *     tags: [Clientes V2]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: ID del cliente a eliminar
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               razon:
+ *                 type: string
+ *                 example: "Cliente duplicado"
+ *     responses:
+ *       200:
+ *         description: Cliente eliminado correctamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "Cliente eliminado correctamente"
+ *                 cliente_id:
+ *                   type: integer
+ *                   example: 123
+ *       400:
+ *         description: Cliente ya eliminado o tiene facturas pendientes
+ *       404:
+ *         description: Cliente no encontrado
+ *       401:
+ *         description: No autorizado
+ *       500:
+ *         description: Error interno del servidor
+ */
+router.delete("/:id/eliminar", configureSSE, authMiddleware, clientesController.eliminarCliente);
+
+/**
+ * @swagger
+ * /api/v2/clientes/{id}/restaurar:
+ *   put:
+ *     summary: Restaurar cliente eliminado
+ *     description: Recupera un cliente de la "papelera" cambiando su estado a Activo
+ *     tags: [Clientes V2]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: ID del cliente a restaurar
+ *     responses:
+ *       200:
+ *         description: Cliente restaurado correctamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "Cliente restaurado correctamente"
+ *                 cliente_id:
+ *                   type: integer
+ *                   example: 123
+ *       400:
+ *         description: Cliente no está eliminado
+ *       404:
+ *         description: Cliente no encontrado
+ *       401:
+ *         description: No autorizado
+ *       500:
+ *         description: Error interno del servidor
+ */
+router.put("/:id/restaurar", configureSSE, authMiddleware, clientesController.restaurarCliente);
+
+/**
+ * @swagger
+ * /api/v2/clientes/eliminados:
+ *   get:
+ *     summary: Obtener clientes eliminados
+ *     description: Lista todos los clientes que están en estado "Eliminado" (papelera)
+ *     tags: [Clientes V2]
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Lista de clientes eliminados
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 total:
+ *                   type: integer
+ *                   example: 5
+ *                 clientes_eliminados:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: integer
+ *                         example: 123
+ *                       nombre:
+ *                         type: string
+ *                         example: "Juan Pérez"
+ *                       direccion:
+ *                         type: string
+ *                         example: "Calle 123"
+ *                       telefono:
+ *                         type: string
+ *                         example: "555-1234"
+ *                       ciudad:
+ *                         type: string
+ *                         example: "Bogotá"
+ *                       correo:
+ *                         type: string
+ *                         example: "juan@example.com"
+ *                       fecha_eliminacion:
+ *                         type: string
+ *                         format: date-time
+ *                         example: "2024-12-09T15:30:00"
+ *                       razon_eliminacion:
+ *                         type: string
+ *                         example: "Cliente duplicado"
+ *                       eliminado_por_nombre:
+ *                         type: string
+ *                         example: "Admin Usuario"
+ *                       total_facturas:
+ *                         type: integer
+ *                         example: 12
+ *                       total_medidores:
+ *                         type: integer
+ *                         example: 1
+ *       401:
+ *         description: No autorizado
+ *       500:
+ *         description: Error interno del servidor
+ */
+router.get("/eliminados", configureSSE, authMiddleware, clientesController.obtenerClientesEliminados);
+
 // ===================================================================
 // EXPORT MODULE
 // ===================================================================

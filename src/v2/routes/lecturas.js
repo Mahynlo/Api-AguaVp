@@ -841,6 +841,339 @@ router.get("/por-ruta", appKeyMiddleware, authMiddleware, configureSSE, lecturas
 // 🧾 Generar facturas para lecturas sin factura (procesamiento masivo)
 router.post("/generar-facturas-masivo", appKeyMiddleware, authMiddleware, configureSSE, lecturasController.generarFacturasParaLecturasSinFactura);
 
+/**
+ * @swagger
+ * /api/v2/lecturas/medidor/{id}:
+ *   get:
+ *     summary: Obtener historial completo de lecturas de un medidor
+ *     description: |
+ *       Retorna el historial completo de lecturas de un medidor específico con análisis de consumo,
+ *       detección de anomalías y gráfica de tendencias.
+ *       
+ *       **Características:**
+ *       - Historial de todas las lecturas del medidor
+ *       - Estadísticas de consumo (promedio, mínimo, máximo)
+ *       - Detección automática de anomalías (consumos atípicos)
+ *       - Gráfica de consumo por periodo (últimos 12 periodos)
+ *       - Información de facturas asociadas
+ *     tags: [Lecturas V2]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - name: id
+ *         in: path
+ *         required: true
+ *         description: ID del medidor
+ *         schema:
+ *           type: integer
+ *           example: 1
+ *       - name: limit
+ *         in: query
+ *         required: false
+ *         description: Número máximo de lecturas a retornar
+ *         schema:
+ *           type: integer
+ *           default: 100
+ *           example: 50
+ *     responses:
+ *       200:
+ *         description: Historial de lecturas obtenido exitosamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 medidor:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: integer
+ *                       example: 1
+ *                     numero_serie:
+ *                       type: string
+ *                       example: "MED-2024-001"
+ *                     cliente_id:
+ *                       type: integer
+ *                       example: 5
+ *                     cliente_nombre:
+ *                       type: string
+ *                       example: "Juan Pérez"
+ *                 estadisticas:
+ *                   type: object
+ *                   properties:
+ *                     total_lecturas:
+ *                       type: integer
+ *                       example: 24
+ *                     promedio_consumo:
+ *                       type: number
+ *                       example: 18.5
+ *                     consumo_minimo:
+ *                       type: number
+ *                       example: 10.2
+ *                     consumo_maximo:
+ *                       type: number
+ *                       example: 45.8
+ *                     anomalias_detectadas:
+ *                       type: integer
+ *                       example: 2
+ *                 lecturas_con_anomalia:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: integer
+ *                       periodo:
+ *                         type: string
+ *                       consumo:
+ *                         type: number
+ *                       promedio:
+ *                         type: number
+ *                       desviacion:
+ *                         type: string
+ *                         example: "+150.00%"
+ *                 grafica_consumo:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       periodo:
+ *                         type: string
+ *                         example: "2024-12"
+ *                       consumo:
+ *                         type: number
+ *                         example: 18.5
+ *                 historial:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *       404:
+ *         description: Medidor no encontrado
+ *       500:
+ *         description: Error interno del servidor
+ */
+router.get("/medidor/:id", appKeyMiddleware, authMiddleware, configureSSE, lecturasController.obtenerLecturasPorMedidor);
+
+/**
+ * @swagger
+ * /api/v2/lecturas/cliente/{id}:
+ *   get:
+ *     summary: Obtener todas las lecturas de un cliente
+ *     description: |
+ *       Retorna todas las lecturas de todos los medidores asociados a un cliente,
+ *       con resumen de consumo y facturación por periodo.
+ *       
+ *       **Características:**
+ *       - Lecturas de todos los medidores del cliente
+ *       - Consumo total por periodo
+ *       - Resumen de facturación
+ *       - Filtro opcional por periodo
+ *     tags: [Lecturas V2]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - name: id
+ *         in: path
+ *         required: true
+ *         description: ID del cliente
+ *         schema:
+ *           type: integer
+ *           example: 5
+ *       - name: periodo
+ *         in: query
+ *         required: false
+ *         description: Filtrar por periodo específico (YYYY-MM)
+ *         schema:
+ *           type: string
+ *           example: "2024-12"
+ *     responses:
+ *       200:
+ *         description: Lecturas del cliente obtenidas exitosamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 cliente:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: integer
+ *                       example: 5
+ *                     nombre:
+ *                       type: string
+ *                       example: "Juan Pérez"
+ *                     total_medidores:
+ *                       type: integer
+ *                       example: 3
+ *                 resumen:
+ *                   type: object
+ *                   properties:
+ *                     total_lecturas:
+ *                       type: integer
+ *                       example: 72
+ *                     consumo_total:
+ *                       type: string
+ *                       example: "1350.50"
+ *                     promedio_por_lectura:
+ *                       type: string
+ *                       example: "18.76"
+ *                     monto_total_facturado:
+ *                       type: string
+ *                       example: "135000.00"
+ *                 consumo_por_periodo:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       periodo:
+ *                         type: string
+ *                         example: "2024-12"
+ *                       consumo_total:
+ *                         type: number
+ *                         example: 55.5
+ *                       cantidad_lecturas:
+ *                         type: integer
+ *                         example: 3
+ *                       monto_total:
+ *                         type: number
+ *                         example: 12500.00
+ *                 lecturas:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *       404:
+ *         description: Cliente no encontrado o sin medidores
+ *       500:
+ *         description: Error interno del servidor
+ */
+router.get("/cliente/:id", appKeyMiddleware, authMiddleware, configureSSE, lecturasController.obtenerLecturasPorCliente);
+
+/**
+ * @swagger
+ * /api/v2/lecturas/estadisticas:
+ *   get:
+ *     summary: Obtener estadísticas generales de lecturas
+ *     description: |
+ *       Retorna estadísticas completas sobre las lecturas del sistema,
+ *       incluyendo consumos, facturación, tendencias y distribución.
+ *       
+ *       **Métricas incluidas:**
+ *       - Total de lecturas y facturación
+ *       - Consumo total y promedios
+ *       - Distribución por rangos de consumo
+ *       - Tendencias por periodo (últimos 12 meses)
+ *       - Top 10 mayores consumos
+ *       - Medidores sin lecturas recientes
+ *       
+ *       **Útil para:**
+ *       - Dashboards de administración
+ *       - Reportes de consumo
+ *       - Análisis de tendencias
+ *       - Detección de anomalías
+ *     tags: [Lecturas V2]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Estadísticas obtenidas exitosamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 resumen:
+ *                   type: object
+ *                   properties:
+ *                     total_lecturas:
+ *                       type: integer
+ *                       example: 5420
+ *                     lecturas_mes_actual:
+ *                       type: integer
+ *                       example: 450
+ *                     medidores_sin_lectura_mes:
+ *                       type: integer
+ *                       example: 25
+ *                     lecturas_con_factura:
+ *                       type: integer
+ *                       example: 5200
+ *                     lecturas_sin_factura:
+ *                       type: integer
+ *                       example: 220
+ *                     porcentaje_facturacion:
+ *                       type: string
+ *                       example: "95.94"
+ *                 consumo:
+ *                   type: object
+ *                   properties:
+ *                     total:
+ *                       type: string
+ *                       example: "98500.50"
+ *                     promedio:
+ *                       type: string
+ *                       example: "18.18"
+ *                     minimo:
+ *                       type: string
+ *                       example: "2.50"
+ *                     maximo:
+ *                       type: string
+ *                       example: "250.00"
+ *                 distribucion_consumo:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       rango:
+ *                         type: string
+ *                         example: "10-20 m³"
+ *                       cantidad:
+ *                         type: integer
+ *                         example: 2340
+ *                 tendencias:
+ *                   type: object
+ *                   properties:
+ *                     por_periodo:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           periodo:
+ *                             type: string
+ *                             example: "2024-12"
+ *                           cantidad_lecturas:
+ *                             type: integer
+ *                             example: 450
+ *                           consumo_total:
+ *                             type: string
+ *                             example: "8200.50"
+ *                           consumo_promedio:
+ *                             type: string
+ *                             example: "18.22"
+ *                 top_consumos:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       lectura_id:
+ *                         type: integer
+ *                       consumo_m3:
+ *                         type: number
+ *                       periodo:
+ *                         type: string
+ *                       numero_serie:
+ *                         type: string
+ *                       cliente_nombre:
+ *                         type: string
+ *                 fecha_generacion:
+ *                   type: string
+ *                   format: date-time
+ *       401:
+ *         description: No autorizado
+ *       500:
+ *         description: Error interno del servidor
+ */
+router.get("/estadisticas", appKeyMiddleware, authMiddleware, configureSSE, lecturasController.estadisticas);
+
 // ===================================================================
 // EXPORT MODULE
 // ===================================================================

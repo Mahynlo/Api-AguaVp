@@ -14,6 +14,7 @@
 import express from 'express';
 import appController from '../controllers/appController.js';
 import appKeyMiddleware from '../middlewares/appKeyMiddleware.js';
+import { registroAppLimiter, recuperarTokenLimiter } from '../middlewares/rateLimiter.js';
 
 const router = express.Router();
 
@@ -72,7 +73,7 @@ const router = express.Router();
  *         description: Error al registrar la aplicación
  */
 // Ruta de instalación inicial - adaptada de v1
-router.post("/registrarApp", appController.registrarApp);
+router.post("/registrarApp", registroAppLimiter, appController.registrarApp);
 
 /**
  * @swagger
@@ -104,7 +105,7 @@ router.post("/registrarApp", appController.registrarApp);
  *         description: Error al actualizar el token
  */
 // Ruta de recuperación de token - adaptada de v1 
-router.post("/recuperarToken", appController.recuperarToken);
+router.post("/recuperarToken", recuperarTokenLimiter, appController.recuperarToken);
 
 // =====================================================
 // RUTAS ADICIONALES V2 - NO ESTÁN EN V1

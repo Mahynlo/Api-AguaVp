@@ -25,9 +25,24 @@ async function appKeyMiddleware(req, res, next) {
     const token = authHeader.split(" ")[1]; // Extrae solo el token 
 
     try {
-        const decoded = jwt.verify(token, SECRET_APP_KEY); // Verifica el token usando la clave secreta
+        // 1. Verificar si el AppKey está en la lista de revocados
+        const revokeCheck = await dbTurso.execute({
+            sql: `SELECT id FROM tokens_revocados WHERE token = ? LIMIT 1`,
+            args: [token]
+        });
 
-        const query = `SELECT * FROM apps WHERE app_id = ? AND activo = 1`; // Verifica que la app esté activa
+        if (revokeCheck.rows.length > 0) {
+            return res.status(401).json({ 
+                error: "AppKey revocado",
+                code: "APPKEY_REVOKED"
+            });
+        }
+
+        // 2. Verifica el token usando la clave secreta
+        const decoded = jwt.verify(token, SECRET_APP_KEY);
+
+        // 3. Verifica que la app esté activa
+        const query = `SELECT * FROM apps WHERE app_id = ? AND activo = 1`;
 
         const result = await dbTurso.execute({
             sql: query,

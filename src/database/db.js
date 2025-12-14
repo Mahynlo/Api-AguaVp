@@ -39,7 +39,9 @@ CREATE TABLE IF NOT EXISTS clientes (
     telefono TEXT NOT NULL,
     ciudad TEXT NOT NULL,
     correo TEXT,
-    estado_cliente TEXT NOT NULL DEFAULT 'Activo',
+    estado_cliente TEXT NOT NULL CHECK (
+        estado_cliente IN ('Activo','Inactivo','Suspendido','Eliminado')
+    ) DEFAULT 'Activo',
     tarifa_id INTEGER REFERENCES tarifas(id), -- 🔹 Tarifa asignada
     modificado_por INTEGER REFERENCES usuarios(id),
     fecha_creacion DATETIME DEFAULT (datetime('now')),
@@ -56,7 +58,9 @@ CREATE TABLE IF NOT EXISTS medidores (
     fecha_instalacion DATE,
     latitud NUMERIC,
     longitud NUMERIC,
-    estado_medidor TEXT NOT NULL CHECK (estado_medidor IN ('Activo', 'Inactivo', 'Retirado','No instalado')),
+    estado_medidor TEXT NOT NULL CHECK (
+        estado_medidor IN ('Activo', 'Inactivo', 'Retirado', 'No instalado')
+    ) DEFAULT 'Activo',
     fecha_creacion DATETIME DEFAULT (datetime('now'))
 );
 
@@ -101,6 +105,9 @@ CREATE TABLE IF NOT EXISTS usuarios (
     contraseña TEXT NOT NULL,
     username TEXT NOT NULL UNIQUE,
     rol TEXT NOT NULL CHECK (rol IN ('superadmin', 'administrador', 'operador')),
+    estado_usuario TEXT NOT NULL CHECK (
+        estado_usuario IN ('Activo', 'Inactivo', 'Bloqueado')
+    ) DEFAULT 'Activo',
     fecha_creacion DATETIME DEFAULT (datetime('now'))
 );
 
@@ -112,6 +119,9 @@ CREATE TABLE IF NOT EXISTS tarifas (
     descripcion TEXT NOT NULL,
     fecha_inicio DATE NOT NULL,
     fecha_fin DATE CHECK (fecha_fin IS NULL OR fecha_fin > fecha_inicio),
+    estado_tarifa TEXT NOT NULL CHECK (
+        estado_tarifa IN ('Activo', 'Inactivo')
+    ) DEFAULT 'Activo',
     modificado_por INTEGER REFERENCES usuarios(id),
     fecha_creacion DATETIME DEFAULT (datetime('now'))
     

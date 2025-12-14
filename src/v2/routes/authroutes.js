@@ -29,6 +29,8 @@
 import express from 'express';
 import authController from '../controllers/authController.js';
 import appKeyMiddleware from '../middlewares/appKeyMiddleware.js';
+import authMiddleware from '../middlewares/authMiddleware.js';
+import { loginLimiter, registroUsuarioLimiter } from '../middlewares/rateLimiter.js';
 
 const router = express.Router();
 
@@ -103,7 +105,7 @@ const router = express.Router();
  *       500:
  *         description: Error interno del servidor
  */
-router.post('/login', appKeyMiddleware, authController.login);
+router.post('/login', loginLimiter, appKeyMiddleware, authController.login);
 
 /**
  * @swagger
@@ -134,7 +136,16 @@ router.post('/login', appKeyMiddleware, authController.login);
  *                 description: Nombre completo del usuario
  *               contrasena:
  *                 type: string
- *                 description: Contraseña del usuario
+ *                 description: |
+ *                   Contraseña del usuario. Debe cumplir con:
+ *                   - Mínimo 8 caracteres
+ *                   - Al menos 1 mayúscula
+ *                   - Al menos 1 minúscula
+ *                   - Al menos 1 número
+ *                   - Al menos 1 carácter especial (!@#$%^&*()_+-=[]{}|;:,.<>?)
+ *                   - No ser una contraseña común
+ *                 minLength: 8
+ *                 maxLength: 128
  *               username:
  *                 type: string
  *                 description: Nombre de usuario único
@@ -145,7 +156,7 @@ router.post('/login', appKeyMiddleware, authController.login);
  *             example:
  *               correo: "nuevo@aguavp.com"
  *               nombre: "Nuevo Usuario"
- *               contrasena: "password123"
+ *               contrasena: "SecureP@ss123"
  *               username: "nuevousuario"
  *               rol: "Operador"
  *     responses:
@@ -161,13 +172,26 @@ router.post('/login', appKeyMiddleware, authController.login);
  *                 usuario_id:
  *                   type: integer
  *       400:
- *         description: Todos los campos son obligatorios
+ *         description: Todos los campos son obligatorios o contraseña no válida
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                 detalles:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                 mensaje:
+ *                   type: string
  *       409:
  *         description: Correo o username ya existe
  *       500:
  *         description: Error al registrar usuario
  */
-router.post('/register', appKeyMiddleware, authController.registrar);
+router.post('/register', registroUsuarioLimiter, appKeyMiddleware, authController.registrar);
 
 /**
  * @swagger
@@ -208,7 +232,7 @@ router.post('/register', appKeyMiddleware, authController.registrar);
  *       500:
  *         description: Error al cerrar sesión
  */
-router.post('/logout', appKeyMiddleware, authController.logout);
+router.post('/logout', appKeyMiddleware, authMiddleware, authController.logout);
 
 /**
  * @swagger
@@ -259,5 +283,195 @@ router.post('/logout', appKeyMiddleware, authController.logout);
  *         description: Error al obtener sesiones activas
  */
 router.get('/sesionesActivas/:usuarioId', appKeyMiddleware, authController.sesionesActivas);
+
+/**
+ * @swagger
+ * /api/v2/auth/refresh:
+ *   post:
+ *     summary: Renovar access token usando refresh token
+ *     tags: [Auth V2]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - refreshToken
+ *             properties:
+ *               refreshToken:
+ *                 type: string
+ *                 description: Refresh token obtenido en el login
+ *             example:
+ *               refreshToken: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+ *     responses:
+ *       200:
+ *         description: Token renovado exitosamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 accessToken:
+ *                   type: string
+ *                   description: Nuevo access token (válido por 15 minutos)
+ *                 expiresIn:
+ *                   type: string
+ *                   description: Tiempo de expiración
+ *                 user:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: integer
+ *                     email:
+ *                       type: string
+ *                     nombre:
+ *                       type: string
+ *                     username:
+ *                       type: string
+ *                     rol:
+ *                       type: string
+ *       400:
+ *         description: Refresh token requerido
+ *       401:
+ *         description: Refresh token inválido o expirado
+ *       500:
+ *         description: Error al renovar token
+ */
+router.post('/refresh', authController.refresh);
+
+/**
+ * @swagger
+ * /api/v2/auth/revoke:
+ *   post:
+ *     summary: Revocar un refresh token
+ *     tags: [Auth V2]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - refreshToken
+ *             properties:
+ *               refreshToken:
+ *                 type: string
+ *                 description: Refresh token a revocar
+ *             example:
+ *               refreshToken: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+ *     responses:
+ *       200:
+ *         description: Token revocado exitosamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 mensaje:
+ *                   type: string
+ *       400:
+ *         description: Refresh token requerido
+ *       403:
+ *         description: No autorizado para revocar este token
+ *       404:
+ *         description: Refresh token no encontrado
+ *       500:
+ *         description: Error al revocar token
+ */
+router.post('/revoke', appKeyMiddleware, authMiddleware, authController.revokeRefreshToken);
+
+/**
+ * @swagger
+ * /api/v2/auth/sesiones/{sesionId}:
+ *   delete:
+ *     summary: Cerrar una sesión específica por ID
+ *     tags: [Auth V2]
+ *     security:
+ *       - AppKeyAuth: []
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: sesionId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: ID de la sesión a cerrar
+ *     responses:
+ *       200:
+ *         description: Sesión cerrada exitosamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 mensaje:
+ *                   type: string
+ *                 sesion_id:
+ *                   type: string
+ *       400:
+ *         description: ID de sesión requerido
+ *       403:
+ *         description: No autorizado para cerrar esta sesión
+ *       404:
+ *         description: Sesión no encontrada o ya cerrada
+ *       500:
+ *         description: Error al cerrar sesión
+ */
+router.delete('/sesiones/:sesionId', appKeyMiddleware, authMiddleware, authController.cerrarSesion);
+
+/**
+ * @swagger
+ * /api/v2/auth/sesiones/usuario/{usuarioId}/todas:
+ *   delete:
+ *     summary: Cerrar todas las sesiones de un usuario
+ *     tags: [Auth V2]
+ *     security:
+ *       - AppKeyAuth: []
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: usuarioId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: ID del usuario
+ *       - in: query
+ *         name: excepto_actual
+ *         schema:
+ *           type: boolean
+ *         description: Si es true, mantiene la sesión actual activa
+ *     responses:
+ *       200:
+ *         description: Sesiones cerradas exitosamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 mensaje:
+ *                   type: string
+ *                 sesiones_cerradas:
+ *                   type: integer
+ *                 usuario_id:
+ *                   type: string
+ *       400:
+ *         description: ID de usuario requerido
+ *       403:
+ *         description: No autorizado para cerrar sesiones de este usuario
+ *       500:
+ *         description: Error al cerrar sesiones
+ */
+router.delete('/sesiones/usuario/:usuarioId/todas', appKeyMiddleware, authMiddleware, authController.cerrarTodasSesiones);
 
 export default router;
