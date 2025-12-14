@@ -4,8 +4,8 @@
 import fetch from 'node-fetch';
 import readline from 'readline';
 
-const BASE_URL_AUTH = 'https://api-aguavp.onrender.com/api/v2/auth';
-const BASE_URL_APP = 'https://api-aguavp.onrender.com/api/v2/app';
+const BASE_URL_AUTH = 'http://localhost:3000/api/v2/auth';
+const BASE_URL_APP = 'http://localhost:3000/api/v2/app';
 
 // Tokens y credenciales
 let APP_TOKEN = 'AppKey eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhcHBfaWQiOiJhYmY4ZjFiNS00ZmFkLTQ1NjctYWIxOC02MWM0NmVjYWEyYjYiLCJpYXQiOjE3NjUzNTQ4NjMsImV4cCI6MTc5Njg5MDg2M30.EW1_A2s_gzF1gGovV0PrmRcSpqUB6mcNoueq2MXybGc';

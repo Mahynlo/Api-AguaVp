@@ -23,6 +23,7 @@ export const loginLimiter = rateLimit({
     },
     standardHeaders: true, // Retorna info de rate limit en headers `RateLimit-*`
     legacyHeaders: false, // Deshabilita headers `X-RateLimit-*`
+    validate: { trustProxy: false }, // Deshabilita validación estricta de trust proxy
     // Handler personalizado cuando se excede el límite
     handler: (req, res) => {
         console.warn(`[RATE LIMIT] Login excedido - IP: ${req.ip}`);
@@ -46,6 +47,7 @@ export const registroAppLimiter = rateLimit({
     },
     standardHeaders: true,
     legacyHeaders: false,
+    validate: { trustProxy: false },
     handler: (req, res) => {
         console.warn(`[RATE LIMIT] Registro de app excedido - IP: ${req.ip}`);
         res.status(429).json({
@@ -68,6 +70,7 @@ export const recuperarTokenLimiter = rateLimit({
     },
     standardHeaders: true,
     legacyHeaders: false,
+    validate: { trustProxy: false },
     handler: (req, res) => {
         console.warn(`[RATE LIMIT] Recuperación de token excedido - IP: ${req.ip}`);
         res.status(429).json({
@@ -90,6 +93,7 @@ export const registroUsuarioLimiter = rateLimit({
     },
     standardHeaders: true,
     legacyHeaders: false,
+    validate: { trustProxy: false },
     handler: (req, res) => {
         console.warn(`[RATE LIMIT] Registro de usuario excedido - IP: ${req.ip}`);
         res.status(429).json({
@@ -112,6 +116,7 @@ export const generalLimiter = rateLimit({
     },
     standardHeaders: true,
     legacyHeaders: false,
+    validate: { trustProxy: false },
     handler: (req, res) => {
         console.warn(`[RATE LIMIT] Rate limit general excedido - IP: ${req.ip} - Ruta: ${req.path}`);
         res.status(429).json({

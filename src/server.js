@@ -93,7 +93,8 @@ const io = new Server(server, {
 
 // Configurar Express para confiar en proxies (Render, Nginx, etc.)
 // Esto permite que Express use correctamente los headers X-Forwarded-*
-app.set('trust proxy', true);
+// Usar número específico de proxies en lugar de 'true' para mayor seguridad
+app.set('trust proxy', 1); // Confiar en 1 nivel de proxy (e.g., Nginx, Render)
 
 // Middlewares
 app.use(cors());

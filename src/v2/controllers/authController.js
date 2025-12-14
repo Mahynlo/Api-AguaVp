@@ -416,7 +416,13 @@ const authController = {
 
             // Verificar que el refresh token existe y está activo
             const query = `
-                SELECT rt.*, u.id, u.correo, u.nombre, u.username, u.rol, u.fecha_creacion
+                SELECT 
+                    u.id as usuario_id,
+                    u.correo,
+                    u.nombre,
+                    u.username,
+                    u.rol,
+                    u.fecha_creacion
                 FROM refresh_tokens rt
                 JOIN usuarios u ON rt.usuario_id = u.id
                 WHERE rt.token = ? 
@@ -440,7 +446,7 @@ const authController = {
             
             // Construir objeto de usuario
             const user = {
-                id: tokenData.id,
+                id: tokenData.usuario_id,
                 correo: tokenData.correo,
                 nombre: tokenData.nombre,
                 username: tokenData.username,
