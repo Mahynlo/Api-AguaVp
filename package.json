@@ -12,8 +12,8 @@
     "migrate": "node src/database/migrations/runMigration.js",
     "db:pull": "drizzle-kit pull",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "node src/database/migrations/migrateWithDrizzle.js",
-    "db:push": "drizzle-kit push --force",
+    "db:migrate": "drizzle-kit migrate",
+    "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "db:triggers": "node src/database/migrations/applyTriggers.js"
   },

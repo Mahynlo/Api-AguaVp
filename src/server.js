@@ -91,6 +91,10 @@ const io = new Server(server, {
   }
 });
 
+// Configurar Express para confiar en proxies (Render, Nginx, etc.)
+// Esto permite que Express use correctamente los headers X-Forwarded-*
+app.set('trust proxy', true);
+
 // Middlewares
 app.use(cors());
 app.use(express.json());
