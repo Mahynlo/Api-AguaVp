@@ -462,7 +462,7 @@ const rutasController = {
     modificarRuta: async (req, res) => {
         try {
             const { ruta_id } = req.params;
-            const { nombre, descripcion, distancia_km, ruta_calculada, instrucciones } = req.body;
+            const { nombre, descripcion, distancia_km, ruta_calculada, instrucciones, puntos } = req.body;
 
             if (!ruta_id) {
                 return res.status(400).json({ error: 'ID de ruta requerido' });
@@ -477,6 +477,40 @@ const rutasController = {
 
             if (verificarResult.rows.length === 0) {
                 return res.status(404).json({ error: 'Ruta no encontrada' });
+            }
+
+            // Si se envían puntos, validar que los medidores no estén en otra ruta
+            if (puntos && Array.isArray(puntos) && puntos.length > 0) {
+                const medidorIds = puntos.map(p => p.id);
+                const placeholders = medidorIds.map(() => '?').join(',');
+                
+                const checkQuery = `
+                    SELECT m.id, m.numero_serie, r.id as ruta_id, r.nombre as ruta_nombre
+                    FROM medidores m
+                    LEFT JOIN rutas_puntos rp ON m.id = rp.medidor_id
+                    LEFT JOIN rutas r ON rp.ruta_id = r.id
+                    WHERE m.id IN (${placeholders})
+                    AND rp.ruta_id IS NOT NULL
+                    AND rp.ruta_id != ?
+                `;
+                
+                const checkResult = await dbTurso.execute({
+                    sql: checkQuery,
+                    args: [...medidorIds, ruta_id]
+                });
+
+                if (checkResult.rows.length > 0) {
+                    const conflictos = checkResult.rows.map(row => ({
+                        medidor_id: Number(row.id),
+                        numero_serie: row.numero_serie,
+                        ruta_actual: row.ruta_nombre
+                    }));
+
+                    return res.status(409).json({ 
+                        error: 'Algunos medidores ya están asignados a otra ruta',
+                        conflictos: conflictos
+                    });
+                }
             }
 
             // Construir query de actualización dinámica
@@ -504,32 +538,59 @@ const rutasController = {
                 args.push(JSON.stringify(instrucciones));
             }
 
-            if (updates.length === 0) {
-                return res.status(400).json({ error: 'No hay campos para actualizar' });
+            // Actualizar información de la ruta si hay cambios
+            if (updates.length > 0) {
+                args.push(ruta_id);
+
+                const updateQuery = `
+                    UPDATE rutas 
+                    SET ${updates.join(', ')}
+                    WHERE id = ?
+                `;
+
+                await dbTurso.execute({
+                    sql: updateQuery,
+                    args: args
+                });
             }
 
-            args.push(ruta_id);
+            // Si se envían puntos, reemplazar todos los medidores de la ruta
+            let medidores_actualizados = 0;
+            if (puntos && Array.isArray(puntos)) {
+                // 1. Eliminar todos los medidores actuales de la ruta
+                const deleteQuery = `DELETE FROM rutas_puntos WHERE ruta_id = ?`;
+                await dbTurso.execute({
+                    sql: deleteQuery,
+                    args: [ruta_id]
+                });
 
-            const updateQuery = `
-                UPDATE rutas 
-                SET ${updates.join(', ')}
-                WHERE id = ?
-            `;
-
-            await dbTurso.execute({
-                sql: updateQuery,
-                args: args
-            });
+                // 2. Insertar los nuevos medidores con su orden
+                if (puntos.length > 0) {
+                    for (let i = 0; i < puntos.length; i++) {
+                        const insertQuery = `
+                            INSERT INTO rutas_puntos (ruta_id, medidor_id, orden)
+                            VALUES (?, ?, ?)
+                        `;
+                        await dbTurso.execute({
+                            sql: insertQuery,
+                            args: [ruta_id, puntos[i].id, i + 1]
+                        });
+                    }
+                    medidores_actualizados = puntos.length;
+                }
+            }
 
             // Notificar cambios
             if (notificationManager) {
                 try {
+                    const campos = Object.keys(req.body);
                     notificationManager.alertaSistema(
                         `Ruta "${nombre || verificarResult.rows[0].nombre}" actualizada`,
                         'info',
                         {
                             ruta_id: Number(ruta_id),
-                            campos_actualizados: Object.keys(req.body)
+                            campos_actualizados: campos,
+                            medidores_actualizados: medidores_actualizados
                         }
                     );
                 } catch (sseError) {
@@ -537,11 +598,17 @@ const rutasController = {
                 }
             }
 
-            return res.status(200).json({
+            const response = {
                 success: true,
                 mensaje: 'Ruta actualizada correctamente',
                 ruta_id: Number(ruta_id)
-            });
+            };
+
+            if (medidores_actualizados > 0) {
+                response.medidores_actualizados = medidores_actualizados;
+            }
+
+            return res.status(200).json(response);
 
         } catch (error) {
             console.error('❌ Error al modificar ruta:', error);

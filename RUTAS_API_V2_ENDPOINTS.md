@@ -474,10 +474,27 @@
   "instrucciones": [
     "Nueva instrucción 1",
     "Nueva instrucción 2"
+  ],
+  "puntos": [
+    { "id": 70 },
+    { "id": 68 },
+    { "id": 67 }
   ]
 }
 ```
-**Nota**: Todos los campos son opcionales. Solo se actualizan los campos enviados.
+**Nota**: 
+- Todos los campos son opcionales. Solo se actualizan los campos enviados.
+- Si envías `puntos`, se **reemplazan TODOS** los medidores de la ruta con los nuevos.
+- El orden se asigna automáticamente según el orden del array (1, 2, 3...).
+- Ideal para cuando recalculas la ruta completa en la app y necesitas actualizar todo de una vez.
+- Valida que los medidores no estén en otra ruta (retorna error 409 si hay conflicto).
+Respuesta:
+{
+  "success": true,
+  "mensaje": "Ruta actualizada correctamente",
+  "ruta_id": 3,
+  "medidores_actualizados": 3
+}
 
 ### DELETE /:ruta_id/medidores/:medidor_id
 - Parámetros de ruta: `ruta_id`, `medidor_id`
