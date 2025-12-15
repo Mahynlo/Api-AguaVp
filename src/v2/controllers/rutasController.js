@@ -792,8 +792,7 @@ const rutasController = {
                     rp.orden,
                     c.nombre as cliente_nombre,
                     CASE WHEN l.id IS NOT NULL THEN 1 ELSE 0 END as tiene_lectura,
-                    l.lectura_actual,
-                    l.consumo,
+                    l.consumo_m3,
                     l.fecha_lectura
                 FROM rutas_puntos rp
                 JOIN medidores m ON rp.medidor_id = m.id
@@ -817,8 +816,7 @@ const rutasController = {
                 orden: row.orden,
                 cliente_nombre: row.cliente_nombre,
                 estado: row.tiene_lectura === 1 ? 'Leído' : 'Pendiente',
-                lectura_actual: row.lectura_actual,
-                consumo: row.consumo,
+                consumo: row.consumo_m3,
                 fecha_lectura: row.fecha_lectura
             }));
 

@@ -550,7 +550,6 @@
         "orden": 1,
         "cliente_nombre": "Juan Pérez",
         "estado": "Leído",
-        "lectura_actual": 1520.5,
         "consumo": 15.3,
         "fecha_lectura": "2025-12-05T08:30:00Z"
       }
@@ -563,7 +562,6 @@
         "orden": 2,
         "cliente_nombre": "María García",
         "estado": "Pendiente",
-        "lectura_actual": null,
         "consumo": null,
         "fecha_lectura": null
       }
@@ -577,7 +575,6 @@
       "orden": 1,
       "cliente_nombre": "Juan Pérez",
       "estado": "Leído",
-      "lectura_actual": 1520.5,
       "consumo": 15.3,
       "fecha_lectura": "2025-12-05T08:30:00Z"
     },
@@ -588,7 +585,6 @@
       "orden": 2,
       "cliente_nombre": "María García",
       "estado": "Pendiente",
-      "lectura_actual": null,
       "consumo": null,
       "fecha_lectura": null
     }
