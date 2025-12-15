@@ -359,24 +359,240 @@
 | POST | `/api/v2/rutas/agregar-medidor` | Agregar medidor a ruta |
 | GET | `/api/v2/rutas/:ruta_id/medidores` | Ruta con medidores asignados |
 | GET | `/api/v2/rutas/listar` | Listar todas las rutas |
+| PUT | `/api/v2/rutas/:ruta_id` | Modificar información de ruta |
+| DELETE | `/api/v2/rutas/:ruta_id/medidores/:medidor_id` | Eliminar medidor de ruta |
+| PUT | `/api/v2/rutas/:ruta_id/reordenar` | Reordenar medidores en ruta |
+| GET | `/api/v2/rutas/:ruta_id/progreso` | Obtener progreso y estadísticas |
 
 ### POST /crear
 ```json
 {
   "nombre": "Ruta Norte 1",
   "descripcion": "Zona residencial norte",
-  "usuario_id": 10,
-  "estado": "activa" // opcional: activa | inactiva
+  "creado_por": 10,
+  "distancia_km": 8.5,
+  "ruta_calculada": [
+    { "lat": 4.6097, "lng": -74.0817 },
+    { "lat": 4.6105, "lng": -74.0825 }
+  ],
+  "instrucciones": [
+    "Girar a la derecha en Calle 45",
+    "Continuar 2km por Carrera 30"
+  ],
+  "puntos": [
+    { "id": 67 },
+    { "id": 68 },
+    { "id": 69 }
+  ]
 }
 ```
+**Nota**: Valida que los medidores no estén en otra ruta antes de crear.
 
 ### POST /agregar-medidor
 ```json
 {
   "ruta_id": 3,
   "medidor_id": 67,
-  "orden": 5, // opcional
-  "observaciones": "Nueva asignación" // opcional
+  "orden": 5
+}
+```
+**Nota**: Valida que el medidor no esté en otra ruta. Retorna error 409 si ya está asignado.
+
+### GET /:ruta_id/medidores
+- Parámetro de ruta: `ruta_id`
+- Requiere header `x-app-key`
+- Sin body
+
+**Respuesta**:
+```json
+{
+  "ruta": {
+    "ruta_id": 3,
+    "nombre": "Ruta Norte 1",
+    "descripcion": "Zona residencial norte",
+    "puntos": [
+      {
+        "orden": 1,
+        "medidor_id": 67,
+        "numero_serie": "MED-001",
+        "ubicacion": "Calle 45 #30-25",
+        "latitud": 4.6097,
+        "longitud": -74.0817,
+        "estado_medidor": "activo",
+        "cliente_id": 45,
+        "cliente_nombre": "Juan Pérez",
+        "cliente_direccion": "Calle 45 #30-25",
+        "cliente_telefono": "+57 300 123 4567",
+        "estado_cliente": "activo"
+      }
+    ]
+  }
+}
+```
+
+### GET /listar
+- Query opcional: `?periodo=2025-12`
+- Requiere header `x-app-key`
+- Sin body
+
+**Respuesta**:
+```json
+{
+  "periodo": "2025-12",
+  "rutas": [
+    {
+      "id": 3,
+      "nombre": "Ruta Norte 1",
+      "descripcion": "Zona residencial norte",
+      "fecha_creacion": "2025-12-10T10:30:00Z",
+      "distancia_km": 8.5,
+      "creado_por": 10,
+      "total_puntos": 120,
+      "completadas": 95,
+      "faltantes": 25,
+      "porcentaje_completado": 79,
+      "numeros_serie": ["MED-001", "MED-002", "..."],
+      "medidores_completados": ["MED-001", "MED-005", "..."],
+      "medidores_faltantes": ["MED-002", "MED-008", "..."],
+      "periodo_mostrado": "2025-12"
+    }
+  ]
+}
+```
+
+### PUT /:ruta_id
+- Parámetro de ruta: `ruta_id`
+```json
+{
+  "nombre": "Ruta Norte 1 - Actualizada",
+  "descripcion": "Nueva descripción de la zona",
+  "distancia_km": 9.2,
+  "ruta_calculada": [
+    { "lat": 4.6097, "lng": -74.0817 },
+    { "lat": 4.6110, "lng": -74.0830 }
+  ],
+  "instrucciones": [
+    "Nueva instrucción 1",
+    "Nueva instrucción 2"
+  ]
+}
+```
+**Nota**: Todos los campos son opcionales. Solo se actualizan los campos enviados.
+
+### DELETE /:ruta_id/medidores/:medidor_id
+- Parámetros de ruta: `ruta_id`, `medidor_id`
+- Requiere headers: `x-app-key`, `Authorization: Bearer <token>`
+- Sin body
+
+**Respuesta**:
+```json
+{
+  "success": true,
+  "mensaje": "Medidor eliminado de la ruta y orden actualizado",
+  "ruta_id": 3,
+  "medidor_id": 67
+}
+```
+**Nota**: Automáticamente reordena los medidores restantes para mantener orden consecutivo.
+
+### PUT /:ruta_id/reordenar
+- Parámetro de ruta: `ruta_id`
+```json
+{
+  "orden": [
+    { "medidor_id": 70, "orden": 1 },
+    { "medidor_id": 68, "orden": 2 },
+    { "medidor_id": 67, "orden": 3 },
+    { "medidor_id": 69, "orden": 4 }
+  ]
+}
+```
+**Nota**: Debe incluir todos los medidores que se desean reordenar. Valida que pertenezcan a la ruta.
+
+**Respuesta**:
+```json
+{
+  "success": true,
+  "mensaje": "Orden de medidores actualizado correctamente",
+  "ruta_id": 3,
+  "medidores_actualizados": 4
+}
+```
+
+### GET /:ruta_id/progreso
+- Parámetro de ruta: `ruta_id`
+- Query opcional: `?periodo=2025-12`
+- Requiere headers: `x-app-key`, `Authorization: Bearer <token>`
+- Sin body
+
+**Respuesta**:
+```json
+{
+  "ruta": {
+    "id": 3,
+    "nombre": "Ruta Norte 1",
+    "descripcion": "Zona residencial norte"
+  },
+  "periodo": "2025-12",
+  "resumen": {
+    "total_medidores": 120,
+    "medidores_leidos": 95,
+    "medidores_pendientes": 25,
+    "porcentaje_completado": 79,
+    "porcentaje_pendiente": 21
+  },
+  "detalle": {
+    "medidores_leidos": [
+      {
+        "medidor_id": 67,
+        "numero_serie": "MED-001",
+        "ubicacion": "Calle 45 #30-25",
+        "orden": 1,
+        "cliente_nombre": "Juan Pérez",
+        "estado": "Leído",
+        "lectura_actual": 1520.5,
+        "consumo": 15.3,
+        "fecha_lectura": "2025-12-05T08:30:00Z"
+      }
+    ],
+    "medidores_pendientes": [
+      {
+        "medidor_id": 68,
+        "numero_serie": "MED-002",
+        "ubicacion": "Calle 46 #31-10",
+        "orden": 2,
+        "cliente_nombre": "María García",
+        "estado": "Pendiente",
+        "lectura_actual": null,
+        "consumo": null,
+        "fecha_lectura": null
+      }
+    ]
+  },
+  "todos_los_medidores": [
+    {
+      "medidor_id": 67,
+      "numero_serie": "MED-001",
+      "ubicacion": "Calle 45 #30-25",
+      "orden": 1,
+      "cliente_nombre": "Juan Pérez",
+      "estado": "Leído",
+      "lectura_actual": 1520.5,
+      "consumo": 15.3,
+      "fecha_lectura": "2025-12-05T08:30:00Z"
+    },
+    {
+      "medidor_id": 68,
+      "numero_serie": "MED-002",
+      "ubicacion": "Calle 46 #31-10",
+      "orden": 2,
+      "cliente_nombre": "María García",
+      "estado": "Pendiente",
+      "lectura_actual": null,
+      "consumo": null,
+      "fecha_lectura": null
+    }
+  ]
 }
 ```
 

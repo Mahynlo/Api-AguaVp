@@ -942,9 +942,25 @@ const configureSSE = (req, res, next) => {
 // Todas las rutas mantienen exactamente los mismos endpoints que V1
 // pero con arquitectura V2 mejorada (Turso + SSE)
 
+// Rutas V1 compatibles
 router.post("/crear", appKeyMiddleware, configureSSE, authMiddleware, rutasController.crearRuta);
 router.post("/agregar-medidor", appKeyMiddleware, configureSSE, authMiddleware, rutasController.agregarMedidorARuta);
 router.get("/:ruta_id/medidores", appKeyMiddleware, configureSSE, authMiddleware, rutasController.obtenerRutaConMedidores);
 router.get("/listar/", appKeyMiddleware, configureSSE, authMiddleware, rutasController.listarRutas);
+
+// === NUEVAS RUTAS V2 ===
+// Operaciones adicionales para gestión avanzada de rutas
+
+// Modificar información de una ruta
+router.put("/:ruta_id", appKeyMiddleware, configureSSE, authMiddleware, rutasController.modificarRuta);
+
+// Eliminar medidor de una ruta (con reordenamiento automático)
+router.delete("/:ruta_id/medidores/:medidor_id", appKeyMiddleware, configureSSE, authMiddleware, rutasController.eliminarMedidorDeRuta);
+
+// Reordenar medidores en una ruta
+router.put("/:ruta_id/reordenar", appKeyMiddleware, configureSSE, authMiddleware, rutasController.reordenarMedidores);
+
+// Obtener progreso de captura/estadísticas de una ruta
+router.get("/:ruta_id/progreso", appKeyMiddleware, configureSSE, authMiddleware, rutasController.obtenerProgresoCapturaRuta);
 
 export default router;
