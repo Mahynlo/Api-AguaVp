@@ -457,20 +457,28 @@ const authController = {
             // Generar nuevo access token
             const newAccessToken = generateAccessToken(user, 'user');
 
-            // Guardar el nuevo access token en la tabla sesiones
-            const insertSessionQuery = `
-                INSERT INTO sesiones (usuario_id, token, direccion_ip, dispositivo)
-                VALUES (?, ?, ?, ?)
+            // Actualizar la sesión activa más reciente del usuario con el nuevo token
+            // En lugar de crear una nueva sesión
+            const updateSessionQuery = `
+                UPDATE sesiones 
+                SET token = ?,
+                    ultimo_uso = datetime('now')
+                WHERE usuario_id = ? 
+                  AND activo = 1
+                  AND id = (
+                      SELECT id FROM sesiones 
+                      WHERE usuario_id = ? AND activo = 1 
+                      ORDER BY fecha_inicio DESC 
+                      LIMIT 1
+                  )
             `;
-            const ip = req.ip || "";
             
             await dbTurso.execute({
-                sql: insertSessionQuery,
+                sql: updateSessionQuery,
                 args: [
-                    user.id,
                     newAccessToken,
-                    ip,
-                    req.headers['user-agent'] || 'refresh'
+                    user.id,
+                    user.id
                 ]
             });
 
