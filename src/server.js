@@ -40,7 +40,8 @@ import routes from './routes/index.js';
 import swaggerUi from 'swagger-ui-express';
 import swaggerJsdoc from 'swagger-jsdoc';
 
-// Configuración de Swagger
+
+import { initDeudoresJob, setNotificationManager as setDeudoresNotificationManager } from './jobs/procesarDeudores.js';
 const swaggerOptions = {
   definition: {
     openapi: '3.0.0',
@@ -112,7 +113,12 @@ const sseNotificationManager = new SSENotificationManager(sseManager);
 app.set('io', io);
 // app.set('socketManager', socketManager); // DESACTIVADO TEMPORALMENTE
 app.set('sseManager', sseManager); // Activo para v2
+
 app.set('notificationManager', sseNotificationManager); // Activo para v2
+
+// Inicializar Cron Job de Deudores
+setDeudoresNotificationManager(sseNotificationManager);
+initDeudoresJob();
 
 // Rutas
 app.use('/api', routes);
@@ -148,5 +154,6 @@ console.log('   - WebSockets (v1): ❌ DESACTIVADO TEMPORALMENTE');
 console.log('   - SSE (v2): ✅ ACTIVO');
 console.log('   - API v1: ❌ DESACTIVADA TEMPORALMENTE');
 console.log('   - API v2: ✅ ACTIVA');
+console.log('   - Cron Deudores: ✅ ACTIVO (Diario 3:00 AM)');
 
 export default server;

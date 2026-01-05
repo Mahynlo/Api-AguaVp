@@ -1,5 +1,5 @@
 // src/database/schema/clientes.js
-import { sqliteTable, integer, text } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, integer, text, numeric } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 import { usuarios } from './usuarios.js';
 import { tarifas } from './tarifas.js';
@@ -11,8 +11,8 @@ export const clientes = sqliteTable('clientes', {
   telefono: text('telefono').notNull(),
   ciudad: text('ciudad').notNull(),
   correo: text('correo'),
-  estado_cliente: text('estado_cliente', { 
-    enum: ['Activo', 'Inactivo', 'Eliminado'] 
+  estado_cliente: text('estado_cliente', {
+    enum: ['Activo', 'Inactivo', 'Suspendido', 'Eliminado']
   }).notNull().default('Activo'),
   tarifa_id: integer('tarifa_id').references(() => tarifas.id),
   modificado_por: integer('modificado_por').references(() => usuarios.id),
@@ -28,11 +28,15 @@ export const medidores = sqliteTable('medidores', {
   numero_serie: text('numero_serie').notNull().unique(),
   ubicacion: text('ubicacion'),
   fecha_instalacion: text('fecha_instalacion'),
-  latitud: text('latitud'),
-  longitud: text('longitud'),
-  estado_medidor: text('estado_medidor', { 
-    enum: ['Activo', 'Inactivo', 'Retirado', 'No instalado'] 
+  latitud: numeric('latitud'),
+  longitud: numeric('longitud'),
+  estado_medidor: text('estado_medidor', {
+    enum: ['Activo', 'Inactivo', 'Retirado', 'No instalado']
   }).notNull(),
+  estado_servicio: text('estado_servicio', {
+    enum: ['Activo', 'Cortado']
+  }).default('Activo'),
+  fecha_corte: text('fecha_corte'),
   fecha_creacion: text('fecha_creacion').default(sql`(datetime('now'))`),
 });
 

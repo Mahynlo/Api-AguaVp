@@ -15,6 +15,34 @@
       "when": 1765513769035,
       "tag": "0001_exotic_molecule_man",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1766368434911,
+      "tag": "0002_add_triggers",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1766378949359,
+      "tag": "0003_add_vistas",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1766796894645,
+      "tag": "0004_peaceful_spiral",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1766811932513,
+      "tag": "0005_clever_micromax",
+      "breakpoints": true
     }
   ]
 }

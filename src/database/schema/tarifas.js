@@ -1,5 +1,5 @@
 // src/database/schema/tarifas.js
-import { sqliteTable, integer, text, real } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, integer, text, real, numeric } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 import { usuarios } from './usuarios.js';
 
@@ -18,7 +18,7 @@ export const rangos_tarifas = sqliteTable('rangos_tarifas', {
   tarifa_id: integer('tarifa_id').notNull().references(() => tarifas.id, { onDelete: 'cascade' }),
   consumo_min: integer('consumo_min').notNull(),
   consumo_max: integer('consumo_max'),
-  precio_por_m3: real('precio_por_m3').notNull(),
+  precio_por_m3: numeric('precio_por_m3').notNull(),
 });
 
 export const historial_tarifas = sqliteTable('historial_tarifas', {
@@ -28,6 +28,6 @@ export const historial_tarifas = sqliteTable('historial_tarifas', {
   fecha_cambio: text('fecha_cambio').default(sql`(datetime('now'))`),
   consumo_min: integer('consumo_min'),
   consumo_max: integer('consumo_max'),
-  precio_anterior: real('precio_anterior'),
-  precio_nuevo: real('precio_nuevo').notNull(),
+  precio_anterior: numeric('precio_anterior'),
+  precio_nuevo: numeric('precio_nuevo').notNull(),
 });
