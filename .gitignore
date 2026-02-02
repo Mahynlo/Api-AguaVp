@@ -3,3 +3,6 @@ node_modules/
 dist/
 package-lock.json
 db-local.js
+*.db
+*.db-shm
+*.db-wal

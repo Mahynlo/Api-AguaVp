@@ -7,7 +7,7 @@
  * - Datos para gráficos (Consumo histórico, Distribución por ruta).
  */
 
-import dbTurso from "../../database/db-turso.js";
+import dbTurso from "../../database/db-sqlite.js";
 
 const dashboardController = {
 

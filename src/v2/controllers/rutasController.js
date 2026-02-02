@@ -19,7 +19,7 @@
  * - obtenerRutaConMedidores: Obtener ruta completa con medidores ordenados
  */
 
-import dbTurso from '../../database/db-turso.js';
+import dbTurso from '../../database/db-sqlite.js';
 
 // Managers SSE - Configurados dinámicamente
 let sseManager = null;
@@ -186,9 +186,14 @@ const rutasController = {
     /**
      * Listar rutas (V1 compatible)
      */
+    /**
+     * Listar rutas con Paginación y Búsqueda (V2)
+     */
     listarRutas: async (req, res) => {
         try {
             const periodoParam = req.query.periodo; // Ejemplo: '2025-08'
+            // Nuevos parámetros para paginación
+            const { page, limit, search, estado, ubicacion } = req.query;
 
             // Primero obtenemos el período a usar (igual que V1)
             const periodoQuery = `
@@ -209,8 +214,86 @@ const rutasController = {
 
             const periodo = periodoResult.rows[0]?.periodo_a_usar;
 
-            // Query principal para obtener información detallada de rutas (igual que V1)
-            const query = `
+            // --- Lógica de filtrado y paginación ---
+
+            // Si hay parámetros de paginación o búsqueda, o default (legacy fallback si no envian)
+            const pageNum = parseInt(page) || 1;
+            const limitNum = parseInt(limit) || 10; // Default 10 items (tarjetas)
+            const offset = (pageNum - 1) * limitNum;
+            const searchTerm = search ? `%${search}%` : null;
+
+            let baseQuery = `
+                FROM rutas r
+                LEFT JOIN rutas_puntos rp ON rp.ruta_id = r.id
+            `;
+
+            let whereConditions = [];
+            let whereArgs = [];
+
+            if (searchTerm) {
+                whereConditions.push(`(r.nombre LIKE ? OR r.descripcion LIKE ?)`);
+                whereArgs.push(searchTerm, searchTerm);
+            }
+
+            // Nota: Filtros de estado (completas/incompletas) son complejos en SQL directo
+            // por la lógica de conteo de lecturas vs medidores. 
+            // Para mantener rendimiento, filtraremos estado DESPUÉS de obtener los candidatos PAGINADOS si es posible,
+            // pero lo ideal es filtrar antes. 
+            // DADA LA COMPLEJIDAD de calcular "completas" en SQL puro sin subqueries pesadas,
+            // y asumiendo que el número de rutas no es masivo (cientos), 
+            // optaremos por:
+            // 1. Si NO hay filtro de estado, paginamos directo sobre rutas.
+            // 2. Si HAY filtro de estado, necesitamos calcular métricas. 
+            //    Para v2, paginaremos sobre el total de rutas primero y luego el cliente filtra visualmente?
+            //    NO, el cliente espera paginación real.
+            //    Haremos un CTE o subquery para calcular estados si es necesario, 
+            //    PERO por ahora, aplicaremos búsqueda simple y paginación sobre rutas base.
+            //    El filtro de "Estado" en el frontend actual parece ser cliente-side sobre todo lo recibido.
+            //    Mantendremos la paginación sobre el listado BASE de rutas.
+
+            const whereClause = whereConditions.length > 0 ? ' WHERE ' + whereConditions.join(' AND ') : '';
+
+            // 1. Contar total de rutas (para paginación)
+            const countQuery = `SELECT COUNT(DISTINCT r.id) as total ${baseQuery} ${whereClause}`;
+            const countResult = await dbTurso.execute({
+                sql: countQuery,
+                args: whereArgs
+            });
+            const totalItems = Number(countResult.rows[0].total);
+
+
+            // 2. Obtener IDs de rutas paginadas
+            const rutasIdsQuery = `
+                SELECT DISTINCT r.id, r.fecha_creacion
+                ${baseQuery}
+                ${whereClause}
+                ORDER BY r.fecha_creacion DESC
+                LIMIT ? OFFSET ?
+            `;
+
+            const rutasIdsResult = await dbTurso.execute({
+                sql: rutasIdsQuery,
+                args: [...whereArgs, limitNum, offset]
+            });
+
+            const rutasPageIds = rutasIdsResult.rows.map(r => Number(r.id));
+
+            if (rutasPageIds.length === 0) {
+                return res.json({
+                    periodo: periodo,
+                    rutas: [],
+                    pagination: {
+                        total: totalItems,
+                        page: pageNum,
+                        limit: limitNum,
+                        totalPages: Math.ceil(totalItems / limitNum)
+                    }
+                });
+            }
+
+            // 3. Obtener detalles SOLO de las rutas de esta página
+            const idsPlaceholder = rutasPageIds.map(() => '?').join(',');
+            const dataQuery = `
                 SELECT 
                     r.id,
                     r.nombre,
@@ -221,18 +304,15 @@ const rutasController = {
                     COUNT(DISTINCT rp.medidor_id) AS total_puntos
                 FROM rutas r
                 LEFT JOIN rutas_puntos rp ON rp.ruta_id = r.id
+                WHERE r.id IN (${idsPlaceholder})
                 GROUP BY r.id, r.nombre, r.descripcion, r.fecha_creacion, r.distancia_km, r.creado_por
                 ORDER BY r.fecha_creacion DESC
             `;
 
-            const rutasResult = await dbTurso.execute({ sql: query });
-
-            if (rutasResult.rows.length === 0) {
-                return res.status(200).json({
-                    periodo: periodo,
-                    rutas: []
-                });
-            }
+            const rutasResult = await dbTurso.execute({
+                sql: dataQuery,
+                args: rutasPageIds
+            });
 
             // Convertir BigInt a Number y procesar cada ruta
             const rutas = rutasResult.rows.map(row => ({
@@ -247,7 +327,7 @@ const rutasController = {
 
             for (let index = 0; index < rutas.length; index++) {
                 const ruta = rutas[index];
-                
+
                 const medidoresQuery = `
                     SELECT 
                         m.numero_serie,
@@ -280,12 +360,12 @@ const rutasController = {
                 const medidores_faltantes = medidores
                     .filter(m => m.tiene_lectura === 0)
                     .map(m => m.numero_serie);
-                
+
                 const completadas = medidores_completados.length;
                 const faltantes = medidores_faltantes.length;
                 const total_puntos = medidores.length;
-                const porcentaje_completado = total_puntos > 0 
-                    ? Math.round((completadas / total_puntos) * 100) 
+                const porcentaje_completado = total_puntos > 0
+                    ? Math.round((completadas / total_puntos) * 100)
                     : 0;
 
                 // Construir objeto de ruta con información completa (igual que V1)
@@ -316,7 +396,13 @@ const rutasController = {
 
             return res.status(200).json({
                 periodo: periodo,
-                rutas: rutasFinales
+                rutas: rutasFinales,
+                pagination: {
+                    total: totalItems,
+                    page: pageNum,
+                    limit: limitNum,
+                    totalPages: Math.ceil(totalItems / limitNum)
+                }
             });
 
         } catch (error) {
@@ -349,7 +435,7 @@ const rutasController = {
 
             if (verificarResult.rows.length > 0) {
                 const ruta_existente = Number(verificarResult.rows[0].ruta_id);
-                return res.status(409).json({ 
+                return res.status(409).json({
                     error: `El medidor ya está asignado a la ruta ${ruta_existente}`,
                     ruta_existente
                 });
@@ -483,7 +569,7 @@ const rutasController = {
             if (puntos && Array.isArray(puntos) && puntos.length > 0) {
                 const medidorIds = puntos.map(p => p.id);
                 const placeholders = medidorIds.map(() => '?').join(',');
-                
+
                 const checkQuery = `
                     SELECT m.id, m.numero_serie, r.id as ruta_id, r.nombre as ruta_nombre
                     FROM medidores m
@@ -493,7 +579,7 @@ const rutasController = {
                     AND rp.ruta_id IS NOT NULL
                     AND rp.ruta_id != ?
                 `;
-                
+
                 const checkResult = await dbTurso.execute({
                     sql: checkQuery,
                     args: [...medidorIds, ruta_id]
@@ -506,7 +592,7 @@ const rutasController = {
                         ruta_actual: row.ruta_nombre
                     }));
 
-                    return res.status(409).json({ 
+                    return res.status(409).json({
                         error: 'Algunos medidores ya están asignados a otra ruta',
                         conflictos: conflictos
                     });
@@ -708,7 +794,7 @@ const rutasController = {
             const { orden } = req.body;
 
             if (!ruta_id || !Array.isArray(orden) || orden.length === 0) {
-                return res.status(400).json({ 
+                return res.status(400).json({
                     error: 'ID de ruta y array de orden requeridos',
                     ejemplo: { orden: [{ medidor_id: 1, orden: 1 }, { medidor_id: 2, orden: 2 }] }
                 });
@@ -729,8 +815,8 @@ const rutasController = {
             });
 
             if (verificarResult.rows.length !== medidorIds.length) {
-                return res.status(400).json({ 
-                    error: 'Algunos medidores no pertenecen a esta ruta' 
+                return res.status(400).json({
+                    error: 'Algunos medidores no pertenecen a esta ruta'
                 });
             }
 

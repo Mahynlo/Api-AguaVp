@@ -31,6 +31,15 @@ import authController from '../controllers/authController.js';
 import appKeyMiddleware from '../middlewares/appKeyMiddleware.js';
 import authMiddleware from '../middlewares/authMiddleware.js';
 import { loginLimiter, registroUsuarioLimiter } from '../middlewares/rateLimiter.js';
+import {
+  validate,
+  loginSchema,
+  registrarUsuarioSchema,
+  cambiarContraseñaSchema,
+  refreshTokenSchema,
+  actualizarPerfilSchema,
+  usuarioIdParamSchema
+} from '../validators/index.js';
 
 const router = express.Router();
 
@@ -105,7 +114,7 @@ const router = express.Router();
  *       500:
  *         description: Error interno del servidor
  */
-router.post('/login', loginLimiter, appKeyMiddleware, authController.login);
+router.post('/login', loginLimiter, appKeyMiddleware, validate(loginSchema), authController.login);
 
 /**
  * @swagger
@@ -191,7 +200,7 @@ router.post('/login', loginLimiter, appKeyMiddleware, authController.login);
  *       500:
  *         description: Error al registrar usuario
  */
-router.post('/register', registroUsuarioLimiter, appKeyMiddleware, authController.registrar);
+router.post('/register', registroUsuarioLimiter, appKeyMiddleware, validate(registrarUsuarioSchema), authController.registrar);
 
 /**
  * @swagger
@@ -282,7 +291,7 @@ router.post('/logout', appKeyMiddleware, authMiddleware, authController.logout);
  *       500:
  *         description: Error al obtener sesiones activas
  */
-router.get('/sesionesActivas/:usuarioId', appKeyMiddleware, authController.sesionesActivas);
+router.get('/sesionesActivas/:usuarioId', appKeyMiddleware, authMiddleware, authController.sesionesActivas);
 
 /**
  * @swagger

@@ -11,11 +11,12 @@ export const facturas = sqliteTable('facturas', {
   cliente_id: integer('cliente_id').references(() => clientes.id),
   lectura_id: integer('lectura_id').references(() => lecturas.id),
   tarifa_id: integer('tarifa_id').references(() => tarifas.id),
+  convenio_id: integer('convenio_id'), // Vincula factura con convenio de pago
   fecha_emision: text('fecha_emision').notNull(),
   fecha_vencimiento: text('fecha_vencimiento').notNull(),
   total: numeric('total').notNull(),
   saldo_pendiente: numeric('saldo_pendiente').notNull().default(0),
-  estado: text('estado', { enum: ['Pagado', 'Pendiente', 'Parcial', 'Vencida'] }).notNull(),
+  estado: text('estado', { enum: ['Pagado', 'Pendiente', 'Parcial', 'Vencida', 'En Convenio'] }).notNull(),
   modificado_por: integer('modificado_por').references(() => usuarios.id),
   fecha_creacion: text('fecha_creacion').default(sql`(datetime('now'))`),
 });
@@ -23,6 +24,7 @@ export const facturas = sqliteTable('facturas', {
 export const pagos = sqliteTable('pagos', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   factura_id: integer('factura_id').references(() => facturas.id),
+  parcialidad_id: integer('parcialidad_id'), // Vincula pago con parcialidad de convenio
   fecha_pago: text('fecha_pago').notNull(),
   monto: numeric('monto').notNull(),
   cantidad_entregada: numeric('cantidad_entregada'),

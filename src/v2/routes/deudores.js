@@ -70,4 +70,23 @@ router.post("/reconectar", appKeyMiddleware, authMiddleware, cortesController.pr
  */
 router.post("/convenios", appKeyMiddleware, authMiddleware, conveniosController.crearConvenio);
 
+/**
+ * @swagger
+ * /api/v2/deudores/convenios/:id:
+ *   get:
+ *     summary: Obtener convenio con parcialidades
+ *     description: Retorna información completa del convenio incluyendo parcialidades y progreso.
+ */
+router.get("/convenios/:id", appKeyMiddleware, authMiddleware, conveniosController.obtenerConvenio);
+
+/**
+ * @swagger
+ * /api/v2/deudores/convenios/pagar-parcialidad:
+ *   post:
+ *     summary: Pagar parcialidad de convenio
+ *     description: Registra el pago de una cuota del convenio y actualiza el saldo.
+ */
+router.post("/convenios/pagar-parcialidad", appKeyMiddleware, authMiddleware, conveniosController.pagarParcialidad);
+
 export default router;
+

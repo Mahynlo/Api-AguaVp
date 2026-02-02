@@ -11,7 +11,7 @@
  */
 
 import jwt from "jsonwebtoken";
-import dbTurso from "../../database/db-turso.js";
+import dbTurso from "../../database/db-sqlite.js";
 
 const SECRET_APP_KEY = process.env.SECRET_APP_KEY; //secret para firmar el token
 

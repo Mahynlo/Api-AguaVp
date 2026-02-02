@@ -7,12 +7,12 @@ import { jest } from '@jest/globals';
 // Si esto falla, volveremos a unstable_mockModule pero con la ruta resuelta correctamente.
 
 // Para que funcione el __mocks__ con ESM y jest.mock, necesitamos esto:
-jest.unstable_mockModule('../../database/db-turso.js', () => import('../../database/__mocks__/db-turso.js'));
+jest.unstable_mockModule('../../database/db-sqlite.js', () => import('../../database/__mocks__/db-sqlite.js'));
 
 // Importar dinámicamente el controlador (después del mock)
 const { default: dashboardController } = await import('../../v2/controllers/dashboardController.js');
 // Importar el mock para manipularlo
-const { mockExecute } = await import('../../database/__mocks__/db-turso.js');
+const { mockExecute } = await import('../../database/__mocks__/db-sqlite.js');
 
 
 describe('Dashboard Controller', () => {

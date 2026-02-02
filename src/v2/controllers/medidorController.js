@@ -24,7 +24,7 @@
  * - Notificaciones SSE en tiempo real
  */
 
-import dbTurso from "../../database/db-turso.js";
+import dbTurso from "../../database/db-sqlite.js";
 
 // Managers SSE - Configurados dinámicamente
 let sseManager = null;
@@ -158,14 +158,93 @@ const MedidorController = {
     /**
      * Obtener todos los medidores - V1 logic (consulta simple)
      */
+    /**
+     * Obtener todos los medidores - V2 logic con Paginación y Búsqueda
+     */
     obtenerMedidores: async (req, res) => {
         try {
-            // Mantener misma query que V1 para compatibilidad
-            const query = `SELECT * FROM medidores`;
+            const { page, limit, search, estado, ubicacion } = req.query;
 
+            // Si hay parámetros de paginación o búsqueda
+            if (page || limit || search || estado || ubicacion) {
+                const pageNum = parseInt(page) || 1;
+                const limitNum = parseInt(limit) || 60; // Buffer de 60 por defecto
+                const offset = (pageNum - 1) * limitNum;
+                const searchTerm = search ? `%${search}%` : null;
+
+                let countQuery = `SELECT COUNT(*) as total FROM medidores`;
+                let dataQuery = `SELECT * FROM medidores`;
+
+                let whereArgs = [];
+                let conditions = [];
+
+                if (searchTerm) {
+                    conditions.push(`(numero_serie LIKE ? OR marca LIKE ? OR modelo LIKE ? OR ubicacion LIKE ?)`);
+                    whereArgs.push(searchTerm, searchTerm, searchTerm, searchTerm);
+                }
+
+                if (estado && estado !== 'All') {
+                    if (estado === 'Cortado') {
+                        conditions.push(`estado_servicio = ?`);
+                        whereArgs.push(estado);
+                    } else if (estado === 'Activo') {
+                        // "Activo" podría significar estado_medidor='Activo' AND estado_servicio='Activo'
+                        // O simplemente estado_medidor='Activo'. Asumiremos estado_servicio='Activo' para ser consistentes con la vista de cortes.
+                        conditions.push(`(estado_medidor = ? AND estado_servicio = 'Activo')`);
+                        whereArgs.push('Activo');
+                    } else {
+                        conditions.push(`estado_medidor = ?`);
+                        whereArgs.push(estado);
+                    }
+                }
+
+                // Filtro de ubicación exacto (si fuera necesario) o búsqueda general
+                if (ubicacion && ubicacion !== 'All') {
+                    conditions.push(`ubicacion LIKE ?`);
+                    whereArgs.push(`%${ubicacion}%`);
+                }
+
+                const whereClause = conditions.length > 0 ? ' WHERE ' + conditions.join(' AND ') : '';
+
+                // 1. Obtener total
+                const countResult = await dbTurso.execute({
+                    sql: countQuery + whereClause,
+                    args: whereArgs
+                });
+                const total = Number(countResult.rows[0].total);
+
+                // 2. Obtener datos
+                dataQuery += whereClause + ` ORDER BY fecha_creacion DESC LIMIT ? OFFSET ?`;
+                const dataArgs = [...whereArgs, limitNum, offset];
+
+                const result = await dbTurso.execute({
+                    sql: dataQuery,
+                    args: dataArgs
+                });
+
+                // Convertir BigInt a Number para JSON
+                const medidores = result.rows.map(row => ({
+                    ...row,
+                    id: Number(row.id),
+                    cliente_id: row.cliente_id ? Number(row.cliente_id) : null
+                }));
+
+                return res.json({
+                    success: true,
+                    data: medidores,
+                    pagination: {
+                        total,
+                        page: pageNum,
+                        limit: limitNum,
+                        totalPages: Math.ceil(total / limitNum)
+                    }
+                });
+            }
+
+            // Comportamiento Legacy (sin parámetros, trae todo)
+            const query = `SELECT * FROM medidores ORDER BY fecha_creacion DESC`;
             const result = await dbTurso.execute({ sql: query });
 
-            // Convertir BigInt a Number para compatibilidad JSON
             const medidores = result.rows.map(row => ({
                 ...row,
                 id: Number(row.id),
@@ -236,19 +315,19 @@ const MedidorController = {
 
             // Identificar cambios
             const cambios = {};
-            if (cliente_id && cliente_id !== medidorExistente.cliente_id) 
+            if (cliente_id && cliente_id !== medidorExistente.cliente_id)
                 cambios.cliente_id = { antes: medidorExistente.cliente_id, despues: cliente_id };
-            if (numero_serie && numero_serie !== medidorExistente.numero_serie) 
+            if (numero_serie && numero_serie !== medidorExistente.numero_serie)
                 cambios.numero_serie = { antes: medidorExistente.numero_serie, despues: numero_serie };
-            if (ubicacion && ubicacion !== medidorExistente.ubicacion) 
+            if (ubicacion && ubicacion !== medidorExistente.ubicacion)
                 cambios.ubicacion = { antes: medidorExistente.ubicacion, despues: ubicacion };
-            if (fecha_instalacion && fecha_instalacion !== medidorExistente.fecha_instalacion) 
+            if (fecha_instalacion && fecha_instalacion !== medidorExistente.fecha_instalacion)
                 cambios.fecha_instalacion = { antes: medidorExistente.fecha_instalacion, despues: fecha_instalacion };
-            if (latitud && latitud !== medidorExistente.latitud) 
+            if (latitud && latitud !== medidorExistente.latitud)
                 cambios.latitud = { antes: medidorExistente.latitud, despues: latitud };
-            if (longitud && longitud !== medidorExistente.longitud) 
+            if (longitud && longitud !== medidorExistente.longitud)
                 cambios.longitud = { antes: medidorExistente.longitud, despues: longitud };
-            if (estado_medidor && estado_medidor !== medidorExistente.estado_medidor) 
+            if (estado_medidor && estado_medidor !== medidorExistente.estado_medidor)
                 cambios.estado_medidor = { antes: medidorExistente.estado_medidor, despues: estado_medidor };
 
             // Actualizar medidor
@@ -267,13 +346,13 @@ const MedidorController = {
             const updateResult = await dbTurso.execute({
                 sql: updateQuery,
                 args: [
-                    cliente_id ?? null, 
-                    numero_serie ?? null, 
-                    ubicacion ?? null, 
-                    fecha_instalacion ?? null, 
-                    latitud ?? null, 
-                    longitud ?? null, 
-                    estado_medidor ?? null, 
+                    cliente_id ?? null,
+                    numero_serie ?? null,
+                    ubicacion ?? null,
+                    fecha_instalacion ?? null,
+                    latitud ?? null,
+                    longitud ?? null,
+                    estado_medidor ?? null,
                     id
                 ]
             });

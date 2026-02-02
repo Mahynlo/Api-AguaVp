@@ -8,7 +8,7 @@
  * Optimizado para consultas de alto volumen (lotes de impresión).
  */
 
-import dbTurso from "../../database/db-turso.js";
+import dbTurso from "../../database/db-sqlite.js";
 import { startOfMonth, endOfMonth, subMonths, format, parseISO } from 'date-fns';
 import { es } from 'date-fns/locale';
 
@@ -49,6 +49,7 @@ const ReportsController = {
                     c.nombre as cliente_nombre,
                     c.direccion,
                     c.ciudad as pueblo,
+                    m.id as medidor_id,
                     m.numero_serie as medidor_serial,
                     l.consumo_m3 as consumo_mes,
                     l.fecha_lectura,
@@ -126,29 +127,62 @@ const ReportsController = {
                 });
             }
 
-            // 3. Generar Historial (Simulado o consultado)
-            // Consultaremos el consumo del mes anterior para calcular variación
-            const mesAnterior = format(subMonths(parseISO(mes + '-01'), 1), 'yyyy-MM');
-            const consumosAnterioresResult = await dbTurso.execute({
-                sql: `
-                    SELECT l.consumo_m3, m.numero_serie 
-                    FROM lecturas l
-                    JOIN medidores m ON l.medidor_id = m.id
-                    WHERE l.periodo = ?
-                `,
-                args: [mesAnterior]
-            });
+            // 3. Generar Historial (Últimos 12 meses para gráficos)
+            // Consultaremos el consumo del mes anterior para calcular variación y el historial completo
+            const startHistoryDate = format(subMonths(parseISO(mes + '-01'), 12), 'yyyy-MM');
 
-            const consumoAnteriorMap = {};
-            consumosAnterioresResult.rows.forEach(r => {
-                consumoAnteriorMap[r.numero_serie] = Number(r.consumo_m3);
-            });
+            // Obtener IDs de medidores únicos
+            const medidoresIds = facturas.map(f => f.medidor_id).filter((v, i, a) => a.indexOf(v) === i);
+            let historialMap = {}; // medidor_id -> [{ periodo, consumo }]
+
+            if (medidoresIds.length > 0) {
+                // Fetch historial en lote
+                // NOTA: Si son muchos medidores (>500), se debería chunkear. Asumimos <500 por lote de impresión típico.
+                const medidoresPlaceholders = medidoresIds.map(() => '?').join(',');
+
+                const historyQuery = `
+                    SELECT 
+                        medidor_id, periodo, consumo_m3
+                    FROM lecturas
+                    WHERE medidor_id IN (${medidoresPlaceholders})
+                    AND periodo >= ?
+                    ORDER BY periodo ASC
+                 `;
+
+                try {
+                    const historyResult = await dbTurso.execute({
+                        sql: historyQuery,
+                        args: [...medidoresIds, startHistoryDate]
+                    });
+
+                    historyResult.rows.forEach(row => {
+                        if (!historialMap[row.medidor_id]) historialMap[row.medidor_id] = [];
+                        historialMap[row.medidor_id].push({
+                            mes: row.periodo, // YYYY-MM
+                            consumo: Number(row.consumo_m3)
+                        });
+                    });
+                } catch (err) {
+                    console.error("Error fetching history:", err);
+                }
+            }
+
+            // Consumo anterior específico (para variación) - Extraer del historial si es posible
+            // O mantener la lógica existente si periodo anterior no está en rango (raro si traemos 12 meses)
+            // Mantendremos la lógica de "consumo anterior inmediato" calculada en el mapping para consistencia.
 
 
             // 4. Mapear Respuesta Final
             const recibos = facturas.map(f => {
+                // Calcular consumo anterior desde el historial o map
+                const hist = historialMap[f.medidor_id] || [];
                 const consumoActual = Number(f.consumo_mes);
-                const consumoAnt = consumoAnteriorMap[f.medidor_serial] || 0;
+
+                // Buscar mes anterior exacto
+                const mesAntPeriodo = format(subMonths(parseISO(mes + '-01'), 1), 'yyyy-MM');
+                const lectAnt = hist.find(h => h.mes === mesAntPeriodo);
+                const consumoAnt = lectAnt ? lectAnt.consumo : 0;
+
                 const variacion = consumoAnt === 0 ? 0 : ((consumoActual - consumoAnt) / consumoAnt) * 100;
                 const deudaAnterior = deudaMap[f.cliente_id] || 0;
 
@@ -180,7 +214,7 @@ const ReportsController = {
                         consumo_anterior: consumoAnt,
                         variacion_porcentaje: Number(variacion.toFixed(1)),
                         // Historial simplificado para el demo
-                        historial_ano_actual: []
+                        historial_ano_actual: historialMap[f.medidor_id] || []
                     }
                 };
             });

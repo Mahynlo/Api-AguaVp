@@ -62,6 +62,13 @@ import express from 'express';
 import authMiddleware from '../middlewares/authMiddleware.js';
 import appKeyMiddleware from '../middlewares/appKeyMiddleware.js';
 import facturasController, { setSSEManagers } from '../controllers/facturasController.js';
+import { 
+  validate,
+  crearFacturaSchema,
+  actualizarFacturaSchema,
+  facturaIdParamSchema,
+  buscarFacturaSchema
+} from '../validators/index.js';
 
 const router = express.Router();
 
@@ -486,7 +493,7 @@ const configureSSE = (req, res, next) => {
  *                   example: "Error en el cálculo de tarifas por rangos"
  */
 // Rutas adaptadas de V1 con los mismos endpoints exactos
-router.post('/generar', appKeyMiddleware, authMiddleware, configureSSE, facturasController.generarFactura);
+router.post('/generar', appKeyMiddleware, authMiddleware, validate(crearFacturaSchema), configureSSE, facturasController.generarFactura);
 
 /**
  * @swagger
@@ -642,7 +649,7 @@ router.get('/listar', appKeyMiddleware, authMiddleware, configureSSE, facturasCo
  *       500:
  *         description: Error interno del servidor
  */
-router.get('/listar/:id', appKeyMiddleware, authMiddleware, configureSSE, facturasController.obtenerFacturas);
+router.get('/listar/:id', appKeyMiddleware, authMiddleware, validate(facturaIdParamSchema, 'params'), configureSSE, facturasController.obtenerFacturas);
 
 /**
  * @swagger
@@ -733,7 +740,7 @@ router.get('/listar/:id', appKeyMiddleware, authMiddleware, configureSSE, factur
  *       500:
  *         description: Error interno del servidor
  */
-router.put('/modificar/:id', appKeyMiddleware, authMiddleware, configureSSE, facturasController.modificarFactura);
+router.put('/modificar/:id', appKeyMiddleware, authMiddleware, validate(facturaIdParamSchema, 'params'), validate(actualizarFacturaSchema), configureSSE, facturasController.modificarFactura);
 
 // ===================================================================
 // EXPORT MODULE

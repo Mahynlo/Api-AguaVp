@@ -16,7 +16,7 @@
  */
 
 import bcrypt from "bcryptjs";
-import dbTurso from "../../database/db-turso.js";
+import dbTurso from "../../database/db-sqlite.js";
 import { generateTokenPair, generateAccessToken } from "../../utils/generateToken.js";
 import { validatePassword, formatValidationErrors } from "../../utils/passwordValidator.js";
 
@@ -52,6 +52,16 @@ const authController = {
 
             const user = result.rows[0];
 
+            // Verificar estado del usuario (Soft Delete / Bloqueo)
+            // Si el campo estado_usuario no existe (migración pendiente), asumimos activo.
+            // Pero como ya corrimos la migración con default 'Activo', debe existir.
+            if (user.estado_usuario && user.estado_usuario !== 'Activo') {
+                return res.status(403).json({
+                    error: "Cuenta desactivada",
+                    mensaje: `Tu cuenta se encuentra en estado: ${user.estado_usuario}. Contacta al administrador.`
+                });
+            }
+
             // Verificar contraseña
             const validPassword = await bcrypt.compare(contraseña, user.contraseña);
             if (!validPassword) {
@@ -67,7 +77,7 @@ const authController = {
                 VALUES (?, ?, ?, ?)
             `;
             const ip = req.ip || "";
-            
+
             await dbTurso.execute({
                 sql: insertQuery,
                 args: [user.id, accessToken, ip, dispositivo || 'unknown']
@@ -78,7 +88,7 @@ const authController = {
                 INSERT INTO refresh_tokens (token, usuario_id, expira_en, user_agent, ip)
                 VALUES (?, ?, ?, ?, ?)
             `;
-            
+
             await dbTurso.execute({
                 sql: insertRefreshQuery,
                 args: [
@@ -108,7 +118,7 @@ const authController = {
                     notificationManager.alertaSistema(
                         `Usuario ${user.nombre} ha iniciado sesión`,
                         'info',
-                        { 
+                        {
                             usuario: userData,
                             accion: 'login'
                         }
@@ -151,9 +161,9 @@ const authController = {
             // Validar que el rol sea uno de los permitidos (case-insensitive)
             const rolesPermitidos = ['superadmin', 'administrador', 'operador'];
             const rolNormalizado = rol.toLowerCase().trim();
-            
+
             if (!rolesPermitidos.includes(rolNormalizado)) {
-                return res.status(400).json({ 
+                return res.status(400).json({
                     error: "Rol no válido",
                     rolesPermitidos: rolesPermitidos,
                     rolRecibido: rol
@@ -163,7 +173,7 @@ const authController = {
             // Validar fortaleza de la contraseña
             const validation = validatePassword(contrasena);
             if (!validation.valid) {
-                return res.status(400).json({ 
+                return res.status(400).json({
                     error: "Contraseña no válida",
                     detalles: validation.errors,
                     mensaje: formatValidationErrors(validation.errors)
@@ -213,7 +223,7 @@ const authController = {
                     notificationManager.alertaSistema(
                         `Nuevo usuario registrado: ${nombre} (${username})`,
                         'success',
-                        { 
+                        {
                             usuario: usuarioCreado,
                             accion: 'registro'
                         }
@@ -250,7 +260,7 @@ const authController = {
                 SELECT usuario_id FROM sesiones 
                 WHERE token = ? AND activo = 1
             `;
-            
+
             const sesionResult = await dbTurso.execute({
                 sql: sesionQuery,
                 args: [token]
@@ -264,7 +274,7 @@ const authController = {
 
             // Verificar permisos: solo el mismo usuario o superadmin pueden cerrar la sesión
             const usuarioAutenticadoId = req.usuario.id;
-            
+
             // Obtener rol del usuario autenticado
             const rolQuery = `SELECT rol FROM usuarios WHERE id = ?`;
             const rolResult = await dbTurso.execute({
@@ -276,7 +286,7 @@ const authController = {
 
             // Validar permisos
             if (sesionUsuarioId !== usuarioAutenticadoId && rolUsuario !== 'superadmin') {
-                return res.status(403).json({ 
+                return res.status(403).json({
                     error: "No autorizado para cerrar esta sesión",
                     mensaje: "Solo puedes cerrar tus propias sesiones, o ser superadmin"
                 });
@@ -318,7 +328,7 @@ const authController = {
                     notificationManager.alertaSistema(
                         `Usuario ${userData.nombre} ha cerrado sesión`,
                         'info',
-                        { 
+                        {
                             usuario: userData,
                             accion: 'logout'
                         }
@@ -347,8 +357,9 @@ const authController = {
             }
 
             // Obtener sesiones activas del usuario desde Turso
+            // Incluimos token para comparar, pero no lo enviamos al cliente final
             const query = `
-                SELECT id, usuario_id, direccion_ip, dispositivo, fecha_inicio, ubicacion
+                SELECT id, usuario_id, direccion_ip, dispositivo, fecha_inicio, ubicacion, token
                 FROM sesiones
                 WHERE usuario_id = ? AND activo = 1
             `;
@@ -359,17 +370,29 @@ const authController = {
             });
 
             if (result.rows.length === 0) {
-                return res.status(404).json({ mensaje: "No se encontraron sesiones activas" });
+                // Retornar array vacío en lugar de 404 para que la UI no falle
+                // Retornar array vacío en lugar de 404 para que la UI no falle
+                return res.json({
+                    success: true,
+                    usuario_id: usuarioId,
+                    sesiones_activas: [],
+                    total: 0
+                });
             }
 
-            // Convertir rows a objetos con propiedades nombradas
+            // Obtener token actual del header
+            const authHeader = req.headers['authorization'];
+            const currentToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.split(' ')[1] : null;
+
+            // Convertir rows a objetos con propiedades nombradas y flag 'actual'
             const sesiones = result.rows.map(row => ({
                 id: row.id,
                 usuario_id: row.usuario_id,
                 direccion_ip: row.direccion_ip,
                 dispositivo: row.dispositivo,
                 fecha_inicio: row.fecha_inicio,
-                ubicacion: row.ubicacion
+                ubicacion: row.ubicacion,
+                actual: row.token === currentToken // Flag True si es la sesión actual
             }));
 
             // Enviar notificación SSE (opcional)
@@ -378,7 +401,7 @@ const authController = {
                     notificationManager.alertaSistema(
                         `Consulta de sesiones activas para usuario ${usuarioId}`,
                         'info',
-                        { 
+                        {
                             usuario_id: usuarioId,
                             sesiones_encontradas: sesiones.length,
                             accion: 'consulta_sesiones'
@@ -436,14 +459,14 @@ const authController = {
             });
 
             if (result.rows.length === 0) {
-                return res.status(401).json({ 
+                return res.status(401).json({
                     error: "Refresh token inválido o expirado",
                     code: "INVALID_REFRESH_TOKEN"
                 });
             }
 
             const tokenData = result.rows[0];
-            
+
             // Construir objeto de usuario
             const user = {
                 id: tokenData.usuario_id,
@@ -472,7 +495,7 @@ const authController = {
                       LIMIT 1
                   )
             `;
-            
+
             await dbTurso.execute({
                 sql: updateSessionQuery,
                 args: [
@@ -500,7 +523,7 @@ const authController = {
                     notificationManager.alertaSistema(
                         `Token renovado para usuario ${user.nombre}`,
                         'info',
-                        { 
+                        {
                             usuario_id: user.id,
                             accion: 'refresh_token'
                         }
@@ -563,8 +586,8 @@ const authController = {
 
             // Verificar que el usuario del token coincide con el usuario autenticado
             if (tokenUserId !== req.user.id) {
-                return res.status(403).json({ 
-                    error: "No autorizado para revocar este token" 
+                return res.status(403).json({
+                    error: "No autorizado para revocar este token"
                 });
             }
 
@@ -607,7 +630,7 @@ const authController = {
                 SELECT usuario_id FROM sesiones 
                 WHERE id = ? AND activo = 1
             `;
-            
+
             const sesionResult = await dbTurso.execute({
                 sql: sesionQuery,
                 args: [sesionId]
@@ -621,7 +644,7 @@ const authController = {
 
             // Verificar permisos: solo el mismo usuario o superadmin
             const usuarioAutenticadoId = req.usuario.id;
-            
+
             const rolQuery = `SELECT rol FROM usuarios WHERE id = ?`;
             const rolResult = await dbTurso.execute({
                 sql: rolQuery,
@@ -632,7 +655,7 @@ const authController = {
 
             // Validar permisos
             if (sesionUsuarioId !== usuarioAutenticadoId && rolUsuario !== 'superadmin') {
-                return res.status(403).json({ 
+                return res.status(403).json({
                     error: "No autorizado para cerrar esta sesión",
                     mensaje: "Solo puedes cerrar tus propias sesiones, o ser superadmin"
                 });
@@ -678,7 +701,7 @@ const authController = {
 
             // Verificar permisos: solo el mismo usuario o superadmin
             const usuarioAutenticadoId = req.usuario.id;
-            
+
             const rolQuery = `SELECT rol FROM usuarios WHERE id = ?`;
             const rolResult = await dbTurso.execute({
                 sql: rolQuery,
@@ -689,7 +712,7 @@ const authController = {
 
             // Validar permisos
             if (Number(usuarioId) !== usuarioAutenticadoId && rolUsuario !== 'superadmin') {
-                return res.status(403).json({ 
+                return res.status(403).json({
                     error: "No autorizado para cerrar sesiones de este usuario",
                     mensaje: "Solo puedes cerrar tus propias sesiones, o ser superadmin"
                 });

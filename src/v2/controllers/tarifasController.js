@@ -12,7 +12,7 @@
  * - Respeta el esquema de la base de datos actual
  */
 
-import dbTurso from '../../database/db-turso.js';
+import dbTurso from '../../database/db-sqlite.js';
 
 // Managers SSE - Configurados dinámicamente
 let sseManager = null;
@@ -30,7 +30,12 @@ const tarifasController = {
      */
     async registrarTarifa(req, res) {
         try {
-            const { nombre, descripcion, fecha_inicio, fecha_fin, modificado_por } = req.body;
+            let { nombre, descripcion, fecha_inicio, fecha_fin, modificado_por } = req.body;
+
+            // Asignar modificado_por desde el token si no viene en el body
+            if (!modificado_por && req.usuario) {
+                modificado_por = req.usuario.id;
+            }
 
             // Validar que la fecha inicio sea menor a fecha fin
             if (fecha_fin && new Date(fecha_inicio) > new Date(fecha_fin)) {
@@ -54,7 +59,7 @@ const tarifasController = {
             });
 
             const tarifa_id = Number(result.lastInsertRowid); // Convertir BigInt a Number
-            
+
             // Datos completos de la tarifa para SSE
             const tarifaCompleta = {
                 id: tarifa_id,
@@ -109,7 +114,7 @@ const tarifasController = {
             // Validación interna y de formato
             for (const rango of rangos) {
                 const { consumo_min, consumo_max, precio_por_m3 } = rango;
-                
+
                 if (
                     consumo_min == null || precio_por_m3 == null ||
                     consumo_min < 0 || precio_por_m3 < 0 ||
@@ -119,7 +124,7 @@ const tarifasController = {
                         error: 'Los valores de consumo y precio no pueden ser negativos o nulos (error-BK)',
                     });
                 }
-                
+
                 if (consumo_max != null && consumo_min >= consumo_max) {
                     return res.status(400).json({
                         error: `El consumo mínimo (${consumo_min}) debe ser menor que el consumo máximo (${consumo_max}) (error-BK)`,
@@ -180,7 +185,7 @@ const tarifasController = {
 
             for (const rango of rangos) {
                 const { consumo_min, consumo_max, precio_por_m3 } = rango;
-                
+
                 await dbTurso.execute({
                     sql: insertQuery,
                     args: [tarifa_id, consumo_min, consumo_max || null, precio_por_m3]
@@ -220,13 +225,13 @@ const tarifasController = {
         } catch (error) {
             console.error('❌ Error al registrar rangos v2:', error);
             if (error.message && error.message.includes('UNIQUE')) {
-                return res.status(409).json({ 
-                    error: 'Ya existe un rango similar para esta tarifa (error-BK)' 
+                return res.status(409).json({
+                    error: 'Ya existe un rango similar para esta tarifa (error-BK)'
                 });
             }
-            res.status(500).json({ 
+            res.status(500).json({
                 error: 'Error interno del servidor (error-BK)',
-                detalle: error.message 
+                detalle: error.message
             });
         }
     },
@@ -234,44 +239,124 @@ const tarifasController = {
     /**
      * Obtener todas las tarifas - Adaptado de v1
      */
+    /**
+     * Obtener todas las tarifas (Listar con Paginación) - V2
+     */
     async obtenerTodasLasTarifas(req, res) {
         try {
-            const tarifasQuery = `SELECT * FROM tarifas`;
-            const result = await dbTurso.execute(tarifasQuery);
+            // Parámetros de paginación y búsqueda
+            const { page, limit, search } = req.query;
+            const pageNum = parseInt(page) || 1;
+            const limitNum = parseInt(limit) || 10;
+            const offset = (pageNum - 1) * limitNum;
+            const searchTerm = search ? `%${search}%` : null;
+
+            // Construir query base
+            let baseQuery = `FROM tarifas t`;
+            let whereConditions = [];
+            let whereArgs = [];
+
+            if (searchTerm) {
+                whereConditions.push(`(t.nombre LIKE ? OR t.descripcion LIKE ?)`);
+                whereArgs.push(searchTerm, searchTerm);
+            }
+
+            const whereClause = whereConditions.length > 0 ? ' WHERE ' + whereConditions.join(' AND ') : '';
+
+            // 1. Contar total de tarifas
+            const countQuery = `SELECT COUNT(*) as total ${baseQuery} ${whereClause}`;
+            const countResult = await dbTurso.execute({
+                sql: countQuery,
+                args: whereArgs
+            });
+            const totalItems = Number(countResult.rows[0].total);
+
+            // 2. Obtener tarifas paginadas
+            const tarifasQuery = `
+                SELECT * 
+                ${baseQuery} 
+                ${whereClause} 
+                ORDER BY t.fecha_creacion DESC 
+                LIMIT ? OFFSET ?
+            `;
+
+            const result = await dbTurso.execute({
+                sql: tarifasQuery,
+                args: [...whereArgs, limitNum, offset]
+            });
 
             if (!result.rows || result.rows.length === 0) {
-                return res.status(404).json({ error: 'No hay tarifas registradas(error-BK)' });
+                return res.json({
+                    tarifas: [],
+                    pagination: {
+                        total: totalItems,
+                        page: pageNum,
+                        limit: limitNum,
+                        totalPages: Math.ceil(totalItems / limitNum)
+                    }
+                });
             }
 
             // Para cada tarifa, obtener sus rangos
-            const tarifasConRangos = [];
-            
-            for (const tarifa of result.rows) {
-                const rangosQuery = `SELECT * FROM rangos_tarifas WHERE tarifa_id = ? ORDER BY consumo_min ASC`;
-                const rangosResult = await dbTurso.execute({
-                    sql: rangosQuery,
-                    args: [tarifa.id]
-                });
+            // Optimización: Obtener rangos solo para las tarifas de esta página
+            const idsTarifas = result.rows.map(r => r.id);
+            const placeholders = idsTarifas.map(() => '?').join(',');
 
-                tarifasConRangos.push({
-                    id: Number(tarifa.id),
+            const rangosQuery = `
+                SELECT * FROM rangos_tarifas 
+                WHERE tarifa_id IN (${placeholders}) 
+                ORDER BY tarifa_id, consumo_min ASC
+            `;
+
+            const rangosResult = await dbTurso.execute({
+                sql: rangosQuery,
+                args: idsTarifas
+            });
+
+            // Agrupar rangos por tarifa
+            const rangosPorTarifa = {};
+            rangosResult.rows.forEach(rango => {
+                const tId = Number(rango.tarifa_id);
+                if (!rangosPorTarifa[tId]) rangosPorTarifa[tId] = [];
+                rangosPorTarifa[tId].push({
+                    id: Number(rango.id),
+                    tarifa_id: tId,
+                    consumo_min: Number(rango.consumo_min),
+                    consumo_max: rango.consumo_max ? Number(rango.consumo_max) : null,
+                    precio_por_m3: Number(rango.precio_por_m3)
+                });
+            });
+
+            const tarifasConRangos = result.rows.map(tarifa => {
+                const tId = Number(tarifa.id);
+                // Determinar si está activa/vigente en el backend también es útil
+                const hoy = new Date();
+                const fInicio = new Date(tarifa.fecha_inicio);
+                const fFin = tarifa.fecha_fin ? new Date(tarifa.fecha_fin) : null;
+                const activa = hoy >= fInicio && (!fFin || hoy <= fFin);
+
+                return {
+                    id: tId,
                     nombre: tarifa.nombre,
                     descripcion: tarifa.descripcion,
                     fecha_inicio: tarifa.fecha_inicio,
                     fecha_fin: tarifa.fecha_fin,
                     modificado_por: Number(tarifa.modificado_por),
                     fecha_creacion: tarifa.fecha_creacion,
-                    rangos: rangosResult.rows.map(rango => ({
-                        id: Number(rango.id),
-                        tarifa_id: Number(rango.tarifa_id),
-                        consumo_min: Number(rango.consumo_min),
-                        consumo_max: rango.consumo_max ? Number(rango.consumo_max) : null,
-                        precio_por_m3: Number(rango.precio_por_m3)
-                    }))
-                });
-            }
+                    activa, // Flag de utilidad
+                    rangos: rangosPorTarifa[tId] || []
+                };
+            });
 
-            res.status(200).json(tarifasConRangos);
+            res.status(200).json({
+                tarifas: tarifasConRangos,
+                pagination: {
+                    total: totalItems,
+                    page: pageNum,
+                    limit: limitNum,
+                    totalPages: Math.ceil(totalItems / limitNum)
+                }
+            });
 
         } catch (error) {
             console.error('❌ Error al obtener tarifas v2:', error);
@@ -286,7 +371,7 @@ const tarifasController = {
         try {
             const query = `SELECT * FROM historial_tarifas ORDER BY fecha_cambio DESC`;
             const result = await dbTurso.execute(query);
-            
+
             const historial = result.rows.map(row => ({
                 id: Number(row.id),
                 tarifa_id: row.tarifa_id ? Number(row.tarifa_id) : null,
@@ -475,9 +560,9 @@ const tarifasController = {
 
         } catch (error) {
             console.error('❌ Error al modificar rangos v2:', error);
-            res.status(500).json({ 
-                error: 'Error interno del servidor', 
-                detalle: error.message 
+            res.status(500).json({
+                error: 'Error interno del servidor',
+                detalle: error.message
             });
         }
     },
@@ -687,7 +772,7 @@ const tarifasController = {
                 },
                 precio_anterior: row.precio_anterior ? Number(row.precio_anterior) : null,
                 precio_nuevo: Number(row.precio_nuevo),
-                cambio_porcentual: row.precio_anterior 
+                cambio_porcentual: row.precio_anterior
                     ? (((Number(row.precio_nuevo) - Number(row.precio_anterior)) / Number(row.precio_anterior)) * 100).toFixed(2) + '%'
                     : 'N/A'
             }));

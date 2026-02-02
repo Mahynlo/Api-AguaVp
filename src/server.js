@@ -42,6 +42,7 @@ import swaggerJsdoc from 'swagger-jsdoc';
 
 
 import { initDeudoresJob, setNotificationManager as setDeudoresNotificationManager } from './jobs/procesarDeudores.js';
+import { initConveniosJob, setNotificationManager as setConveniosNotificationManager } from './jobs/verificarConvenios.js';
 const swaggerOptions = {
   definition: {
     openapi: '3.0.0',
@@ -116,9 +117,13 @@ app.set('sseManager', sseManager); // Activo para v2
 
 app.set('notificationManager', sseNotificationManager); // Activo para v2
 
-// Inicializar Cron Job de Deudores
+// Inicializar Cron Jobs
 setDeudoresNotificationManager(sseNotificationManager);
 initDeudoresJob();
+
+setConveniosNotificationManager(sseNotificationManager);
+// initConveniosJob(); // DESACTIVADO TEMPORALMENTE
+console.log('[Cron] Job de Convenios pausado para lanzamiento inicial');
 
 // Rutas
 app.use('/api', routes);

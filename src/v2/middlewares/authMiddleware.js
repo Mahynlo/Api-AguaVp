@@ -19,7 +19,8 @@
  * - Se espera que la tabla "sesiones" contenga los campos "token" y "activo".
  */
 
-import dbTurso from "../../database/db-turso.js";
+import jwt from 'jsonwebtoken';
+import dbTurso from "../../database/db-sqlite.js";
 
 async function authMiddleware(req, res, next) {
     const authHeader = req.headers.authorization; // Obtiene el encabezado de autorización
@@ -39,13 +40,13 @@ async function authMiddleware(req, res, next) {
         });
 
         if (revokeCheck.rows.length > 0) {
-            return res.status(401).json({ 
+            return res.status(401).json({
                 error: "Token revocado",
                 code: "TOKEN_REVOKED"
             });
         }
 
-        // 2. Verifica si el token es válido y está activo en la base de datos
+        // 2. Verifica si el token es válido y está activo en la base de datos (Legacy Session Check)
         const query = `SELECT * FROM sesiones WHERE token = ? AND activo = 1`;
         const result = await dbTurso.execute({
             sql: query,
@@ -58,7 +59,19 @@ async function authMiddleware(req, res, next) {
 
         const session = result.rows[0];
 
-        // 3. Verificar si algún refresh token del usuario fue revocado recientemente
+        // 3. Verificar expiración real del JWT y extraer Scopes
+        let decoded;
+        try {
+            decoded = jwt.verify(token, process.env.JWT_SECRET);
+        } catch (jwtError) {
+            console.warn('JWT Verify check failed (legacy token?):', jwtError.message);
+            // Si falla el verify pero está en DB, podría ser un token legacy sin fecha de expiración o firma antigua.
+            // Decidimos si permitirlo o no. Para migración segura, si está en DB session activo, confiamos en DB.
+            // Pero para scopes, necesitamos claims.
+            decoded = { scope: "default" }; // Fallback
+        }
+
+        // 4. Verificar si algún refresh token del usuario fue revocado recientemente
         const refreshCheck = await dbTurso.execute({
             sql: `
                 SELECT id 
@@ -73,7 +86,7 @@ async function authMiddleware(req, res, next) {
 
         // Si se revocó un refresh token hace menos de 15 min, invalidar sesión
         if (refreshCheck.rows.length > 0) {
-            return res.status(401).json({ 
+            return res.status(401).json({
                 error: "Sesión revocada",
                 code: "SESSION_REVOKED"
             });
@@ -81,7 +94,10 @@ async function authMiddleware(req, res, next) {
 
         req.usuario = { // Agrega la información del usuario a la solicitud
             id: session.usuario_id, // ID del usuario asociado a la sesión 
-            token: session.token // Token de la sesión
+            token: session.token, // Token de la sesión
+            scope: decoded.scope ? decoded.scope.split(' ') : [], // Array de scopes
+            rol: decoded.rol, // Rol del usuario (desde el token)
+            app_id: session.app_id // ID de la app si existe
         };
 
         next(); // continuar a la ruta
@@ -90,5 +106,58 @@ async function authMiddleware(req, res, next) {
         return res.status(500).json({ error: "Error al verificar sesión" });
     }
 }
+
+/**
+ * Middleware para validar Scopes
+ * Uso: router.get('/ruta', authMiddleware, requireScope('read:reports'), controller)
+ */
+export const requireScope = (requiredScope) => {
+    return (req, res, next) => {
+        if (!req.usuario || !req.usuario.scope) {
+            return res.status(403).json({ error: "Permisos insuficientes (No scopes)" });
+        }
+
+        const userScopes = req.usuario.scope;
+        // Si tiene el scope requerido O es superadmin (scope root opcional)
+        // Aquí asumimos simple string match. Podría ser más complejo.
+        if (userScopes.includes(requiredScope) || userScopes.includes('admin')) {
+            return next();
+        }
+
+        return res.status(403).json({
+            error: "Permisos insuficientes",
+            required: requiredScope
+        });
+    };
+};
+
+/**
+ * Middleware para autorización basada en Roles
+ * Uso: router.get('/admin', authMiddleware, authorize(['admin', 'superadmin']), controller)
+ */
+export const authorize = (roles = []) => {
+    // Si se pasa un string único, lo convertimos a array
+    if (typeof roles === 'string') {
+        roles = [roles];
+    }
+
+    return (req, res, next) => {
+        // Verificar si existe el usuario y su rol
+        if (!req.usuario || !req.usuario.rol) {
+            return res.status(403).json({ error: "Acceso denegado: usuario no identificado o sin rol" });
+        }
+
+        // Verificar si el rol del usuario está permitido
+        if (!roles.includes(req.usuario.rol)) {
+            return res.status(403).json({
+                error: "Acceso denegado: privilegios insuficientes",
+                message: `El rol '${req.usuario.rol}' no tiene acceso a este recurso.`,
+                required_roles: roles
+            });
+        }
+
+        next();
+    };
+};
 
 export default authMiddleware;

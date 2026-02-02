@@ -7,7 +7,7 @@
  * Gestiona la detección de candidatos a corte y la ejecución de órdenes.
  */
 
-import dbTurso from "../../database/db-turso.js";
+import dbTurso from "../../database/db-sqlite.js";
 
 const cortesController = {
 
@@ -25,8 +25,10 @@ const cortesController = {
 
             // Valores por defecto si no hay config
             const umbralCorte = configResult.rows.length > 0 ? configResult.rows[0].facturas_para_corte : 4;
+            const diasGracia = configResult.rows.length > 0 ? (configResult.rows[0].dias_gracia || 0) : 0;
 
             // 2. Buscar medidores con N facturas VENCIDAS pendientes
+            // MODIFICADO: Incluye medidores con convenios para visualización completa
             const query = `
                 SELECT 
                     m.id as medidor_id,
@@ -37,49 +39,70 @@ const cortesController = {
                     c.direccion,
                     COUNT(f.id) as facturas_vencidas,
                     SUM(f.saldo_pendiente) as deuda_total,
-                    MIN(f.fecha_vencimiento) as fecha_vencimiento_mas_antigua
+                    MIN(f.fecha_vencimiento) as fecha_vencimiento_mas_antigua,
+                    cp.id as convenio_id,
+                    cp.saldo_restante as convenio_saldo,
+                    cp.numero_parcialidades as convenio_parcialidades
                 FROM medidores m
-                JOIN facturas f ON f.cliente_id = (SELECT cliente_id FROM medidores WHERE id = m.id) -- OJO: Relación Cliente-Medidor puede ser compleja
                 JOIN clientes c ON m.cliente_id = c.id
+                JOIN lecturas l ON l.medidor_id = m.id
+                JOIN facturas f ON f.lectura_id = l.id
                 LEFT JOIN convenios_pago cp ON cp.medidor_id = m.id AND cp.estado = 'Activo'
                 WHERE f.saldo_pendiente > 0 
                 AND f.estado = 'Vencida'
-                AND m.estado_servicio = 'Activo' -- Solo analizar Activos
-                AND cp.id IS NULL -- EXCLUIR si tiene convenio activo
-                GROUP BY m.id
-                HAVING facturas_vencidas >= ?
-                ORDER BY facturas_vencidas DESC
+                AND f.fecha_vencimiento <= date('now', '-' || ? || ' days')
+                AND m.estado_servicio IN ('Activo', 'Cortado')
+                GROUP BY m.id, m.numero_serie, m.estado_servicio, c.id, c.nombre, c.direccion, cp.id, cp.saldo_restante, cp.numero_parcialidades
+                HAVING facturas_vencidas >= ? OR cp.id IS NOT NULL
+                ORDER BY 
+                    CASE 
+                        WHEN cp.id IS NOT NULL THEN 0
+                        WHEN m.estado_servicio = 'Cortado' THEN 1 
+                        WHEN m.estado_servicio = 'Activo' THEN 2 
+                    END,
+                    facturas_vencidas DESC
             `;
 
-            // Nota: La relación Factura -> Medidor es vía Lectura normalmente (f.lectura_id -> l.medidor_id), 
-            // pero para deuda acumulada general usamos cliente_id. 
-            // MEJOR QUERY: Vincular facturas a medidor si es posible, o asumir deuda del cliente.
-            // Asumiremos deuda del cliente asociada al medidor principal.
-
-            const result = await dbTurso.execute({ sql: query, args: [umbralCorte] });
+            const result = await dbTurso.execute({ sql: query, args: [diasGracia, umbralCorte] });
 
             // 3. Formatear respuesta
-            const candidatos = result.rows.map(row => ({
-                cliente: {
-                    id: row.cliente_id,
-                    nombre: row.cliente_nombre,
-                    direccion: row.direccion
-                },
-                medidor: {
-                    id: row.medidor_id,
-                    serial: row.numero_serie,
-                    estado: row.estado_servicio
-                },
-                deuda: {
-                    facturas_vencidas: Number(row.facturas_vencidas),
-                    total: Number(row.deuda_total),
-                    fecha_mas_antigua: row.fecha_vencimiento_mas_antigua
-                },
-                accion_sugerida: "Corte de Servicio"
-            }));
+            const candidatos = result.rows.map(row => {
+                const tieneConvenio = row.convenio_id !== null;
+
+                return {
+                    cliente: {
+                        id: row.cliente_id,
+                        nombre: row.cliente_nombre,
+                        direccion: row.direccion
+                    },
+                    medidor: {
+                        id: row.medidor_id,
+                        serial: row.numero_serie,
+                        estado: row.estado_servicio,
+                        estado_servicio: row.estado_servicio
+                    },
+                    deuda: {
+                        facturas_vencidas: Number(row.facturas_vencidas),
+                        total: Number(row.deuda_total),
+                        fecha_mas_antigua: row.fecha_vencimiento_mas_antigua
+                    },
+                    convenio: tieneConvenio ? {
+                        id: row.convenio_id,
+                        saldo_restante: Number(row.convenio_saldo),
+                        parcialidades: Number(row.convenio_parcialidades)
+                    } : null,
+                    tiene_convenio: tieneConvenio,
+                    accion_sugerida: tieneConvenio ? "En Convenio" :
+                        (row.estado_servicio === 'Cortado' ? "Reconexión" : "Corte de Servicio"),
+                    // Campos de compatibilidad para el frontend
+                    fecha_vencimiento: row.fecha_vencimiento_mas_antigua,
+                    saldo_pendiente: Number(row.deuda_total)
+                };
+            });
 
             res.json({
                 umbral_corte: umbralCorte,
+                dias_gracia: diasGracia,
                 total_candidatos: candidatos.length,
                 candidatos
             });
@@ -97,10 +120,17 @@ const cortesController = {
      */
     ejecutarCorte: async (req, res) => {
         try {
+            console.log("=== EJECUTAR CORTE ===");
+            console.log("Body recibido:", req.body);
+            console.log("Usuario:", req.usuario);
+
             const { medidor_id, motivo, observaciones } = req.body;
             const autorizado_por = req.usuario?.id; // Del token
 
+            console.log("Datos extraídos:", { medidor_id, motivo, observaciones, autorizado_por });
+
             if (!medidor_id || !motivo) {
+                console.error("ERROR: Faltan datos requeridos", { medidor_id, motivo });
                 return res.status(400).json({ error: "Faltan datos requeridos (medidor_id, motivo)" });
             }
 
@@ -191,10 +221,14 @@ const cortesController = {
             const tieneConvenio = convenioRes.rows.length > 0;
 
             // REGLA: Solo reconectar si Deuda es 0 O Tiene Convenio
+            console.log("Validación reconexión:", { deudaTotal, tieneConvenio });
+
             if (deudaTotal > 0 && !tieneConvenio) {
+                console.log("RECHAZADO: Deuda pendiente sin convenio");
                 return res.status(403).json({
                     error: "No es posible reconectar. Existe deuda pendiente y no hay convenio activo.",
-                    deuda_pendiente: deudaTotal
+                    deuda_pendiente: deudaTotal,
+                    requiere: "Pagar deuda completa o crear convenio de pago"
                 });
             }
 

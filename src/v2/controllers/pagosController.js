@@ -19,7 +19,7 @@
  */
 
 
-import dbTurso from '../../database/db-turso.js';
+import dbTurso from '../../database/db-sqlite.js';
 
 // === FUNCIONES UTILITARIAS PARA MANEJO PRECISO DE DECIMALES ===
 /**
@@ -70,7 +70,7 @@ const pagosController = {
      */
     registrarPago: async (req, res) => {
         try {
-            const {
+            let {
                 factura_id,
                 fecha_pago,
                 cantidad_entregada,
@@ -78,6 +78,11 @@ const pagosController = {
                 comentario,
                 modificado_por
             } = req.body;
+
+            // Asegurar que modificado_por venga del token si no se envía
+            if (!modificado_por && req.usuario) {
+                modificado_por = req.usuario.id;
+            }
 
             if (
                 !factura_id || !fecha_pago || cantidad_entregada == null ||
@@ -91,7 +96,7 @@ const pagosController = {
             }
 
             // Verificar existencia de la factura y obtener el saldo
-            const facturaQuery = `SELECT id, saldo_pendiente FROM facturas WHERE id = ?`;
+            const facturaQuery = `SELECT id, saldo_pendiente, estado, convenio_id FROM facturas WHERE id = ?`;
             const facturaResult = await dbTurso.execute({
                 sql: facturaQuery,
                 args: [factura_id]
@@ -102,6 +107,18 @@ const pagosController = {
             }
 
             const factura = facturaResult.rows[0];
+
+            // VALIDACIÓN: Bloquear pagos a facturas en convenio
+            if (factura.convenio_id !== null) {
+                console.log(`Intento de pago bloqueado - Factura ${factura_id} está en convenio ${factura.convenio_id}`);
+                return res.status(403).json({
+                    error: 'Esta factura está incluida en un convenio de pago activo.',
+                    mensaje: 'Debe pagar las parcialidades del convenio en lugar de la factura directamente.',
+                    convenio_id: factura.convenio_id,
+                    tipo_error: 'FACTURA_EN_CONVENIO'
+                });
+            }
+
             const saldo = toDecimal(factura.saldo_pendiente);
 
             if (saldo <= 0) {
@@ -116,7 +133,7 @@ const pagosController = {
 
             // Validación adicional para evitar errores de trigger
             if (monto > saldo + 0.01) { // Tolerancia de 1 centavo
-                return res.status(400).json({ 
+                return res.status(400).json({
                     error: 'El monto del pago excede el saldo pendiente',
                     detalles: {
                         saldo_pendiente: saldo,
@@ -174,7 +191,7 @@ const pagosController = {
             // Enviar notificaciones SSE si está disponible
             if (notificationManager && pagoCompletoResult.rows.length > 0) {
                 const pagoCompleto = pagoCompletoResult.rows[0];
-                
+
                 try {
                     const pagoData = {
                         id: pagoId,
@@ -191,7 +208,7 @@ const pagosController = {
 
                     // Notificar pago recibido
                     notificationManager.notificacionPersonalizada('pago_recibido', pagoData);
-                    
+
                     // Emitir evento específico de pago completado
                     notificationManager.alertaSistema(
                         `Pago de $${monto} procesado exitosamente`,
@@ -214,12 +231,18 @@ const pagosController = {
     },
 
     /**
-     * Obtener pagos (V1 compatible)
+     * Obtener pagos (V1 compatible + paginación)
      */
     obtenerPagos: async (req, res) => {
         try {
             const { id } = req.params;
-            const { periodo } = req.query;
+            const { periodo, page, limit, search, metodo_pago } = req.query;
+
+            // Defaults para paginación
+            const pageNum = parseInt(page) || 1;
+            const limitNum = parseInt(limit) || 60;
+            const offset = (pageNum - 1) * limitNum;
+            const searchTerm = search ? `%${search.toLowerCase()}%` : null;
 
             const baseQuery = `
                 SELECT 
@@ -243,24 +266,65 @@ const pagosController = {
                 LEFT JOIN medidores m ON l.medidor_id = m.id
             `;
 
-            // Construir WHERE clause basado en parámetros
-            let whereClause = '';
+            // Construir WHERE clauses dinámicamente
+            let whereConditions = [];
             let queryParams = [];
+            let countParams = [];
 
             if (id) {
-                whereClause = 'WHERE p.id = ?';
+                whereConditions.push('p.id = ?');
                 queryParams.push(id);
-            } else if (periodo) {
-                whereClause = 'WHERE l.periodo = ?';
-                queryParams.push(periodo);
+            } else {
+                // Filtros generales
+                if (periodo) {
+                    whereConditions.push('l.periodo = ?');
+                    queryParams.push(periodo);
+                    countParams.push(periodo);
+                }
+
+                if (metodo_pago && metodo_pago.trim() !== '') {
+                    whereConditions.push('p.metodo_pago = ?');
+                    queryParams.push(metodo_pago);
+                    countParams.push(metodo_pago);
+                }
+
+                if (searchTerm) {
+                    whereConditions.push('(LOWER(c.nombre) LIKE ? OR CAST(p.id AS TEXT) LIKE ? OR CAST(f.id AS TEXT) LIKE ? OR LOWER(p.metodo_pago) LIKE ?)');
+                    queryParams.push(searchTerm, searchTerm, searchTerm, searchTerm);
+                    countParams.push(searchTerm, searchTerm, searchTerm, searchTerm);
+                }
+            }
+
+            const whereClause = whereConditions.length > 0 ? 'WHERE ' + whereConditions.join(' AND ') : '';
+
+            // 1. Si NO es petición por ID, obtener el TOTAL de registros para paginación
+            let totalItems = 0;
+            if (!id) {
+                const countQuery = `
+                    SELECT COUNT(*) as total 
+                    FROM pagos p
+                    JOIN facturas f ON p.factura_id = f.id
+                    JOIN clientes c ON f.cliente_id = c.id
+                    LEFT JOIN lecturas l ON f.lectura_id = l.id
+                    ${whereClause}
+                `;
+
+                const countResult = await dbTurso.execute({
+                    sql: countQuery,
+                    args: countParams
+                });
+                totalItems = Number(countResult.rows[0].total);
             }
 
             // Usar ORDER BY solo cuando no sea consulta específica por ID
             const orderClause = id ? '' : 'ORDER BY p.fecha_pago DESC';
-            
-            // Agregar LIMIT para consultas grandes (opcional)
-            const limitClause = (!id && !periodo) ? 'LIMIT 500' : '';
-            
+
+            // Agregar LIMIT y OFFSET para paginación
+            const limitClause = id ? '' : 'LIMIT ? OFFSET ?';
+            if (!id) {
+                queryParams.push(limitNum, offset);
+            }
+
             const query = `${baseQuery} ${whereClause} ${orderClause} ${limitClause}`;
 
             let result;
@@ -300,13 +364,13 @@ const pagosController = {
                 if (!periodo || !periodo.match(/^\d{4}-\d{2}$/)) {
                     return periodo;
                 }
-                
+
                 const meses = {
                     '01': 'Enero', '02': 'Febrero', '03': 'Marzo', '04': 'Abril',
                     '05': 'Mayo', '06': 'Junio', '07': 'Julio', '08': 'Agosto',
                     '09': 'Septiembre', '10': 'Octubre', '11': 'Noviembre', '12': 'Diciembre'
                 };
-                
+
                 const [año, mes] = periodo.split('-');
                 return `${meses[mes]} ${año}`;
             }
@@ -317,7 +381,7 @@ const pagosController = {
                     ...result,
                     periodo_info: {
                         periodo_facturado: result.periodo_facturado,
-                        mes_facturado: result.periodo_facturado ? 
+                        mes_facturado: result.periodo_facturado ?
                             formatearMesPeriodo(result.periodo_facturado) : null
                     }
                 });
@@ -327,7 +391,7 @@ const pagosController = {
             if (Array.isArray(result) && result.length > 0) {
                 const totalPagado = toDecimal(result.reduce((sum, pago) => sumaDecimal(sum, toDecimal(pago.monto || 0)), 0));
                 const cantidadPagos = result.length;
-                
+
                 // Obtener períodos únicos de los pagos
                 const periodosUnicos = [...new Set(
                     result
@@ -339,7 +403,7 @@ const pagosController = {
                 const pagosPorPeriodo = periodosUnicos.reduce((acc, periodo) => {
                     const pagosDelPeriodo = result.filter(pago => pago.periodo_facturado === periodo);
                     const totalDelPeriodo = toDecimal(pagosDelPeriodo.reduce((sum, pago) => sumaDecimal(sum, toDecimal(pago.monto || 0)), 0));
-                    
+
                     acc[periodo] = {
                         cantidad_pagos: pagosDelPeriodo.length,
                         total_pagado: totalDelPeriodo,
@@ -351,13 +415,19 @@ const pagosController = {
                 // Formatear los pagos con información del período
                 const pagosFormateados = result.map(pago => ({
                     ...pago,
-                    mes_facturado: pago.periodo_facturado ? 
+                    mes_facturado: pago.periodo_facturado ?
                         formatearMesPeriodo(pago.periodo_facturado) : null
                 }));
 
                 const respuesta = {
                     pagos: pagosFormateados,
-                    resumen_general: {
+                    pagination: {
+                        total: totalItems,
+                        page: pageNum,
+                        limit: limitNum,
+                        totalPages: Math.ceil(totalItems / limitNum)
+                    },
+                    resumen: {
                         total_pagado: totalPagado,
                         cantidad_pagos: cantidadPagos,
                         promedio_pago: toDecimal(totalPagado / cantidadPagos)

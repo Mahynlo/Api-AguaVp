@@ -8,7 +8,7 @@
  * Permite ajustar los parámetros dinamicamente sin redestribuir el código.
  */
 
-import dbTurso from "../../database/db-turso.js";
+import dbTurso from "../../database/db-sqlite.js";
 
 const configuracionController = {
 

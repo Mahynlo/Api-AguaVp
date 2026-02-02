@@ -26,7 +26,7 @@
  * - Notificaciones SSE para lecturas y facturas generadas
  */
 
-import dbTurso from '../../database/db-turso.js';
+import dbTurso from '../../database/db-sqlite.js';
 
 // Managers SSE - Configurados dinámicamente
 let sseManager = null;
@@ -54,9 +54,9 @@ const generarFacturaAutomatica = async (params) => {
     try {
         // Verificar si ya existe una factura para esta lectura
         const facturaExistenteQuery = `SELECT id FROM facturas WHERE lectura_id = ?`;
-        const facturaExistente = await dbTurso.execute({ 
-            sql: facturaExistenteQuery, 
-            args: [lectura_id] 
+        const facturaExistente = await dbTurso.execute({
+            sql: facturaExistenteQuery,
+            args: [lectura_id]
         });
 
         if (facturaExistente.rows.length > 0) {
@@ -70,9 +70,9 @@ const generarFacturaAutomatica = async (params) => {
             WHERE tarifa_id = ? 
             ORDER BY consumo_min ASC
         `;
-        const rangosResult = await dbTurso.execute({ 
-            sql: rangosQuery, 
-            args: [tarifa_id] 
+        const rangosResult = await dbTurso.execute({
+            sql: rangosQuery,
+            args: [tarifa_id]
         });
 
         if (rangosResult.rows.length === 0) {
@@ -86,12 +86,12 @@ const generarFacturaAutomatica = async (params) => {
         let total = 0;
         const consumoEntero = Math.floor(consumo_m3);
         let rangoEncontrado = false;
-        
+
         for (const rango of rangos) {
             const consumo_min = Number(rango.consumo_min);
             const consumo_max = Number(rango.consumo_max);
             const precio_por_m3 = Number(rango.precio_por_m3);
-            
+
             if (consumoEntero > consumo_max) {
                 // El consumo supera este rango completamente
                 if (consumo_min === 0) {
@@ -116,13 +116,13 @@ const generarFacturaAutomatica = async (params) => {
                 break; // Ya encontramos el rango final, salir del bucle
             }
         }
-        
+
         // Si el consumo excede todos los rangos, usar el último rango para el excedente
         if (!rangoEncontrado && rangos.length > 0) {
             const ultimoRango = rangos[rangos.length - 1];
             const ultimo_consumo_max = Number(ultimoRango.consumo_max);
             const ultimo_precio_por_m3 = Number(ultimoRango.precio_por_m3);
-            
+
             // Calcular excedente usando el último rango
             const excedente = consumoEntero - ultimo_consumo_max;
             total += excedente * ultimo_precio_por_m3;
@@ -192,9 +192,9 @@ const generarFacturaAutomatica = async (params) => {
             }
         }
 
-        return { 
-            success: true, 
-            factura_id, 
+        return {
+            success: true,
+            factura_id,
             total,
             detalles: facturaCompleta
         };
@@ -222,7 +222,7 @@ const lecturasController = {
             // Validar existencia del medidor
             const medidorQuery = `SELECT id FROM medidores WHERE id = ?`;
             const medidorResult = await dbTurso.execute({ sql: medidorQuery, args: [medidor_id] });
-            
+
             if (medidorResult.rows.length === 0) {
                 return res.status(404).json({ error: 'Medidor no encontrado' });
             }
@@ -230,16 +230,16 @@ const lecturasController = {
             // Validar existencia de la ruta
             const rutaQuery = `SELECT id FROM rutas WHERE id = ?`;
             const rutaResult = await dbTurso.execute({ sql: rutaQuery, args: [ruta_id] });
-            
+
             if (rutaResult.rows.length === 0) {
                 return res.status(404).json({ error: 'Ruta no encontrada' });
             }
 
             // Verificar si ya existe una lectura para el mismo medidor y periodo
             const verificacionQuery = `SELECT id FROM lecturas WHERE medidor_id = ? AND periodo = ?`;
-            const verificacionResult = await dbTurso.execute({ 
-                sql: verificacionQuery, 
-                args: [medidor_id, periodo] 
+            const verificacionResult = await dbTurso.execute({
+                sql: verificacionQuery,
+                args: [medidor_id, periodo]
             });
 
             if (verificacionResult.rows.length > 0) {
@@ -318,11 +318,11 @@ const lecturasController = {
 
             // 🔥 GENERAR FACTURA AUTOMÁTICAMENTE (lógica de V1)
             let facturaResult = null;
-            
+
             // Verificar que el cliente tenga una tarifa asignada
             if (lecturaCompleta && lecturaCompleta.cliente_tarifa_id && lecturaCompleta.cliente_id) {
                 console.log('🧾 Iniciando generación automática de factura...');
-                
+
                 const facturaParams = {
                     lectura_id,
                     cliente_id: lecturaCompleta.cliente_id,
@@ -333,7 +333,7 @@ const lecturasController = {
                 };
 
                 facturaResult = await generarFacturaAutomatica(facturaParams);
-                
+
                 if (facturaResult.success) {
                     console.log('✅ Factura generada automáticamente:', facturaResult.factura_id);
                 } else {
@@ -344,8 +344,8 @@ const lecturasController = {
             }
 
             // Respuesta final incluyendo información de factura si se generó
-            const response = { 
-                mensaje: 'Lectura registrada exitosamente', 
+            const response = {
+                mensaje: 'Lectura registrada exitosamente',
                 lectura_id,
                 detalles: {
                     id: lectura_id,
@@ -397,7 +397,7 @@ const lecturasController = {
                 ? `${baseQuery} WHERE l.id = ?`
                 : `${baseQuery} ORDER BY l.fecha_lectura DESC`;
 
-            const result = id 
+            const result = id
                 ? await dbTurso.execute({ sql: query, args: [id] })
                 : await dbTurso.execute(query);
 
@@ -529,14 +529,14 @@ const lecturasController = {
                 ORDER BY l.fecha_lectura ASC
             `;
 
-            const result = await dbTurso.execute({ 
-                sql: query, 
-                args: [ruta_id, periodo] 
+            const result = await dbTurso.execute({
+                sql: query,
+                args: [ruta_id, periodo]
             });
 
             if (result.rows.length === 0) {
-                return res.status(404).json({ 
-                    mensaje: 'No se encontraron lecturas para esa ruta y periodo' 
+                return res.status(404).json({
+                    mensaje: 'No se encontraron lecturas para esa ruta y periodo'
                 });
             }
 
@@ -562,7 +562,7 @@ const lecturasController = {
      */
     async generarFacturasParaLecturasSinFactura(req, res) {
         console.log('Generando facturas para lecturas sin factura v2...');
-        
+
         try {
             const { periodo, fecha_emision } = req.body;
             const modificado_por = req.usuario?.id || 1;
@@ -596,7 +596,7 @@ const lecturasController = {
             const lecturasSinFactura = result.rows || [];
 
             if (lecturasSinFactura.length === 0) {
-                return res.status(404).json({ 
+                return res.status(404).json({
                     mensaje: 'No se encontraron lecturas sin factura para el periodo especificado',
                     periodo
                 });
@@ -626,7 +626,7 @@ const lecturasController = {
                     };
 
                     const facturaResult = await generarFacturaAutomatica(facturaParams);
-                    
+
                     if (facturaResult.success) {
                         resultados.facturas_generadas++;
                         resultados.detalles.push({
@@ -751,7 +751,7 @@ const lecturasController = {
 
             // Calcular estadísticas
             const consumos = lecturas.map(l => l.consumo_m3);
-            const promedio_consumo = consumos.length > 0 
+            const promedio_consumo = consumos.length > 0
                 ? (consumos.reduce((a, b) => a + b, 0) / consumos.length).toFixed(2)
                 : 0;
 
@@ -832,7 +832,7 @@ const lecturasController = {
             });
 
             if (medidoresResult.rows.length === 0) {
-                return res.status(404).json({ 
+                return res.status(404).json({
                     error: 'Cliente no tiene medidores asignados',
                     cliente: {
                         id: Number(cliente.id),
@@ -925,12 +925,12 @@ const lecturasController = {
                 resumen: {
                     total_lecturas: lecturas.length,
                     consumo_total: consumoTotal.toFixed(2),
-                    promedio_por_lectura: lecturas.length > 0 
-                        ? (consumoTotal / lecturas.length).toFixed(2) 
+                    promedio_por_lectura: lecturas.length > 0
+                        ? (consumoTotal / lecturas.length).toFixed(2)
                         : 0,
                     monto_total_facturado: montoTotalFacturado.toFixed(2)
                 },
-                consumo_por_periodo: Object.values(consumoPorPeriodo).sort((a, b) => 
+                consumo_por_periodo: Object.values(consumoPorPeriodo).sort((a, b) =>
                     b.periodo.localeCompare(a.periodo)
                 ),
                 lecturas
@@ -1068,8 +1068,8 @@ const lecturasController = {
                     medidores_sin_lectura_mes: medidoresSinLectura,
                     lecturas_con_factura: Number(facturacion.con_factura),
                     lecturas_sin_factura: Number(facturacion.sin_factura),
-                    porcentaje_facturacion: totalLecturas > 0 
-                        ? ((Number(facturacion.con_factura) / totalLecturas) * 100).toFixed(2) 
+                    porcentaje_facturacion: totalLecturas > 0
+                        ? ((Number(facturacion.con_factura) / totalLecturas) * 100).toFixed(2)
                         : 0
                 },
                 consumo: {

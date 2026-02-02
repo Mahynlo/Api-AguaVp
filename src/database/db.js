@@ -15,11 +15,11 @@ import sqlite3 from 'sqlite3';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-// Para obtener __dirname en ES Modules
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// Para obtener __dirname en ES Modules (DESACTIVADO PARA BUILD CJS)
+// const __filename = fileURLToPath(import.meta.url);
+// const __dirname = path.dirname(__filename);
 
-const dbPath = path.join(__dirname, 'app.db');
+const dbPath = path.join(process.cwd(), 'src/database/app.db');
 
 const db = new (sqlite3.verbose()).Database(dbPath, (err) => {
     if (err) {

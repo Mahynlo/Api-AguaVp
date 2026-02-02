@@ -18,7 +18,7 @@
  * - modificarFactura: Actualización de facturas existentes
  */
 
-import dbTurso from '../../database/db-turso.js';
+import dbTurso from '../../database/db-sqlite.js';
 
 // Managers SSE - Configurados dinámicamente
 let sseManager = null;
@@ -36,7 +36,12 @@ const facturasController = {
     async generarFactura(req, res) {
         console.log('Generar factura v2:', req.body);
         try {
-            const { lectura_id, cliente_id, tarifa_id, consumo_m3, fecha_emision, modificado_por } = req.body;
+            let { lectura_id, cliente_id, tarifa_id, consumo_m3, fecha_emision, modificado_por } = req.body;
+
+            // Asignar modificado_por desde el token si no viene en el body
+            if (!modificado_por && req.usuario) {
+                modificado_por = req.usuario.id;
+            }
 
             if (!lectura_id || !cliente_id || !tarifa_id || consumo_m3 == null || !fecha_emision || !modificado_por) {
                 return res.status(400).json({ error: 'Faltan campos requeridos' });
@@ -44,20 +49,20 @@ const facturasController = {
 
             // Verificar si ya existe una factura para esta lectura
             const facturaExistenteQuery = `SELECT id FROM facturas WHERE lectura_id = ?`;
-            const facturaExistente = await dbTurso.execute({ 
-                sql: facturaExistenteQuery, 
-                args: [lectura_id] 
+            const facturaExistente = await dbTurso.execute({
+                sql: facturaExistenteQuery,
+                args: [lectura_id]
             });
-            
+
             if (facturaExistente.rows.length > 0) {
                 return res.status(409).json({ error: 'Ya existe una factura para este cliente en ese periodo.' });
             }
 
             // Verificar existencia de tarifa
             const tarifaExisteQuery = `SELECT id FROM tarifas WHERE id = ?`;
-            const tarifaResult = await dbTurso.execute({ 
-                sql: tarifaExisteQuery, 
-                args: [tarifa_id] 
+            const tarifaResult = await dbTurso.execute({
+                sql: tarifaExisteQuery,
+                args: [tarifa_id]
             });
             if (tarifaResult.rows.length === 0) {
                 return res.status(404).json({ error: 'La tarifa no existe' });
@@ -65,9 +70,9 @@ const facturasController = {
 
             // Verificar existencia de cliente
             const clienteExisteQuery = `SELECT id FROM clientes WHERE id = ?`;
-            const clienteResult = await dbTurso.execute({ 
-                sql: clienteExisteQuery, 
-                args: [cliente_id] 
+            const clienteResult = await dbTurso.execute({
+                sql: clienteExisteQuery,
+                args: [cliente_id]
             });
             if (clienteResult.rows.length === 0) {
                 return res.status(404).json({ error: 'El cliente no existe' });
@@ -75,9 +80,9 @@ const facturasController = {
 
             // Verificar existencia de lectura
             const lecturaExisteQuery = `SELECT id FROM lecturas WHERE id = ?`;
-            const lecturaResult = await dbTurso.execute({ 
-                sql: lecturaExisteQuery, 
-                args: [lectura_id] 
+            const lecturaResult = await dbTurso.execute({
+                sql: lecturaExisteQuery,
+                args: [lectura_id]
             });
             if (lecturaResult.rows.length === 0) {
                 return res.status(404).json({ error: 'La lectura no existe' });
@@ -90,9 +95,9 @@ const facturasController = {
                 WHERE tarifa_id = ? 
                 ORDER BY consumo_min ASC
             `;
-            const rangosResult = await dbTurso.execute({ 
-                sql: rangosQuery, 
-                args: [tarifa_id] 
+            const rangosResult = await dbTurso.execute({
+                sql: rangosQuery,
+                args: [tarifa_id]
             });
 
             if (rangosResult.rows.length === 0) {
@@ -223,9 +228,9 @@ const facturasController = {
 
         } catch (error) {
             console.error('Error al generar factura v2:', error);
-            res.status(500).json({ 
+            res.status(500).json({
                 error: 'Error interno del servidor',
-                details: error.message 
+                details: error.message
             });
         }
     },
@@ -236,7 +241,13 @@ const facturasController = {
     async obtenerFacturas(req, res) {
         try {
             const { id } = req.params;
-            const { periodo } = req.query;
+            const { periodo, page, limit, search, estado } = req.query;
+
+            // Defaults para paginación
+            const pageNum = parseInt(page) || 1;
+            const limitNum = parseInt(limit) || 60;
+            const offset = (pageNum - 1) * limitNum;
+            const searchTerm = search ? `%${search.toLowerCase()}%` : null;
 
             // Consulta optimizada con CTEs y JOINs eficientes adaptada para Turso
             const baseQuery = `
@@ -364,24 +375,65 @@ const facturasController = {
                                             AND (rt.consumo_max IS NULL OR CAST(l.consumo_m3 AS INTEGER) <= rt.consumo_max)
             `;
 
-            // Construir WHERE y ORDER clauses de forma eficiente
-            let whereClause = '';
+            // Construir WHERE clauses dinámicamente
+            let whereConditions = [];
             let queryParams = [];
+            let countParams = [];
 
             if (id) {
-                whereClause = 'WHERE f.id = ?';
+                whereConditions.push('f.id = ?');
                 queryParams.push(id);
-            } else if (periodo) {
-                whereClause = 'WHERE l.periodo = ?';
-                queryParams.push(periodo);
+            } else {
+                // Filtros generales
+                if (periodo) {
+                    whereConditions.push('l.periodo = ?');
+                    queryParams.push(periodo);
+                    countParams.push(periodo);
+                }
+
+                if (estado && estado.trim() !== '') {
+                    whereConditions.push('f.estado = ?');
+                    queryParams.push(estado);
+                    countParams.push(estado);
+                }
+
+                if (searchTerm) {
+                    whereConditions.push('(LOWER(c.nombre) LIKE ? OR LOWER(c.direccion) LIKE ? OR CAST(f.id AS TEXT) LIKE ? OR LOWER(m.numero_serie) LIKE ?)');
+                    queryParams.push(searchTerm, searchTerm, searchTerm, searchTerm);
+                    countParams.push(searchTerm, searchTerm, searchTerm, searchTerm);
+                }
+            }
+
+            const whereClause = whereConditions.length > 0 ? 'WHERE ' + whereConditions.join(' AND ') : '';
+
+            // 1. Si NO es petición por ID, obtener el TOTAL de registros para paginación
+            let totalItems = 0;
+            if (!id) {
+                const countQuery = `
+                    SELECT COUNT(*) as total 
+                    FROM facturas f
+                    JOIN clientes c ON f.cliente_id = c.id
+                    JOIN lecturas l ON f.lectura_id = l.id
+                    LEFT JOIN medidores m ON l.medidor_id = m.id
+                    ${whereClause}
+                `;
+
+                const countResult = await dbTurso.execute({
+                    sql: countQuery,
+                    args: countParams
+                });
+                totalItems = Number(countResult.rows[0].total);
             }
 
             // Usar ORDER BY solo cuando sea necesario
             const orderClause = id ? '' : 'ORDER BY f.fecha_emision DESC';
-            
-            // Agregar LIMIT para consultas grandes (opcional)
-            const limitClause = (!id && !periodo) ? 'LIMIT 1000' : '';
-            
+
+            // Agregar LIMIT y OFFSET para paginación
+            const limitClause = id ? '' : 'LIMIT ? OFFSET ?';
+            if (!id) {
+                queryParams.push(limitNum, offset);
+            }
+
             const query = `${baseQuery} ${whereClause} ${orderClause} ${limitClause}`;
 
             console.log('🚀 Consulta optimizada:', {
@@ -402,9 +454,9 @@ const facturasController = {
             }
 
             if (periodo && !id && result.rows.length === 0) {
-                return res.status(404).json({ 
+                return res.status(404).json({
                     error: 'No se encontraron facturas para el periodo especificado',
-                    periodo 
+                    periodo
                 });
             }
 
@@ -421,26 +473,26 @@ const facturasController = {
                 } = factura;
 
                 return {
-                    id: Number(id), 
-                    cliente_id: Number(cliente_id), 
-                    cliente_nombre, 
-                    direccion_cliente, 
+                    id: Number(id),
+                    cliente_id: Number(cliente_id),
+                    cliente_nombre,
+                    direccion_cliente,
                     telefono_cliente,
-                    lectura_id: Number(lectura_id), 
-                    consumo_m3: Number(consumo_m3), 
+                    lectura_id: Number(lectura_id),
+                    consumo_m3: Number(consumo_m3),
                     costo_por_m3: costo_por_m3 ? Number(costo_por_m3) : 0,
-                    total: Number(total), 
-                    saldo_pendiente: Number(saldo_pendiente), 
-                    estado, 
-                    fecha_emision, 
+                    total: Number(total),
+                    saldo_pendiente: Number(saldo_pendiente),
+                    estado,
+                    fecha_emision,
                     fecha_vencimiento,
-                    modificado_por: Number(modificado_por), 
-                    modificado_por_nombre, 
+                    modificado_por: Number(modificado_por),
+                    modificado_por_nombre,
                     fecha_creacion,
-                    tarifa_id: Number(tarifa_id), 
-                    tarifa_nombre, 
-                    periodo, 
-                    mes_facturado, 
+                    tarifa_id: Number(tarifa_id),
+                    tarifa_nombre,
+                    periodo,
+                    mes_facturado,
                     fecha_lectura,
                     medidor: {
                         id: medidor_id ? Number(medidor_id) : null,
@@ -453,7 +505,7 @@ const facturasController = {
                         consumo_m3: consumo_mes_anterior ? Number(consumo_mes_anterior) : null,
                         periodo: periodo_mes_anterior || null,
                         fecha_lectura: fecha_lectura_mes_anterior || null,
-                        diferencia_consumo: consumo_mes_anterior ? 
+                        diferencia_consumo: consumo_mes_anterior ?
                             (Number(consumo_m3) - Number(consumo_mes_anterior)) : null
                     }
                 };
@@ -465,35 +517,58 @@ const facturasController = {
             } else {
                 // Procesamiento optimizado para múltiples facturas
                 const facturasFormateadas = result.rows.map(formatearFactura);
-                
+
                 const response = {
                     facturas: facturasFormateadas,
-                    total: facturasFormateadas.length,
-                    // Metadata útil para el frontend
+                    pagination: {
+                        total: totalItems,
+                        page: pageNum,
+                        limit: limitNum,
+                        totalPages: Math.ceil(totalItems / limitNum)
+                    },
                     metadata: {
                         timestamp: new Date().toISOString(),
-                        version: 'v2.0-turso-optimized'
+                        version: 'v2.1-paginated'
                     }
                 };
-                
+
                 if (periodo) {
-                    response.filtros = {
-                        periodo,
-                        mes_facturado: facturasFormateadas.length > 0 ? 
-                            facturasFormateadas[0].mes_facturado : null
-                    };
+                    response.filtros = { periodo };
                 }
-                
-                // Estadísticas rápidas si hay datos
-                if (facturasFormateadas.length > 0) {
-                    response.estadisticas = {
-                        total_facturado: facturasFormateadas.reduce((sum, f) => sum + f.total, 0),
-                        total_pendiente: facturasFormateadas.reduce((sum, f) => sum + f.saldo_pendiente, 0),
-                        facturas_pendientes: facturasFormateadas.filter(f => f.estado === 'Pendiente').length,
-                        promedio_consumo: parseFloat((facturasFormateadas.reduce((sum, f) => sum + f.consumo_m3, 0) / facturasFormateadas.length).toFixed(2))
-                    };
-                }
-                
+
+                // Calcular estadísticas globales (no solo de la página actual)
+                // Usamos los mismos filtros que la query principal
+                const statsQuery = `
+                    SELECT 
+                        SUM(f.total) as monto_total,
+                        SUM(f.saldo_pendiente) as total_pendiente,
+                        COUNT(CASE WHEN f.estado = 'Pendiente' THEN 1 END) as cantidad_pendientes,
+                        COUNT(CASE WHEN f.estado IN ('Pagada', 'Pagado') THEN 1 END) as cantidad_pagadas,
+                        COUNT(CASE WHEN f.estado IN ('Vencida', 'Vencido') THEN 1 END) as cantidad_vencidas
+                    FROM facturas f
+                    JOIN clientes c ON f.cliente_id = c.id
+                    JOIN lecturas l ON f.lectura_id = l.id
+                    LEFT JOIN medidores m ON l.medidor_id = m.id
+                    ${whereClause}
+                `;
+
+                // Ejecutar query de estadísticas (usando los mismos parámetros de filtro que el countQuery)
+                // Ojo: countParams tiene los params necesarios para el WHERE
+                const statsResult = await dbTurso.execute({
+                    sql: statsQuery,
+                    args: countParams
+                });
+
+                const stats = statsResult.rows[0];
+
+                response.estadisticas = {
+                    monto_total: stats.monto_total || 0,
+                    total_pendiente: stats.total_pendiente || 0,
+                    cantidad_pendientes: stats.cantidad_pendientes || 0,
+                    cantidad_pagadas: stats.cantidad_pagadas || 0,
+                    cantidad_vencidas: stats.cantidad_vencidas || 0
+                };
+
                 return res.status(200).json(response);
             }
 
@@ -509,7 +584,12 @@ const facturasController = {
     async modificarFactura(req, res) {
         try {
             const { id } = req.params;
-            const { estado, total, modificado_por } = req.body;
+            let { estado, total, modificado_por } = req.body;
+
+            // Asignar modificado_por desde el token si no viene en el body
+            if (!modificado_por && req.usuario) {
+                modificado_por = req.usuario.id;
+            }
 
             if (!estado || !modificado_por) {
                 return res.status(400).json({ error: 'Faltan campos requeridos' });

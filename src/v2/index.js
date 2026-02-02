@@ -44,6 +44,8 @@ import eventsRoutes from './routes/events.js'; // Nueva ruta para SSE
 import dashboardRoutes from './routes/dashboard.js'; // Nueva ruta para Dashboard
 import reportsRoutes from './routes/reports.js'; // Nueva ruta para Reportes
 import deudoresRoutes from './routes/deudores.js'; // Nueva ruta para Deudores
+import oauthRoutes from './routes/oauthRoutes.js'; // Rutas OAuth 2.0
+import usersRoutes from './routes/users.js'; // Nueva ruta Gestión Usuarios
 
 const router = express.Router();
 
@@ -57,7 +59,9 @@ router.get('/', (req, res) => {
       message: 'API de Agua Potable - Versión 2.0 🚰 (SSE + Turso)',
       info: versionInfo,
       endpoints: {
+        oauth: '/api/v2/oauth', // Nuevo endpoint OAuth
         auth: '/api/v2/auth',
+        users: '/api/v2/users', // Nuevo endpoint Gestión Usuarios
         clientes: '/api/v2/clientes',
         medidores: '/api/v2/medidores',
         lecturas: '/api/v2/lecturas',
@@ -92,6 +96,7 @@ router.get('/', (req, res) => {
 // Rutas agrupadas de la v2
 router.use('/app', appRoutes);           // Rutas específicas de la app
 router.use('/auth', authRoutes);         // Autenticación
+router.use('/users', usersRoutes);       // Gestión de Usuarios
 router.use('/clientes', clientesRoutes); // Clientes
 router.use('/medidores', medidoresRoutes); // Medidores
 router.use('/tarifas', tarifasRoutes);   // Tarifas
@@ -103,6 +108,7 @@ router.use('/events', eventsRoutes);     // Nuevo: Server-Sent Events
 router.use('/dashboard', dashboardRoutes); // Nuevo: Dashboard
 router.use('/reports', reportsRoutes);     // Nuevo: Reportes
 router.use('/deudores', deudoresRoutes);     // Nuevo: Deudores
+router.use('/oauth', oauthRoutes);           // Nuevo: OAuth 2.0
 
 // Exporta el router de la v2
 export default router;

@@ -37,6 +37,15 @@
 import express from 'express';
 import authMiddleware from '../middlewares/authMiddleware.js';
 import clientesController, { setSSEManagers } from '../controllers/clientesController.js';
+import { 
+  validate,
+  crearClienteSchema,
+  actualizarClienteSchema,
+  clienteIdParamSchema,
+  buscarClienteSchema,
+  eliminarClienteSchema,
+  cambiarEstadoClienteSchema
+} from '../validators/index.js';
 
 const router = express.Router();
 
@@ -181,7 +190,7 @@ const configureSSE = (req, res, next) => {
  */
 
 // Rutas adaptadas de V1 con los mismos endpoints exactos
-router.post("/registrar", configureSSE, authMiddleware, clientesController.registrarCliente);
+router.post("/registrar", configureSSE, authMiddleware, validate(crearClienteSchema), clientesController.registrarCliente);
 
 /**
  * @swagger
@@ -332,7 +341,7 @@ router.get("/listar", configureSSE, authMiddleware, clientesController.obtenerCl
  *       500:
  *         description: Error interno del servidor
  */
-router.put("/modificar/:id", configureSSE, authMiddleware, clientesController.modificarCliente);
+router.put("/modificar/:id", configureSSE, authMiddleware, validate(clienteIdParamSchema, 'params'), validate(actualizarClienteSchema), clientesController.modificarCliente);
 
 /**
  * @swagger
@@ -610,7 +619,7 @@ router.get("/estadisticas", configureSSE, authMiddleware, clientesController.est
  *       500:
  *         description: Error interno del servidor
  */
-router.delete("/:id/eliminar", configureSSE, authMiddleware, clientesController.eliminarCliente);
+router.delete("/:id/eliminar", configureSSE, authMiddleware, validate(clienteIdParamSchema, 'params'), validate(eliminarClienteSchema), clientesController.eliminarCliente);
 
 /**
  * @swagger
@@ -651,7 +660,7 @@ router.delete("/:id/eliminar", configureSSE, authMiddleware, clientesController.
  *       500:
  *         description: Error interno del servidor
  */
-router.put("/:id/restaurar", configureSSE, authMiddleware, clientesController.restaurarCliente);
+router.put("/:id/restaurar", configureSSE, authMiddleware, validate(clienteIdParamSchema, 'params'), clientesController.restaurarCliente);
 
 /**
  * @swagger

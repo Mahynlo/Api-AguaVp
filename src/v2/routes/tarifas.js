@@ -61,6 +61,13 @@ import express from 'express';
 import authMiddleware from '../middlewares/authMiddleware.js';
 import appKeyMiddleware from '../middlewares/appKeyMiddleware.js';
 import tarifasController, { setSSEManagers } from '../controllers/tarifasController.js';
+import { 
+  validate,
+  crearTarifaSchema,
+  actualizarTarifaSchema,
+  tarifaIdParamSchema,
+  crearRangoTarifaSchema
+} from '../validators/index.js';
 
 const router = express.Router();
 
@@ -813,13 +820,13 @@ const configureSSE = (req, res, next) => {
 // Todas las rutas mantienen exactamente los mismos endpoints que V1
 // pero con arquitectura V2 mejorada (Turso + SSE)
 
-router.post("/registrar", appKeyMiddleware, configureSSE, authMiddleware, tarifasController.registrarTarifa);
-router.post("/registrar-rangos", appKeyMiddleware, configureSSE, authMiddleware, tarifasController.registrarRangosTarifa);
+router.post("/registrar", appKeyMiddleware, configureSSE, authMiddleware, validate(crearTarifaSchema), tarifasController.registrarTarifa);
+router.post("/registrar-rangos", appKeyMiddleware, configureSSE, authMiddleware, validate(crearRangoTarifaSchema), tarifasController.registrarRangosTarifa);
 
 router.get("/listar", appKeyMiddleware, configureSSE, authMiddleware, tarifasController.obtenerTodasLasTarifas);
 router.get("/listarHistorico", appKeyMiddleware, configureSSE, authMiddleware, tarifasController.obtenerHistorialTarifas);
 
-router.put("/modificar/:id", appKeyMiddleware, configureSSE, authMiddleware, tarifasController.modificarTarifa);
+router.put("/modificar/:id", appKeyMiddleware, configureSSE, authMiddleware, validate(tarifaIdParamSchema, 'params'), validate(actualizarTarifaSchema), tarifasController.modificarTarifa);
 router.put("/modificar-rangos/:id", appKeyMiddleware, configureSSE, authMiddleware, tarifasController.modificarRangosTarifa);
 
 /**

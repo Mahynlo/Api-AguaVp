@@ -63,6 +63,13 @@ import express from 'express';
 import authMiddleware from '../middlewares/authMiddleware.js';
 import appKeyMiddleware from '../middlewares/appKeyMiddleware.js';
 import lecturasController, { setSSEManagers } from '../controllers/lecturasController.js';
+import { 
+  validate,
+  registrarLecturaSchema,
+  actualizarLecturaSchema,
+  lecturaIdParamSchema,
+  buscarLecturaSchema
+} from '../validators/index.js';
 
 const router = express.Router();
 
@@ -438,7 +445,7 @@ const configureSSE = (req, res, next) => {
  *         description: Error interno del servidor
  */
 // Rutas adaptadas de V1 con los mismos endpoints exactos
-router.post("/registrar", appKeyMiddleware, authMiddleware, configureSSE, lecturasController.registrarLectura);
+router.post("/registrar", appKeyMiddleware, authMiddleware, validate(registrarLecturaSchema), configureSSE, lecturasController.registrarLectura);
 
 /**
  * @swagger
@@ -563,7 +570,7 @@ router.get("/listar", appKeyMiddleware, authMiddleware, configureSSE, lecturasCo
  *       500:
  *         description: Error interno del servidor
  */
-router.get("/listar/:id", appKeyMiddleware, authMiddleware, configureSSE, lecturasController.obtenerLecturas);
+router.get("/listar/:id", appKeyMiddleware, authMiddleware, validate(lecturaIdParamSchema, 'params'), configureSSE, lecturasController.obtenerLecturas);
 
 /**
  * @swagger
@@ -613,7 +620,7 @@ router.get("/listar/:id", appKeyMiddleware, authMiddleware, configureSSE, lectur
  *       500:
  *         description: Error interno del servidor
  */
-router.put("/modificar/:id", appKeyMiddleware, authMiddleware, configureSSE, lecturasController.modificarLectura);
+router.put("/modificar/:id", appKeyMiddleware, authMiddleware, validate(lecturaIdParamSchema, 'params'), validate(actualizarLecturaSchema), configureSSE, lecturasController.modificarLectura);
 
 /**
  * @swagger

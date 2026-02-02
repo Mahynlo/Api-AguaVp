@@ -22,7 +22,7 @@
  * - Registro completo en historial de cambios
  */
 
-import dbTurso from "../../database/db-turso.js";
+import dbTurso from "../../database/db-sqlite.js";
 
 // Helper para obtener los managers SSE
 let sseManager = null;
@@ -77,7 +77,7 @@ const clientesController = {
                 INSERT INTO clientes (nombre, direccion, telefono, ciudad, correo, estado_cliente, tarifa_id, modificado_por)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             `;
-            
+
             const insertResult = await dbTurso.execute({
                 sql: insertQuery,
                 args: [nombre, direccion, telefono, ciudad, correo, estado_cliente || 'Activo', tarifa_id || null, modificado_por]
@@ -149,11 +149,86 @@ const clientesController = {
         }
     },
 
-    // Obtener todos los clientes
+    // Obtener todos los clientes (con paginación y búsqueda)
     obtenerClientes: async (req, res) => {
         try {
-            const query = `SELECT * FROM clientes`;
+            const { page, limit, search, ciudad, estado } = req.query;
 
+            // Si se envían parámetros
+            if (page || limit || search || ciudad || estado) {
+                const pageNum = parseInt(page) || 1;
+                const limitNum = parseInt(limit) || 50;
+                const offset = (pageNum - 1) * limitNum;
+                const searchTerm = search ? `%${search}%` : null;
+
+                let countQuery = `SELECT COUNT(*) as total FROM clientes`;
+                let dataQuery = `SELECT * FROM clientes`;
+
+                let whereArgs = [];
+                let conditions = [];
+
+                if (searchTerm) {
+                    conditions.push(`(nombre LIKE ? OR telefono LIKE ? OR correo LIKE ? OR ciudad LIKE ?)`);
+                    whereArgs.push(searchTerm, searchTerm, searchTerm, searchTerm);
+                }
+
+                if (ciudad && ciudad !== 'All') {
+                    conditions.push(`ciudad = ?`);
+                    whereArgs.push(ciudad);
+                }
+
+                if (estado && estado !== 'All') {
+                    conditions.push(`estado_cliente = ?`);
+                    whereArgs.push(estado);
+                }
+
+                const whereClause = conditions.length > 0 ? ' WHERE ' + conditions.join(' AND ') : '';
+
+                // 1. Obtener total
+                const countResult = await dbTurso.execute({
+                    sql: countQuery + whereClause,
+                    args: whereArgs
+                });
+                const total = Number(countResult.rows[0].total);
+
+                // 2. Obtener datos
+                dataQuery += whereClause + ` ORDER BY nombre ASC LIMIT ? OFFSET ?`;
+                const dataArgs = [...whereArgs, limitNum, offset];
+
+                const result = await dbTurso.execute({
+                    sql: dataQuery,
+                    args: dataArgs
+                });
+
+                // Convertir BigInt a Number para compatibilidad JSON
+                const clientes = result.rows.map(cliente => ({
+                    id: Number(cliente.id),
+                    nombre: cliente.nombre,
+                    direccion: cliente.direccion,
+                    telefono: cliente.telefono,
+                    ciudad: cliente.ciudad,
+                    correo: cliente.correo,
+                    estado_cliente: cliente.estado_cliente,
+                    tarifa_id: cliente.tarifa_id ? Number(cliente.tarifa_id) : null,
+                    modificado_por: cliente.modificado_por ? Number(cliente.modificado_por) : null,
+                    fecha_creacion: cliente.fecha_creacion
+                }));
+
+                return res.json({
+                    success: true,
+                    data: clientes,
+                    pagination: {
+                        total,
+                        page: pageNum,
+                        limit: limitNum,
+                        totalPages: Math.ceil(total / limitNum)
+                    }
+                });
+            }
+
+            // Comportamiento Legacy (sin paginación, descarga todo)
+            // Útil si hay otros consumidores del API que no esperan paginación
+            const query = `SELECT * FROM clientes ORDER BY nombre ASC`;
             const result = await dbTurso.execute({ sql: query });
 
             // Convertir BigInt a Number para compatibilidad JSON
@@ -223,7 +298,7 @@ const clientesController = {
             const safeClienteId = Number(clienteId);
 
             console.log("Valores preparados para la consulta:", {
-                safeNombre, safeDireccion, safeTelefono, safeCiudad, 
+                safeNombre, safeDireccion, safeTelefono, safeCiudad,
                 safeCorreo, safeEstadoCliente, safeTarifaId, safeModificadoPor, safeClienteId
             });
 
@@ -304,7 +379,7 @@ const clientesController = {
                                     sql: `UPDATE medidores SET cliente_id = NULL WHERE id = ?`,
                                     args: [mid]
                                 });
-                                
+
                                 cambios[`medidor_${mid}`] = {
                                     antes: Number(medidor.cliente_id),
                                     despues: null
@@ -314,7 +389,7 @@ const clientesController = {
                     } catch (err) {
                         errores.push(`Error al liberar medidor ${mid}: ${err.message}`);
                     }
-                    
+
                     completadas++;
                     if (completadas === totalOperaciones) {
                         return await finalizarOperacion();
@@ -336,7 +411,7 @@ const clientesController = {
                         } else {
                             const medidor = medidorResult.rows[0];
                             const medidorClienteId = medidor.cliente_id ? Number(medidor.cliente_id) : null;
-                            
+
                             if (medidorClienteId && medidorClienteId !== parseInt(clienteId)) {
                                 errores.push(`Medidor ${mid} ya está asignado a otro cliente`);
                             } else if (medidorClienteId !== parseInt(clienteId)) {
@@ -344,7 +419,7 @@ const clientesController = {
                                     sql: `UPDATE medidores SET cliente_id = ? WHERE id = ?`,
                                     args: [clienteId, mid]
                                 });
-                                
+
                                 cambios[`medidor_${mid}`] = {
                                     antes: medidorClienteId,
                                     despues: parseInt(clienteId)
@@ -354,7 +429,7 @@ const clientesController = {
                     } catch (err) {
                         errores.push(`Error al asignar medidor ${mid}: ${err.message}`);
                     }
-                    
+
                     completadas++;
                     if (completadas === totalOperaciones) {
                         return await finalizarOperacion();
@@ -472,7 +547,7 @@ const clientesController = {
 
             // Verificar si ya tiene esa tarifa asignada
             if (tarifaAnterior === Number(tarifa_id)) {
-                return res.status(400).json({ 
+                return res.status(400).json({
                     error: "El cliente ya tiene esta tarifa asignada",
                     tarifa_actual: tarifaAnterior
                 });
@@ -716,8 +791,8 @@ const clientesController = {
                     clientes_con_medidores: clientesConMedidores,
                     clientes_sin_medidores: clientesSinMedidores,
                     total_medidores_asignados: totalMedidoresAsignados,
-                    porcentaje_con_medidores: totalClientes > 0 
-                        ? ((clientesConMedidores / totalClientes) * 100).toFixed(2) 
+                    porcentaje_con_medidores: totalClientes > 0
+                        ? ((clientesConMedidores / totalClientes) * 100).toFixed(2)
                         : 0
                 },
                 fecha_generacion: new Date().toISOString()
@@ -765,7 +840,7 @@ const clientesController = {
 
             const facturasPendientes = facturasResult.rows[0].total;
             if (facturasPendientes > 0) {
-                return res.status(400).json({ 
+                return res.status(400).json({
                     error: "No se puede eliminar el cliente porque tiene facturas pendientes",
                     facturas_pendientes: facturasPendientes
                 });
@@ -809,19 +884,25 @@ const clientesController = {
 
             // Emitir evento SSE
             if (notificationManager) {
-                notificationManager.notifyAll({
-                    type: 'cliente_eliminado',
-                    data: {
-                        cliente_id: id,
-                        nombre: cliente.nombre,
-                        razon: razon || 'Sin razón especificada'
-                    }
-                });
+                try {
+                    notificationManager.alertaSistema(
+                        `Cliente "${cliente.nombre}" eliminado`,
+                        'warning',
+                        {
+                            cliente_id: Number(id),
+                            nombre: cliente.nombre,
+                            razon: razon || 'Sin razón especificada',
+                            accion: 'cliente_eliminado'
+                        }
+                    );
+                } catch (sseError) {
+                    console.warn('Error enviando notificación SSE:', sseError);
+                }
             }
 
-            res.json({ 
+            res.json({
                 message: "Cliente eliminado correctamente",
-                cliente_id: id 
+                cliente_id: id
             });
 
         } catch (err) {
@@ -850,7 +931,7 @@ const clientesController = {
             const cliente = clienteResult.rows[0];
 
             if (cliente.estado_cliente !== 'Eliminado') {
-                return res.status(400).json({ 
+                return res.status(400).json({
                     error: "El cliente no está eliminado",
                     estado_actual: cliente.estado_cliente
                 });
@@ -895,18 +976,24 @@ const clientesController = {
 
             // Emitir evento SSE
             if (notificationManager) {
-                notificationManager.notifyAll({
-                    type: 'cliente_restaurado',
-                    data: {
-                        cliente_id: id,
-                        nombre: cliente.nombre
-                    }
-                });
+                try {
+                    notificationManager.alertaSistema(
+                        `Cliente "${cliente.nombre}" restaurado`,
+                        'success',
+                        {
+                            cliente_id: Number(id),
+                            nombre: cliente.nombre,
+                            accion: 'cliente_restaurado'
+                        }
+                    );
+                } catch (sseError) {
+                    console.warn('Error enviando notificación SSE:', sseError);
+                }
             }
 
-            res.json({ 
+            res.json({
                 message: "Cliente restaurado correctamente",
-                cliente_id: id 
+                cliente_id: id
             });
 
         } catch (err) {

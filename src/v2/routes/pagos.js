@@ -61,6 +61,12 @@ import express from 'express';
 import authMiddleware from '../middlewares/authMiddleware.js';
 import appKeyMiddleware from '../middlewares/appKeyMiddleware.js';
 import pagosController, { setSSEManagers } from '../controllers/pagosController.js';
+import {
+    validate,
+    registrarPagoSchema,
+    actualizarPagoSchema,
+    pagoIdParamSchema
+} from '../validators/index.js';
 
 const router = express.Router();
 
@@ -80,7 +86,7 @@ const configureSSE = (req, res, next) => {
     if (!sseManagerConfigured && req.app) {
         const sseManager = req.app.get('sseManager');
         const notificationManager = req.app.get('notificationManager');
-        
+
         if (sseManager && notificationManager) {
             setSSEManagers(sseManager, notificationManager);
             sseManagerConfigured = true;
@@ -549,7 +555,7 @@ const configureSSE = (req, res, next) => {
  *                   example: "Error en transacción de base de datos"
  */
 // Rutas adaptadas de V1 con los mismos endpoints exactos
-router.post('/registrar', appKeyMiddleware, authMiddleware, configureSSE, pagosController.registrarPago);
+router.post('/registrar', appKeyMiddleware, authMiddleware, validate(registrarPagoSchema), configureSSE, pagosController.registrarPago);
 
 /**
  * @swagger
@@ -711,7 +717,7 @@ router.get('/listar', appKeyMiddleware, authMiddleware, configureSSE, pagosContr
  *       500:
  *         description: Error interno del servidor
  */
-router.get('/listar/:id', appKeyMiddleware, authMiddleware, configureSSE, pagosController.obtenerPagos);
+router.get('/listar/:id', appKeyMiddleware, authMiddleware, validate(pagoIdParamSchema, 'params'), configureSSE, pagosController.obtenerPagos);
 
 /**
  * @swagger
@@ -827,7 +833,7 @@ router.get('/listar/:id', appKeyMiddleware, authMiddleware, configureSSE, pagosC
  *       500:
  *         description: Error interno del servidor
  */
-router.put('/modificar/:id', appKeyMiddleware, authMiddleware, configureSSE, pagosController.modificarPago);
+router.put('/modificar/:id', appKeyMiddleware, authMiddleware, validate(pagoIdParamSchema, 'params'), validate(actualizarPagoSchema), configureSSE, pagosController.modificarPago);
 
 // ===================================================================
 // EXPORT MODULE

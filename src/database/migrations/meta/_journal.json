@@ -43,6 +43,34 @@
       "when": 1766811932513,
       "tag": "0005_clever_micromax",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1767754632454,
+      "tag": "0006_tricky_chamber",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1768463860692,
+      "tag": "0007_talented_colossus",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1768797000000,
+      "tag": "0008_add_convenio_triggers",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1769929840448,
+      "tag": "0009_motionless_skreet",
+      "breakpoints": true
     }
   ]
 }

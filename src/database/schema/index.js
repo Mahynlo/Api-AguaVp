@@ -7,6 +7,7 @@ export * from './tarifas.js';
 export * from './configuracion_servicio.js';
 export * from './cortes_servicio.js';
 export * from './convenios_pago.js';
+export * from './parcialidades_convenio.js';
 export * from './lecturas.js';
 export * from './facturas.js';
 export * from './rutas.js';

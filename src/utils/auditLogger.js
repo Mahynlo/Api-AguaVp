@@ -11,7 +11,7 @@
  * await logSecurityEvent('login', { usuario_id: 1, ip: '127.0.0.1', exitoso: true });
  */
 
-import dbTurso from "../database/db-turso.js";
+import dbTurso from "../database/db-sqlite.js";
 
 /**
  * Tipos de eventos de seguridad

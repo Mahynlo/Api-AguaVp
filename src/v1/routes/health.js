@@ -16,8 +16,9 @@
 
 import express from 'express';
 import healthController from '../controllers/healthController.js';
-import appKeyMiddleware from '../middlewares/appKeyMiddleware.js';
-import authMiddleware from '../middlewares/authMiddleware.js';
+// Usar middlewares V2 para evitar dependencias de SQLite
+import appKeyMiddleware from '../../v2/middlewares/appKeyMiddleware.js';
+import authMiddleware from '../../v2/middlewares/authMiddleware.js';
 
 const router = express.Router();
 
