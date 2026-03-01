@@ -91,8 +91,9 @@ const userController = {
             const hashedPassword = await bcrypt.hash(contrasena, 10);
 
             const insertQuery = `
-                INSERT INTO usuarios (correo, nombre, contraseña, username, rol, estado_usuario)
-                VALUES (?, ?, ?, ?, ?, 'Activo')
+                INSERT INTO usuarios
+                    (correo, nombre, contraseña, username, rol, estado_usuario, requiere_cambio_password)
+                VALUES (?, ?, ?, ?, ?, 'Activo', 1)
             `;
 
             await dbTurso.execute({
@@ -100,7 +101,11 @@ const userController = {
                 args: [correo, nombre, hashedPassword, username, rol]
             });
 
-            res.status(201).json({ mensaje: "Usuario creado correctamente" });
+            res.status(201).json({
+                success: true,
+                mensaje: "Usuario creado correctamente",
+                requiere_cambio_password: true
+            });
 
         } catch (error) {
             console.error("Error creando usuario:", error);
@@ -129,6 +134,9 @@ const userController = {
                 const hashed = await bcrypt.hash(contrasena, 10);
                 updates.push("contraseña = ?");
                 args.push(hashed);
+                // Si el admin cambia la contraseña de otro usuario, marcarlo para que
+                // la cambie en su próximo login.
+                updates.push("requiere_cambio_password = 1");
             }
 
             if (updates.length === 0) return res.status(400).json({ error: "Nada que actualizar" });
@@ -169,11 +177,22 @@ const userController = {
             await dbTurso.execute({ sql: query, args: [eliminado_por, razon || 'Eliminación administrativa', id] });
 
             // Cerrar sesiones activas del usuario eliminado
-            // (Asumiendo que authController tiene función para esto o lo hacemos directo)
-            const closeSessions = `UPDATE sesiones SET activo = 0 WHERE usuario_id = ?`;
-            await dbTurso.execute({ sql: closeSessions, args: [id] });
+            await dbTurso.execute({
+                sql: `UPDATE sesiones SET activo = 0, fecha_fin = datetime('now') WHERE usuario_id = ?`,
+                args: [id]
+            });
 
-            res.json({ mensaje: "Usuario eliminado correctamente" });
+            // Revocar refresh tokens del usuario eliminado.
+            // Aunque authController.refresh verifica estado_usuario, revocar explícitamente
+            // garantiza que los tokens queden inválidos incluso si se reactiva la cuenta sin relogin.
+            await dbTurso.execute({
+                sql: `UPDATE refresh_tokens
+                      SET revocado = 1, revocado_en = datetime('now'), razon_revocacion = 'usuario_eliminado'
+                      WHERE usuario_id = ? AND revocado = 0`,
+                args: [id]
+            });
+
+            res.json({ success: true, mensaje: "Usuario eliminado correctamente" });
 
         } catch (error) {
             console.error("Error eliminando usuario:", error);
@@ -191,9 +210,14 @@ const userController = {
                 SET estado_usuario = 'Activo', 
                     fecha_eliminacion = NULL,
                     eliminado_por = NULL,
-                    razon_eliminacion = NULL
+                    razon_eliminacion = NULL,
+                    intentos_fallidos = 0,
+                    bloqueado_hasta = NULL
                 WHERE id = ?
             `;
+            // intentos_fallidos y bloqueado_hasta se limpian para que el usuario
+            // pueda iniciar sesión inmediatamente sin estar aún bloqueado por
+            // intentos fallidos previos a su eliminación/desactivación.
 
             await dbTurso.execute({ sql: query, args: [id] });
 

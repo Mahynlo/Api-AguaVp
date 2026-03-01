@@ -7,7 +7,7 @@
  * Gestiona la creación y seguimiento de acuerdos de pago por parcialidades.
  */
 
-import dbTurso from "../../database/db-sqlite.js";
+import dbTurso, { sqlite } from "../../database/db-sqlite.js";
 import { addMonths, format, parseISO } from 'date-fns';
 
 const conveniosController = {
@@ -40,12 +40,15 @@ const conveniosController = {
             if (infoRes.rows.length === 0) return res.status(404).json({ error: "Medidor no encontrado" });
             const cliente_id = infoRes.rows[0].cliente_id;
 
+            // Deuda calculada SOLO para este medidor (no todo el cliente)
+            // Evita bloquear facturas de otros medidores del mismo cliente
             const deudaQuery = `
-                SELECT SUM(saldo_pendiente) as total 
-                FROM facturas 
-                WHERE cliente_id = ? AND estado != 'Pagado'
+                SELECT SUM(f.saldo_pendiente) as total
+                FROM facturas f
+                JOIN lecturas l ON f.lectura_id = l.id
+                WHERE l.medidor_id = ? AND f.estado NOT IN ('Pagado', 'En Convenio')
             `;
-            const deudaRes = await dbTurso.execute({ sql: deudaQuery, args: [cliente_id] });
+            const deudaRes = await dbTurso.execute({ sql: deudaQuery, args: [medidor_id] });
             const deudaTotal = Number(deudaRes.rows[0]?.total || 0);
 
             if (deudaTotal <= 0) {
@@ -60,104 +63,72 @@ const conveniosController = {
                 return res.status(400).json({ error: "El monto inicial supera la deuda total" });
             }
 
-            // 3. Crear Registro de Convenio
+            // 3-6. OPERACIÓN ATÓMICA: convenio + facturas + medidor + parcialidades.
+            // Si falla cualquier paso, SQLite hace rollback completo.
+            // Ninguno de los pasos queda a medias en la BD.
             const fechaInicio = new Date();
-            // Calcular fecha fin estimada (simple: meses)
             const mesesSumar = periodicidad === 'quincenal' ? Math.ceil(numero_parcialidades / 2) : numero_parcialidades;
             const fechaFin = addMonths(fechaInicio, mesesSumar);
+            // Redondear a 2 decimales para evitar acumulación de error flotante en las cuotas
+            const montoPorParcialidad = Math.round((saldoDiferir / numero_parcialidades) * 100) / 100;
 
-            const insertQuery = `
-                INSERT INTO convenios_pago (
-                    cliente_id, medidor_id, monto_total, monto_inicial,
-                    saldo_restante, numero_parcialidades, periodicidad,
-                    estado, fecha_inicio, fecha_fin, autorizado_por, observaciones
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'Activo', ?, ?, ?, ?)
-            `;
-
-            const args = [
-                cliente_id,
-                medidor_id,
-                deudaTotal,
-                Number(monto_inicial),
-                saldoDiferir,
-                numero_parcialidades,
-                periodicidad || 'mensual',
-                format(fechaInicio, 'yyyy-MM-dd'),
-                format(fechaFin, 'yyyy-MM-dd'),
-                autorizado_por,
-                observaciones
-            ];
-
-            const result = await dbTurso.execute({ sql: insertQuery, args });
-            const convenioId = Number(result.lastInsertRowid);
-
-            // 4. Marcar facturas como "En Convenio" para prevenir doble pago
-            console.log(`Marcando facturas del cliente ${cliente_id} como "En Convenio"...`);
-            const updateFacturasQuery = `
-                UPDATE facturas 
-                SET convenio_id = ?, estado = 'En Convenio'
-                WHERE cliente_id = ? 
-                AND estado IN ('Pendiente', 'Vencida')
-                AND saldo_pendiente > 0
-            `;
-            const facturasResult = await dbTurso.execute({
-                sql: updateFacturasQuery,
-                args: [convenioId, cliente_id]
-            });
-            console.log(`${facturasResult.rowsAffected} facturas marcadas como "En Convenio"`);
-
-            // 5. Actualizar Estado del Medidor (Reconexión administrativa)
-            // Ya NO se usa 'En Convenio', se pasa a 'Activo' si estaba cortado.
-            // Si ya estaba activo, se mantiene activo.
-
-            // Validar estado actual antes de cambiar
-            const medidorCheck = await dbTurso.execute({ sql: `SELECT estado_servicio FROM medidores WHERE id = ?`, args: [medidor_id] });
-            if (medidorCheck.rows.length > 0 && medidorCheck.rows[0].estado_servicio === 'Cortado') {
-                await dbTurso.execute({
-                    sql: `UPDATE medidores SET estado_servicio = 'Activo' WHERE id = ?`,
-                    args: [medidor_id]
-                });
-            }
-
-            // 5. Generar Parcialidades Automáticamente
-            const montoPorParcialidad = saldoDiferir / numero_parcialidades;
+            let convenioId;
             const parcialidades = [];
 
-            for (let i = 1; i <= numero_parcialidades; i++) {
-                // Calcular fecha de vencimiento según periodicidad
-                let fechaVencimiento;
-                if (periodicidad === 'quincenal') {
-                    // Cada 15 días
-                    fechaVencimiento = new Date(fechaInicio);
-                    fechaVencimiento.setDate(fechaVencimiento.getDate() + (i * 15));
-                } else {
-                    // Mensual por defecto
-                    fechaVencimiento = addMonths(fechaInicio, i);
-                }
+            const transaccionConvenio = sqlite.transaction(() => {
+                // Insertar convenio
+                const r = sqlite.prepare(`
+                    INSERT INTO convenios_pago (
+                        cliente_id, medidor_id, monto_total, monto_inicial,
+                        saldo_restante, numero_parcialidades, periodicidad,
+                        estado, fecha_inicio, fecha_fin, autorizado_por, observaciones
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'Activo', ?, ?, ?, ?)
+                `).run(
+                    cliente_id, medidor_id, deudaTotal, Number(monto_inicial),
+                    saldoDiferir, numero_parcialidades, periodicidad || 'mensual',
+                    format(fechaInicio, 'yyyy-MM-dd'), format(fechaFin, 'yyyy-MM-dd'),
+                    autorizado_por, observaciones || null
+                );
+                convenioId = Number(r.lastInsertRowid);
 
-                const insertParcialidad = `
+                // Marcar SOLO las facturas de este medidor como 'En Convenio'
+                // (no bloquea facturas de otros medidores del mismo cliente)
+                sqlite.prepare(`
+                    UPDATE facturas
+                    SET convenio_id = ?, estado = 'En Convenio'
+                    WHERE estado IN ('Pendiente', 'Parcial', 'Vencida')
+                      AND saldo_pendiente > 0
+                      AND lectura_id IN (SELECT id FROM lecturas WHERE medidor_id = ?)
+                `).run(convenioId, medidor_id);
+
+                // Reconectar administrativamente si el medidor estaba cortado
+                sqlite.prepare(`
+                    UPDATE medidores SET estado_servicio = 'Activo'
+                    WHERE id = ? AND estado_servicio = 'Cortado'
+                `).run(medidor_id);
+
+                // Insertar todas las parcialidades (reutiliza prepared statement en el loop)
+                const stmtParcialidad = sqlite.prepare(`
                     INSERT INTO parcialidades_convenio (
-                        convenio_id, numero_parcialidad, monto_esperado, 
-                        fecha_vencimiento, estado
+                        convenio_id, numero_parcialidad, monto_esperado, fecha_vencimiento, estado
                     ) VALUES (?, ?, ?, ?, 'Pendiente')
-                `;
+                `);
 
-                await dbTurso.execute({
-                    sql: insertParcialidad,
-                    args: [
-                        convenioId,
-                        i,
-                        montoPorParcialidad,
-                        format(fechaVencimiento, 'yyyy-MM-dd')
-                    ]
-                });
+                for (let i = 1; i <= numero_parcialidades; i++) {
+                    let fechaVencimiento;
+                    if (periodicidad === 'quincenal') {
+                        fechaVencimiento = new Date(fechaInicio);
+                        fechaVencimiento.setDate(fechaVencimiento.getDate() + (i * 15));
+                    } else {
+                        fechaVencimiento = addMonths(fechaInicio, i);
+                    }
+                    const fechaVencStr = format(fechaVencimiento, 'yyyy-MM-dd');
+                    stmtParcialidad.run(convenioId, i, montoPorParcialidad, fechaVencStr);
+                    parcialidades.push({ numero: i, monto: montoPorParcialidad, vencimiento: fechaVencStr });
+                }
+            });
 
-                parcialidades.push({
-                    numero: i,
-                    monto: montoPorParcialidad,
-                    vencimiento: format(fechaVencimiento, 'yyyy-MM-dd')
-                });
-            }
+            transaccionConvenio();
 
             res.status(201).json({
                 success: true,
@@ -241,65 +212,45 @@ const conveniosController = {
 
             console.log(`Pagando parcialidad ${parcialidad_id}: Monto ${monto}, Cambio ${cambio}`);
 
-            // 4. Registrar pago en tabla pagos (con parcialidad_id)
-            const insertPagoQuery = `
-                INSERT INTO pagos (
-                    parcialidad_id, monto, cantidad_entregada, cambio,
-                    metodo_pago, fecha_pago, comentario, modificado_por
-                ) VALUES (?, ?, ?, ?, ?, datetime('now'), ?, ?)
-            `;
+            // 4-7. OPERACIÓN ATÓMICA: pago + parcialidad + saldo de convenio + cierre.
+            // Si falla cualquier paso, SQLite hace rollback completo.
+            const nuevoSaldo = Math.round((Number(parcialidad.saldo_restante) - monto) * 100) / 100;
+            let pagoId;
 
-            const pagoResult = await dbTurso.execute({
-                sql: insertPagoQuery,
-                args: [parcialidad_id, monto, cantidadEntregada, cambio,
-                    metodo_pago, comentario, modificado_por]
+            const transaccionPago = sqlite.transaction(() => {
+                // Registrar pago vinculado a la parcialidad
+                const r = sqlite.prepare(`
+                    INSERT INTO pagos (parcialidad_id, monto, cantidad_entregada, cambio, metodo_pago, fecha_pago, comentario, modificado_por)
+                    VALUES (?, ?, ?, ?, ?, datetime('now'), ?, ?)
+                `).run(parcialidad_id, monto, cantidadEntregada, cambio, metodo_pago, comentario || null, modificado_por);
+                pagoId = Number(r.lastInsertRowid);
+
+                // Marcar parcialidad como pagada
+                sqlite.prepare(`
+                    UPDATE parcialidades_convenio
+                    SET estado = 'Pagada', monto_pagado = ?, fecha_pago = datetime('now'), pago_id = ?
+                    WHERE id = ?
+                `).run(monto, pagoId, parcialidad_id);
+
+                // Actualizar saldo restante del convenio
+                sqlite.prepare(`
+                    UPDATE convenios_pago SET saldo_restante = ? WHERE id = ?
+                `).run(nuevoSaldo, parcialidad.convenio_id);
+
+                // Si el convenio quedó en cero, cerrarlo y liberar las facturas
+                if (nuevoSaldo <= 0) {
+                    sqlite.prepare(`
+                        UPDATE convenios_pago SET estado = 'Finalizado' WHERE id = ?
+                    `).run(parcialidad.convenio_id);
+
+                    sqlite.prepare(`
+                        UPDATE facturas SET estado = 'Pagado', saldo_pendiente = 0
+                        WHERE convenio_id = ?
+                    `).run(parcialidad.convenio_id);
+                }
             });
 
-            const pagoId = Number(pagoResult.lastInsertRowid);
-
-            // 5. Actualizar parcialidad
-            await dbTurso.execute({
-                sql: `UPDATE parcialidades_convenio 
-                      SET estado = 'Pagada', 
-                          monto_pagado = ?,
-                          fecha_pago = datetime('now'),
-                          pago_id = ?
-                      WHERE id = ?`,
-                args: [monto, pagoId, parcialidad_id]
-            });
-
-            // 6. Actualizar saldo_restante del convenio
-            const nuevoSaldo = Number(parcialidad.saldo_restante) - monto;
-            await dbTurso.execute({
-                sql: `UPDATE convenios_pago 
-                      SET saldo_restante = ?
-                      WHERE id = ?`,
-                args: [nuevoSaldo, parcialidad.convenio_id]
-            });
-
-            console.log(`Convenio ${parcialidad.convenio_id}: Nuevo saldo ${nuevoSaldo}`);
-
-            // 7. Si convenio completado, marcar facturas como pagadas
-            if (nuevoSaldo <= 0) {
-                console.log(`Convenio ${parcialidad.convenio_id} COMPLETADO - Marcando facturas como pagadas`);
-
-                await dbTurso.execute({
-                    sql: `UPDATE convenios_pago 
-                          SET estado = 'Finalizado'
-                          WHERE id = ?`,
-                    args: [parcialidad.convenio_id]
-                });
-
-                // Marcar facturas como pagadas
-                const updateFacturasResult = await dbTurso.execute({
-                    sql: `UPDATE facturas 
-                          SET estado = 'Pagado', saldo_pendiente = 0
-                          WHERE convenio_id = ?`,
-                    args: [parcialidad.convenio_id]
-                });
-
-                console.log(`${updateFacturasResult.rowsAffected} facturas marcadas como pagadas`);
-            }
+            transaccionPago();
 
             return res.status(201).json({
                 mensaje: 'Parcialidad pagada exitosamente',

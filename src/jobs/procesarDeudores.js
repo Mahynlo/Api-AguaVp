@@ -21,6 +21,31 @@ export const setNotificationManager = (manager) => {
 };
 
 /**
+ * Marca como 'Vencida' todas las facturas cuya fecha_vencimiento ya pasó
+ * y que aún tienen saldo pendiente (Pendiente o Parcial).
+ *
+ * Este paso es OBLIGATORIO antes de analizar candidatos a corte, ya que
+ * todos los módulos de deudores filtran por estado = 'Vencida'.
+ *
+ * @returns {Promise<number>} Cantidad de facturas marcadas como Vencida
+ */
+export const marcarFacturasVencidas = async () => {
+    const updateQuery = `
+        UPDATE facturas
+        SET estado = 'Vencida'
+        WHERE fecha_vencimiento < date('now')
+          AND estado IN ('Pendiente', 'Parcial')
+          AND saldo_pendiente > 0
+    `;
+    const result = await dbTurso.execute({ sql: updateQuery, args: [] });
+    const cantidad = Number(result.rowsAffected || 0);
+    if (cantidad > 0) {
+        console.log(`[Job] ${cantidad} factura(s) marcadas como 'Vencida'`);
+    }
+    return cantidad;
+};
+
+/**
  * Lógica principal del análisis
  */
 export const analizarCarteraVencida = async () => {
@@ -28,13 +53,17 @@ export const analizarCarteraVencida = async () => {
     console.log(`[Job] Iniciando análisis de cartera: ${timestamp}`);
 
     try {
-        // 1. Obtener reglas de configuración
+        // 1. PASO CRÍTICO: Marcar facturas vencidas antes de cualquier análisis
+        //    Sin este paso, candidatos y reportes siempre devuelven cero.
+        await marcarFacturasVencidas();
+
+        // 2. Obtener reglas de configuración
         const configQuery = `SELECT * FROM configuracion_servicio ORDER BY id DESC LIMIT 1`;
         const configRes = await dbTurso.execute({ sql: configQuery, args: [] });
         const umbralCorte = configRes.rows.length > 0 ? configRes.rows[0].facturas_para_corte : 4;
         const diasGracia = configRes.rows.length > 0 ? (configRes.rows[0].dias_gracia || 0) : 0;
 
-        // 2. Contar candidatos a corte (CORREGIDO: Vincula factura → lectura → medidor)
+        // 3. Contar candidatos a corte (Vincula factura → lectura → medidor)
         const candidatosQuery = `
             SELECT COUNT(*) as total
             FROM (
@@ -55,7 +84,7 @@ export const analizarCarteraVencida = async () => {
         const candidatosRes = await dbTurso.execute({ sql: candidatosQuery, args: [diasGracia, umbralCorte] });
         const numCandidatos = candidatosRes.rows[0]?.total || 0;
 
-        // 3. Obtener deuda total vencida
+        // 4. Obtener deuda total vencida
         const deudaQuery = `SELECT SUM(saldo_pendiente) as total FROM facturas WHERE estado = 'Vencida'`;
         const deudaRes = await dbTurso.execute({ sql: deudaQuery, args: [] });
         const deudaTotal = deudaRes.rows[0]?.total || 0;

@@ -6,6 +6,7 @@ import { tarifas } from './tarifas.js';
 
 export const clientes = sqliteTable('clientes', {
   id: integer('id').primaryKey({ autoIncrement: true }),
+  numero_predio: text('numero_predio').unique(),  // Identificador único de la toma/predio
   nombre: text('nombre').notNull(),
   direccion: text('direccion').notNull(),
   telefono: text('telefono').notNull(),
@@ -26,6 +27,8 @@ export const medidores = sqliteTable('medidores', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   cliente_id: integer('cliente_id').references(() => clientes.id),
   numero_serie: text('numero_serie').notNull().unique(),
+  marca: text('marca'),
+  modelo: text('modelo'),
   ubicacion: text('ubicacion'),
   fecha_instalacion: text('fecha_instalacion'),
   latitud: numeric('latitud'),

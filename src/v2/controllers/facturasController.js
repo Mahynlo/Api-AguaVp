@@ -19,6 +19,7 @@
  */
 
 import dbTurso from '../../database/db-sqlite.js';
+import { calcularTarifaDesdeDB } from '../../utils/tarifaUtils.js';
 
 // Managers SSE - Configurados dinámicamente
 let sseManager = null;
@@ -36,12 +37,8 @@ const facturasController = {
     async generarFactura(req, res) {
         console.log('Generar factura v2:', req.body);
         try {
-            let { lectura_id, cliente_id, tarifa_id, consumo_m3, fecha_emision, modificado_por } = req.body;
-
-            // Asignar modificado_por desde el token si no viene en el body
-            if (!modificado_por && req.usuario) {
-                modificado_por = req.usuario.id;
-            }
+            const { lectura_id, cliente_id, tarifa_id, consumo_m3, fecha_emision } = req.body;
+            const modificado_por = req.usuario.id; // Siempre desde el token JWT
 
             if (!lectura_id || !cliente_id || !tarifa_id || consumo_m3 == null || !fecha_emision || !modificado_por) {
                 return res.status(400).json({ error: 'Faltan campos requeridos' });
@@ -88,64 +85,29 @@ const facturasController = {
                 return res.status(404).json({ error: 'La lectura no existe' });
             }
 
-            // Obtener rangos de la tarifa ordenados ascendentemente
-            const rangosQuery = `
-                SELECT consumo_min, consumo_max, precio_por_m3 
-                FROM rangos_tarifas 
-                WHERE tarifa_id = ? 
-                ORDER BY consumo_min ASC
-            `;
-            const rangosResult = await dbTurso.execute({
-                sql: rangosQuery,
-                args: [tarifa_id]
-            });
-
-            if (rangosResult.rows.length === 0) {
-                return res.status(400).json({ error: 'La tarifa no tiene rangos definidos' });
+            // Calcular total usando la lógica de tarifas escalonadas (fuente de verdad única)
+            let total;
+            try {
+                const resultado = await calcularTarifaDesdeDB(consumo_m3, tarifa_id, dbTurso);
+                total = resultado.total;
+            } catch (tarifaError) {
+                return res.status(400).json({ error: tarifaError.message });
             }
-
-            const rangos = rangosResult.rows;
-            console.log('Rangos obtenidos:', rangos);
-            console.log('Consumo total:', consumo_m3);
-
-            const primerRango = rangos[0];
-            const ultimoRango = rangos[rangos.length - 1];
-            let total = 0;
-
-            // Redondear hacia abajo solo para buscar el rango
-            const consumoEntero = Math.floor(consumo_m3);
-
-            if (consumoEntero >= primerRango.consumo_min && consumoEntero <= primerRango.consumo_max) {
-                console.log('Consumo dentro del primer rango:', consumo_m3);
-                total = primerRango.precio_por_m3;
-            } else if (consumoEntero >= ultimoRango.consumo_min) {
-                console.log('Consumo mayor o igual que el último rango:', consumo_m3);
-                total = consumo_m3 * ultimoRango.precio_por_m3;
-            } else {
-                console.log('Consumo en rango intermedio:', consumo_m3);
-
-                const rangoIntermedio = rangos.find(rango =>
-                    consumoEntero >= rango.consumo_min && consumoEntero <= rango.consumo_max
-                );
-
-                if (rangoIntermedio) {
-                    console.log('Rango intermedio encontrado:', rangoIntermedio);
-                    total = consumo_m3 * rangoIntermedio.precio_por_m3;
-                } else {
-                    console.error('No se encontró un rango válido para el consumo:', consumo_m3);
-                    return res.status(400).json({ error: 'Consumo fuera de los rangos definidos' });
-                }
-            }
-
-            console.log('Total calculado:', total);
-
-            total = parseFloat(total.toFixed(2)); // redondear a dos decimales
 
             const estado = 'Pendiente';
 
-            // Calcular fecha de vencimiento (30 días después)
+            // Obtener días de vencimiento desde configuración (default 30)
+            const configResult = await dbTurso.execute({
+                sql: `SELECT dias_vencimiento_factura FROM configuracion_servicio WHERE activo = 1 ORDER BY id DESC LIMIT 1`,
+                args: []
+            });
+            const diasVencimiento = configResult.rows.length > 0
+                ? (Number(configResult.rows[0].dias_vencimiento_factura) || 30)
+                : 30;
+
+            // Calcular fecha de vencimiento
             const fechaVencimiento = new Date(fecha_emision);
-            fechaVencimiento.setDate(fechaVencimiento.getDate() + 30);
+            fechaVencimiento.setDate(fechaVencimiento.getDate() + diasVencimiento);
             const fecha_vencimiento_str = fechaVencimiento.toISOString().split('T')[0];
 
             // Insertar factura
@@ -584,12 +546,8 @@ const facturasController = {
     async modificarFactura(req, res) {
         try {
             const { id } = req.params;
-            let { estado, total, modificado_por } = req.body;
-
-            // Asignar modificado_por desde el token si no viene en el body
-            if (!modificado_por && req.usuario) {
-                modificado_por = req.usuario.id;
-            }
+            const { estado, total } = req.body;
+            const modificado_por = req.usuario.id; // Siempre desde el token JWT
 
             if (!estado || !modificado_por) {
                 return res.status(400).json({ error: 'Faltan campos requeridos' });

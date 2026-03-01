@@ -40,13 +40,10 @@ const MedidorController = {
      * Registrar medidor - V1 logic
      */
     registrarMedidor: async (req, res) => {
-        console.log('🔌 [medidorController v2] About to register medidor with SSE integration');
-        const { cliente_id, numero_serie, ubicacion, fecha_instalacion, latitud, longitud, estado_medidor } = req.body;
-
-        console.log('Datos recibidos para registrar medidor v2:', { cliente_id, numero_serie, ubicacion, fecha_instalacion, latitud, longitud, estado_medidor });
+        const { cliente_id, numero_serie, marca, modelo, ubicacion, fecha_instalacion, latitud, longitud, estado_medidor } = req.body;
 
         if (!numero_serie || !ubicacion || !fecha_instalacion || !latitud || !longitud) {
-            return res.status(400).json({ error: "Todos los campos obligatorios excepto cliente_id" });
+            return res.status(400).json({ success: false, message: "Todos los campos obligatorios excepto cliente_id" });
         }
 
         try {
@@ -76,13 +73,13 @@ const MedidorController = {
 
             // Insertar nuevo medidor
             const insertQuery = `
-                INSERT INTO medidores (cliente_id, numero_serie, ubicacion, fecha_instalacion, latitud, longitud, estado_medidor)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO medidores (cliente_id, numero_serie, marca, modelo, ubicacion, fecha_instalacion, latitud, longitud, estado_medidor)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             `;
 
             const insertResult = await dbTurso.execute({
                 sql: insertQuery,
-                args: [cliente_id || null, numero_serie, ubicacion, fecha_instalacion, latitud, longitud, estado_medidor || 'Activo']
+                args: [cliente_id || null, numero_serie, marca || null, modelo || null, ubicacion, fecha_instalacion, latitud, longitud, estado_medidor || 'Activo']
             });
 
             const nuevoMedidorId = Number(insertResult.lastInsertRowid); // Convertir BigInt a Number
@@ -97,6 +94,8 @@ const MedidorController = {
             const datosInsertados = {
                 cliente_id: cliente_id || null,
                 numero_serie,
+                marca: marca || null,
+                modelo: modelo || null,
                 ubicacion,
                 fecha_instalacion,
                 latitud,
@@ -142,16 +141,15 @@ const MedidorController = {
                 }
             }
 
-            console.log('🔌 [medidorController v2] SSE events sent successfully');
-
             res.status(201).json({
-                mensaje: "Medidor registrado",
-                medidorID: nuevoMedidorId
+                success: true,
+                message: "Medidor registrado exitosamente",
+                data: { medidorID: nuevoMedidorId }
             });
 
         } catch (err) {
             console.error('Error registrando medidor v2:', err);
-            res.status(500).json({ error: "Error al registrar medidor" });
+            res.status(500).json({ success: false, message: "Error al registrar medidor" });
         }
     },
 
@@ -263,14 +261,11 @@ const MedidorController = {
      * Modificar medidor - V1 logic con historial de cambios
      */
     modificarMedidor: async (req, res) => {
-        console.log('🔌 [medidorController v2] About to modify medidor with SSE integration');
         const { id } = req.params;
-        const { cliente_id, numero_serie, ubicacion, fecha_instalacion, latitud, longitud, estado_medidor } = req.body;
+        const { cliente_id, numero_serie, marca, modelo, ubicacion, fecha_instalacion, latitud, longitud, estado_medidor, estado_servicio, fecha_corte } = req.body;
 
-        console.log('Datos recibidos para modificar medidor v2:', { id, cliente_id, numero_serie, ubicacion, fecha_instalacion, latitud, longitud, estado_medidor });
-
-        if (!cliente_id && !numero_serie && !ubicacion && !fecha_instalacion && !latitud && !longitud && !estado_medidor) {
-            return res.status(400).json({ error: "Al menos un campo es obligatorio" });
+        if (!cliente_id && !numero_serie && !marca && !modelo && !ubicacion && !fecha_instalacion && !latitud && !longitud && !estado_medidor && !estado_servicio && fecha_corte === undefined) {
+            return res.status(400).json({ success: false, message: "Al menos un campo es obligatorio" });
         }
 
         try {
@@ -315,31 +310,43 @@ const MedidorController = {
 
             // Identificar cambios
             const cambios = {};
-            if (cliente_id && cliente_id !== medidorExistente.cliente_id)
+            if (cliente_id !== undefined && cliente_id !== medidorExistente.cliente_id)
                 cambios.cliente_id = { antes: medidorExistente.cliente_id, despues: cliente_id };
             if (numero_serie && numero_serie !== medidorExistente.numero_serie)
                 cambios.numero_serie = { antes: medidorExistente.numero_serie, despues: numero_serie };
+            if (marca !== undefined && marca !== medidorExistente.marca)
+                cambios.marca = { antes: medidorExistente.marca, despues: marca };
+            if (modelo !== undefined && modelo !== medidorExistente.modelo)
+                cambios.modelo = { antes: medidorExistente.modelo, despues: modelo };
             if (ubicacion && ubicacion !== medidorExistente.ubicacion)
                 cambios.ubicacion = { antes: medidorExistente.ubicacion, despues: ubicacion };
             if (fecha_instalacion && fecha_instalacion !== medidorExistente.fecha_instalacion)
                 cambios.fecha_instalacion = { antes: medidorExistente.fecha_instalacion, despues: fecha_instalacion };
-            if (latitud && latitud !== medidorExistente.latitud)
+            if (latitud !== undefined && latitud !== medidorExistente.latitud)
                 cambios.latitud = { antes: medidorExistente.latitud, despues: latitud };
-            if (longitud && longitud !== medidorExistente.longitud)
+            if (longitud !== undefined && longitud !== medidorExistente.longitud)
                 cambios.longitud = { antes: medidorExistente.longitud, despues: longitud };
             if (estado_medidor && estado_medidor !== medidorExistente.estado_medidor)
                 cambios.estado_medidor = { antes: medidorExistente.estado_medidor, despues: estado_medidor };
+            if (estado_servicio && estado_servicio !== medidorExistente.estado_servicio)
+                cambios.estado_servicio = { antes: medidorExistente.estado_servicio, despues: estado_servicio };
+            if (fecha_corte !== undefined && fecha_corte !== medidorExistente.fecha_corte)
+                cambios.fecha_corte = { antes: medidorExistente.fecha_corte, despues: fecha_corte };
 
             // Actualizar medidor
             const updateQuery = `
                 UPDATE medidores
                 SET cliente_id = COALESCE(?, cliente_id),
                     numero_serie = COALESCE(?, numero_serie),
+                    marca = COALESCE(?, marca),
+                    modelo = COALESCE(?, modelo),
                     ubicacion = COALESCE(?, ubicacion),
                     fecha_instalacion = COALESCE(?, fecha_instalacion),
                     latitud = COALESCE(?, latitud),
                     longitud = COALESCE(?, longitud),
-                    estado_medidor = COALESCE(?, estado_medidor)
+                    estado_medidor = COALESCE(?, estado_medidor),
+                    estado_servicio = COALESCE(?, estado_servicio),
+                    fecha_corte = COALESCE(?, fecha_corte)
                 WHERE id = ?
             `;
 
@@ -348,11 +355,15 @@ const MedidorController = {
                 args: [
                     cliente_id ?? null,
                     numero_serie ?? null,
+                    marca ?? null,
+                    modelo ?? null,
                     ubicacion ?? null,
                     fecha_instalacion ?? null,
                     latitud ?? null,
                     longitud ?? null,
                     estado_medidor ?? null,
+                    estado_servicio ?? null,
+                    fecha_corte ?? null,
                     id
                 ]
             });
@@ -380,13 +391,17 @@ const MedidorController = {
             // Crear objeto del medidor actualizado
             const medidorActualizado = {
                 id: parseInt(id),
-                cliente_id: cliente_id || medidorExistente.cliente_id,
+                cliente_id: cliente_id !== undefined ? cliente_id : medidorExistente.cliente_id,
                 numero_serie: numero_serie || medidorExistente.numero_serie,
+                marca: marca !== undefined ? marca : medidorExistente.marca,
+                modelo: modelo !== undefined ? modelo : medidorExistente.modelo,
                 ubicacion: ubicacion || medidorExistente.ubicacion,
                 fecha_instalacion: fecha_instalacion || medidorExistente.fecha_instalacion,
-                latitud: latitud || medidorExistente.latitud,
-                longitud: longitud || medidorExistente.longitud,
+                latitud: latitud !== undefined ? latitud : medidorExistente.latitud,
+                longitud: longitud !== undefined ? longitud : medidorExistente.longitud,
                 estado_medidor: estado_medidor || medidorExistente.estado_medidor,
+                estado_servicio: estado_servicio || medidorExistente.estado_servicio,
+                fecha_corte: fecha_corte !== undefined ? fecha_corte : medidorExistente.fecha_corte,
                 cambios_realizados: Object.keys(cambios),
                 modificado_por: req.usuario?.id || 1
             };
@@ -409,16 +424,19 @@ const MedidorController = {
                 }
             }
 
-            console.log('🔌 [medidorController v2] SSE events sent successfully');
-
             res.json({
-                mensaje: "Medidor modificado",
-                cambios: Number(updateResult.rowsAffected)
+                success: true,
+                message: "Medidor modificado correctamente",
+                data: {
+                    id: parseInt(id),
+                    cambios_realizados: Object.keys(cambios),
+                    rowsAffected: Number(updateResult.rowsAffected)
+                }
             });
 
         } catch (err) {
             console.error('Error modificando medidor v2:', err);
-            res.status(500).json({ error: "Error al modificar medidor" });
+            res.status(500).json({ success: false, message: "Error al modificar medidor" });
         }
     }
 };

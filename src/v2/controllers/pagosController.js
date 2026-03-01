@@ -70,19 +70,14 @@ const pagosController = {
      */
     registrarPago: async (req, res) => {
         try {
-            let {
+            const {
                 factura_id,
                 fecha_pago,
                 cantidad_entregada,
                 metodo_pago,
-                comentario,
-                modificado_por
+                comentario
             } = req.body;
-
-            // Asegurar que modificado_por venga del token si no se envía
-            if (!modificado_por && req.usuario) {
-                modificado_por = req.usuario.id;
-            }
+            const modificado_por = req.usuario.id; // Siempre desde el token JWT
 
             if (
                 !factura_id || !fecha_pago || cantidad_entregada == null ||
@@ -110,7 +105,6 @@ const pagosController = {
 
             // VALIDACIÓN: Bloquear pagos a facturas en convenio
             if (factura.convenio_id !== null) {
-                console.log(`Intento de pago bloqueado - Factura ${factura_id} está en convenio ${factura.convenio_id}`);
                 return res.status(403).json({
                     error: 'Esta factura está incluida en un convenio de pago activo.',
                     mensaje: 'Debe pagar las parcialidades del convenio en lugar de la factura directamente.',
@@ -127,9 +121,6 @@ const pagosController = {
 
             const monto = toDecimal(Math.min(saldo, cantidad_entregada)); // Nunca más del saldo
             const cambio = restaDecimal(cantidad_entregada, monto);
-
-            console.log(`Saldo pendiente: ${saldo}, Cantidad entregada: ${cantidad_entregada}`);
-            console.log(`Monto a aplicar: ${monto}, Cambio a devolver: ${cambio}`);
 
             // Validación adicional para evitar errores de trigger
             if (monto > saldo + 0.01) { // Tolerancia de 1 centavo
@@ -481,28 +472,34 @@ const pagosController = {
     modificarPago: async (req, res) => {
         try {
             const { id } = req.params;
-            const { fecha_pago, monto, metodo_pago, modificado_por } = req.body;
+            const { fecha_pago, monto, metodo_pago, comentario } = req.body;
+            const modificado_por = req.usuario.id; // Siempre desde el token JWT
 
-            if (!fecha_pago || !monto || !metodo_pago || !modificado_por) {
-                return res.status(400).json({ error: 'Faltan campos requeridos' });
+            // Construir UPDATE dinámico (solo los campos enviados)
+            const setClauses = ['modificado_por = ?'];
+            const args = [modificado_por];
+
+            if (fecha_pago !== undefined)  { setClauses.push('fecha_pago = ?');  args.push(fecha_pago); }
+            if (monto !== undefined)       { setClauses.push('monto = ?');       args.push(monto); }
+            if (metodo_pago !== undefined) { setClauses.push('metodo_pago = ?'); args.push(metodo_pago); }
+            if (comentario !== undefined)  { setClauses.push('comentario = ?');  args.push(comentario); }
+
+            if (setClauses.length === 0) {
+                return res.status(400).json({ error: 'No se proporcionaron campos para actualizar' });
             }
 
-            const query = `
-                UPDATE pagos
-                SET fecha_pago = ?, monto = ?, metodo_pago = ?, modificado_por = ?
-                WHERE id = ?
-            `;
+            args.push(id);
 
             const result = await dbTurso.execute({
-                sql: query,
-                args: [fecha_pago, monto, metodo_pago, modificado_por, id]
+                sql: `UPDATE pagos SET ${setClauses.join(', ')} WHERE id = ?`,
+                args
             });
 
             if (result.rowsAffected === 0) {
                 return res.status(404).json({ error: 'Pago no encontrado' });
             }
 
-            return res.status(200).json({ mensaje: 'Pago modificado exitosamente' });
+            return res.status(200).json({ success: true, message: 'Pago modificado exitosamente' });
 
         } catch (error) {
             console.error('Error al modificar pago:', error);

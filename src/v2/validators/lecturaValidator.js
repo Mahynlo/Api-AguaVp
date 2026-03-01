@@ -21,8 +21,8 @@ export const registrarLecturaSchema = z.object({
     .or(z.string().regex(/^\d+$/).transform(Number)),
   
   consumo_m3: z.number()
-    .min(0, 'El consumo no puede ser negativo')
-    .or(z.string().regex(/^\d+\.?\d*$/).transform(Number)),
+    .min(0.001, 'El consumo debe ser mayor a cero')
+    .or(z.string().regex(/^\d+\.?\d*$/).transform(Number).refine(v => v > 0, 'El consumo debe ser mayor a cero')),
   
   fecha_lectura: z.string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato de fecha inválido (YYYY-MM-DD)'),
@@ -35,6 +35,7 @@ export const registrarLecturaSchema = z.object({
     .int('El ID del usuario debe ser un número entero')
     .positive('El ID del usuario debe ser positivo')
     .or(z.string().regex(/^\d+$/).transform(Number))
+    .optional() // Ignorado: siempre se toma de req.usuario.id en el controlador
 }).strict();
 
 // Esquema para actualizar una lectura
@@ -46,8 +47,8 @@ export const actualizarLecturaSchema = z.object({
     .optional(),
   
   consumo_m3: z.number()
-    .min(0, 'El consumo no puede ser negativo')
-    .or(z.string().regex(/^\d+\.?\d*$/).transform(Number))
+    .min(0.001, 'El consumo debe ser mayor a cero')
+    .or(z.string().regex(/^\d+\.?\d*$/).transform(Number).refine(v => v > 0, 'El consumo debe ser mayor a cero'))
     .optional(),
   
   fecha_lectura: z.string()
@@ -94,69 +95,3 @@ export const buscarLecturaSchema = z.object({
   { message: 'La fecha desde debe ser anterior o igual a la fecha hasta' }
 );
 
-// Esquema para registrar lectura con anomalía
-export const registrarLecturaAnomaliaSchema = z.object({
-  medidor_id: z.number()
-    .int('El ID del medidor debe ser un número entero')
-    .positive('El ID del medidor debe ser positivo')
-    .or(z.string().regex(/^\d+$/).transform(Number)),
-  
-  lectura_anterior: z.number()
-    .min(0, 'La lectura anterior no puede ser negativa')
-    .or(z.string().regex(/^\d+\.?\d*$/).transform(Number)),
-  
-  lectura_actual: z.number()
-    .min(0, 'La lectura actual no puede ser negativa')
-    .or(z.string().regex(/^\d+\.?\d*$/).transform(Number)),
-  
-  periodo: z.string()
-    .regex(/^\d{4}-\d{2}$/, 'Formato de período inválido (YYYY-MM)'),
-  
-  tipo_anomalia: z.enum(['medidor_roto', 'fuga', 'consumo_anormal', 'medidor_inaccesible', 'otro'], {
-    errorMap: () => ({ message: 'Tipo de anomalía inválido' })
-  }),
-  
-  descripcion_anomalia: z.string()
-    .min(10, 'La descripción debe tener al menos 10 caracteres')
-    .max(500, 'La descripción no puede exceder 500 caracteres'),
-  
-  foto_url: z.string()
-    .url('La URL de la foto no es válida')
-    .optional()
-}).strict();
-
-// Esquema para lecturas masivas
-export const registrarLecturasMasivasSchema = z.object({
-  periodo: z.string()
-    .regex(/^\d{4}-\d{2}$/, 'Formato de período inválido (YYYY-MM)'),
-  
-  lecturas: z.array(
-    z.object({
-      medidor_id: z.number().int().positive(),
-      lectura_anterior: z.number().min(0),
-      lectura_actual: z.number().min(0),
-      observaciones: z.string().max(500).optional()
-    }).refine(
-      data => data.lectura_actual >= data.lectura_anterior,
-      { message: 'Lectura actual debe ser >= lectura anterior' }
-    )
-  ).min(1, 'Debe proporcionar al menos una lectura')
-}).strict();
-
-// Esquema para validar rango de consumo
-export const validarRangoConsumoSchema = z.object({
-  medidor_id: z.number()
-    .int('El ID del medidor debe ser un número entero')
-    .positive('El ID del medidor debe ser positivo')
-    .or(z.string().regex(/^\d+$/).transform(Number)),
-  
-  consumo_m3: z.number()
-    .min(0, 'El consumo no puede ser negativo')
-    .or(z.string().regex(/^\d+\.?\d*$/).transform(Number)),
-  
-  umbral_alerta: z.number()
-    .positive('El umbral debe ser positivo')
-    .or(z.string().regex(/^\d+\.?\d*$/).transform(Number))
-    .optional()
-    .default(50) // 50% más del promedio
-});

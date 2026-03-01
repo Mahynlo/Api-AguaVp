@@ -38,7 +38,7 @@ const clientesController = {
 
     // Registrar un cliente 
     registrarCliente: async (req, res) => {
-        const { nombre, direccion, telefono, ciudad, correo, estado_cliente, tarifa_id } = req.body;
+        const { nombre, direccion, telefono, ciudad, correo, estado_cliente, tarifa_id, numero_predio } = req.body;
         const modificado_por = req.usuario.id; // ID del usuario que modifica desde el token enviado al servidor
 
         console.log("Datos recibidos para registrar cliente:", req.body);
@@ -48,15 +48,27 @@ const clientesController = {
         }
 
         try {
-            // Verificar si el cliente ya existe
-            const verificarQuery = `SELECT * FROM clientes WHERE nombre = ? AND telefono = ?`;
+            // Verificar unicidad por numero_predio (identificador oficial de la toma)
+            if (numero_predio) {
+                const verificarPredioQuery = `SELECT id FROM clientes WHERE numero_predio = ?`;
+                const predioResult = await dbTurso.execute({
+                    sql: verificarPredioQuery,
+                    args: [numero_predio]
+                });
+                if (predioResult.rows.length > 0) {
+                    return res.status(409).json({ error: `Ya existe un cliente registrado con el número de predio "${numero_predio}"` });
+                }
+            }
+
+            // Verificar si el cliente ya existe (guardia secundaria por nombre+telefono)
+            const verificarQuery = `SELECT id FROM clientes WHERE nombre = ? AND telefono = ?`;
             const existingResult = await dbTurso.execute({
                 sql: verificarQuery,
                 args: [nombre, telefono]
             });
 
             if (existingResult.rows.length > 0) {
-                return res.status(409).json({ error: "Este cliente ya está registrado" });
+                return res.status(409).json({ error: "Ya existe un cliente con ese nombre y teléfono" });
             }
 
             // Verificar si la tarifa existe (si se proporciona)
@@ -74,13 +86,15 @@ const clientesController = {
 
             // Insertar el nuevo cliente
             const insertQuery = `
-                INSERT INTO clientes (nombre, direccion, telefono, ciudad, correo, estado_cliente, tarifa_id, modificado_por)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO clientes (numero_predio, nombre, direccion, telefono, ciudad, correo, estado_cliente, tarifa_id, modificado_por)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             `;
+
+            const safeNumeroPredio = numero_predio ? numero_predio.toString().trim().toUpperCase() : null;
 
             const insertResult = await dbTurso.execute({
                 sql: insertQuery,
-                args: [nombre, direccion, telefono, ciudad, correo, estado_cliente || 'Activo', tarifa_id || null, modificado_por]
+                args: [safeNumeroPredio, nombre, direccion, telefono, ciudad, correo, estado_cliente || 'Activo', tarifa_id || null, modificado_por]
             });
 
             const nuevoClienteID = Number(insertResult.lastInsertRowid); // Convertir BigInt a Number
@@ -92,6 +106,7 @@ const clientesController = {
             `;
 
             const datosInsertados = {
+                numero_predio: safeNumeroPredio,
                 nombre, direccion, telefono, ciudad, correo,
                 estado_cliente: estado_cliente || 'Activo',
                 tarifa_id: tarifa_id || null
@@ -111,6 +126,7 @@ const clientesController = {
             // Datos del cliente creado para SSE
             const clienteCreado = {
                 id: nuevoClienteID,
+                numero_predio: safeNumeroPredio,
                 nombre,
                 direccion,
                 telefono,
@@ -152,10 +168,10 @@ const clientesController = {
     // Obtener todos los clientes (con paginación y búsqueda)
     obtenerClientes: async (req, res) => {
         try {
-            const { page, limit, search, ciudad, estado } = req.query;
+            const { page, limit, search, ciudad, estado, numero_predio } = req.query;
 
             // Si se envían parámetros
-            if (page || limit || search || ciudad || estado) {
+            if (page || limit || search || ciudad || estado || numero_predio) {
                 const pageNum = parseInt(page) || 1;
                 const limitNum = parseInt(limit) || 50;
                 const offset = (pageNum - 1) * limitNum;
@@ -168,8 +184,13 @@ const clientesController = {
                 let conditions = [];
 
                 if (searchTerm) {
-                    conditions.push(`(nombre LIKE ? OR telefono LIKE ? OR correo LIKE ? OR ciudad LIKE ?)`);
-                    whereArgs.push(searchTerm, searchTerm, searchTerm, searchTerm);
+                    conditions.push(`(nombre LIKE ? OR telefono LIKE ? OR correo LIKE ? OR ciudad LIKE ? OR numero_predio LIKE ?)`);
+                    whereArgs.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+                }
+
+                if (numero_predio) {
+                    conditions.push(`numero_predio = ?`);
+                    whereArgs.push(numero_predio.toString().toUpperCase());
                 }
 
                 if (ciudad && ciudad !== 'All') {
@@ -203,6 +224,7 @@ const clientesController = {
                 // Convertir BigInt a Number para compatibilidad JSON
                 const clientes = result.rows.map(cliente => ({
                     id: Number(cliente.id),
+                    numero_predio: cliente.numero_predio || null,
                     nombre: cliente.nombre,
                     direccion: cliente.direccion,
                     telefono: cliente.telefono,
@@ -234,6 +256,7 @@ const clientesController = {
             // Convertir BigInt a Number para compatibilidad JSON
             const clientes = result.rows.map(cliente => ({
                 id: Number(cliente.id),
+                numero_predio: cliente.numero_predio || null,
                 nombre: cliente.nombre,
                 direccion: cliente.direccion,
                 telefono: cliente.telefono,
@@ -256,19 +279,16 @@ const clientesController = {
     // Modificar cliente
     modificarCliente: async (req, res) => {
         const clienteId = req.params.id;
-        const { nombre, direccion, telefono, ciudad, correo, estado_cliente, tarifa_id } = req.body;
+        const { nombre, direccion, telefono, ciudad, correo, estado_cliente, tarifa_id, numero_predio } = req.body;
         const medidor_id = req.body.medidor_id; // Medidores a asignar
         const medidores_liberados = req.body.medidores_liberados; // Medidores a liberar
         const modificado_por = req.usuario.id;
 
-        console.log("Datos recibidos para modificar cliente:", req.body);
-        console.log("ID del cliente a modificar:", clienteId);
-        console.log("ID del usuario que modifica:", modificado_por);
-        console.log("Tipo de tarifa_id:", typeof tarifa_id, "Valor:", tarifa_id);
-        console.log("Tipo de medidor_id:", typeof medidor_id, "Valor:", medidor_id);
-        console.log("Tipo de medidores_liberados:", typeof medidores_liberados, "Valor:", medidores_liberados);
-
-        if (!nombre && !direccion && !telefono && !ciudad && !correo && !estado_cliente && tarifa_id === undefined && medidor_id === undefined && medidores_liberados === undefined) {
+        if (
+            !nombre && !direccion && !telefono && !ciudad && !correo && !estado_cliente &&
+            tarifa_id === undefined && medidor_id === undefined && medidores_liberados === undefined &&
+            numero_predio === undefined
+        ) {
             return res.status(400).json({ error: "Al menos un campo es obligatorio" });
         }
 
@@ -287,6 +307,7 @@ const clientesController = {
             const clienteAnterior = clienteResult.rows[0];
 
             // Asegurar que los valores sean del tipo correcto para Turso
+            const safeNumeroPredio = numero_predio !== undefined ? (numero_predio ? numero_predio.toString().trim().toUpperCase() : null) : null;
             const safeNombre = nombre || null;
             const safeDireccion = direccion || null;
             const safeTelefono = telefono || null;
@@ -297,10 +318,17 @@ const clientesController = {
             const safeModificadoPor = Number(modificado_por);
             const safeClienteId = Number(clienteId);
 
-            console.log("Valores preparados para la consulta:", {
-                safeNombre, safeDireccion, safeTelefono, safeCiudad,
-                safeCorreo, safeEstadoCliente, safeTarifaId, safeModificadoPor, safeClienteId
-            });
+            // Verificar unicidad de numero_predio si se está cambiando
+            if (safeNumeroPredio && safeNumeroPredio !== clienteAnterior.numero_predio) {
+                const predioExistenteQuery = `SELECT id FROM clientes WHERE numero_predio = ? AND id != ?`;
+                const predioExistente = await dbTurso.execute({
+                    sql: predioExistenteQuery,
+                    args: [safeNumeroPredio, safeClienteId]
+                });
+                if (predioExistente.rows.length > 0) {
+                    return res.status(409).json({ error: `El número de predio "${safeNumeroPredio}" ya está asignado a otro cliente` });
+                }
+            }
 
             // Verificar si la tarifa existe (si se proporciona)
             if (safeTarifaId) {
@@ -315,8 +343,9 @@ const clientesController = {
                 }
             }
 
-            // Construir cambios para historial (usar valores seguros)
+            // Construir cambios para historial
             const cambios = {};
+            if (safeNumeroPredio !== null && safeNumeroPredio !== clienteAnterior.numero_predio) cambios.numero_predio = { antes: clienteAnterior.numero_predio, despues: safeNumeroPredio };
             if (safeNombre && safeNombre !== clienteAnterior.nombre) cambios.nombre = { antes: clienteAnterior.nombre, despues: safeNombre };
             if (safeDireccion && safeDireccion !== clienteAnterior.direccion) cambios.direccion = { antes: clienteAnterior.direccion, despues: safeDireccion };
             if (safeTelefono && safeTelefono !== clienteAnterior.telefono) cambios.telefono = { antes: clienteAnterior.telefono, despues: safeTelefono };
@@ -328,7 +357,8 @@ const clientesController = {
             // Actualizar cliente
             const updateQuery = `
                 UPDATE clientes 
-                SET nombre = COALESCE(?, nombre),
+                SET numero_predio = CASE WHEN ? IS NOT NULL THEN ? ELSE numero_predio END,
+                    nombre = COALESCE(?, nombre),
                     direccion = COALESCE(?, direccion),
                     telefono = COALESCE(?, telefono),
                     ciudad = COALESCE(?, ciudad),
@@ -341,108 +371,81 @@ const clientesController = {
 
             await dbTurso.execute({
                 sql: updateQuery,
-                args: [safeNombre, safeDireccion, safeTelefono, safeCiudad, safeCorreo, safeEstadoCliente, safeTarifaId, safeTarifaId, safeModificadoPor, safeClienteId]
+                args: [safeNumeroPredio, safeNumeroPredio, safeNombre, safeDireccion, safeTelefono, safeCiudad, safeCorreo, safeEstadoCliente, safeTarifaId, safeTarifaId, safeModificadoPor, safeClienteId]
             });
 
             // Gestionar medidores
             const errores = [];
-            let totalOperaciones = 0;
-            let completadas = 0;
 
-            // Calcular operaciones de medidores
             const totalMedidoresAsignar = Array.isArray(medidor_id) ? medidor_id.length : 0;
             const totalMedidoresLiberar = Array.isArray(medidores_liberados) ? medidores_liberados.length : 0;
-            totalOperaciones = totalMedidoresAsignar + totalMedidoresLiberar;
 
             // Si no hay operaciones de medidores, ir directo al historial
-            if (totalOperaciones === 0) {
+            if (totalMedidoresLiberar === 0 && totalMedidoresAsignar === 0) {
                 return await registrarHistorial();
             }
 
-            // Liberar medidores
-            if (totalMedidoresLiberar > 0) {
-                for (const mid of medidores_liberados) {
-                    try {
-                        const medidorResult = await dbTurso.execute({
-                            sql: `SELECT * FROM medidores WHERE id = ?`,
-                            args: [mid]
-                        });
+            // 1. Procesar liberaciones primero (completo antes de asignar)
+            for (const mid of (medidores_liberados || [])) {
+                try {
+                    const medidorResult = await dbTurso.execute({
+                        sql: `SELECT * FROM medidores WHERE id = ?`,
+                        args: [mid]
+                    });
 
-                        if (medidorResult.rows.length === 0) {
-                            errores.push(`Medidor ${mid} no encontrado`);
+                    if (medidorResult.rows.length === 0) {
+                        errores.push(`Medidor ${mid} no encontrado`);
+                    } else {
+                        const medidor = medidorResult.rows[0];
+                        if (Number(medidor.cliente_id) !== parseInt(clienteId)) {
+                            errores.push(`El medidor ${mid} no pertenece al cliente actual`);
                         } else {
-                            const medidor = medidorResult.rows[0];
-                            if (Number(medidor.cliente_id) !== parseInt(clienteId)) {
-                                errores.push(`El medidor ${mid} no pertenece al cliente actual`);
-                            } else {
-                                await dbTurso.execute({
-                                    sql: `UPDATE medidores SET cliente_id = NULL WHERE id = ?`,
-                                    args: [mid]
-                                });
-
-                                cambios[`medidor_${mid}`] = {
-                                    antes: Number(medidor.cliente_id),
-                                    despues: null
-                                };
-                            }
+                            await dbTurso.execute({
+                                sql: `UPDATE medidores SET cliente_id = NULL WHERE id = ?`,
+                                args: [mid]
+                            });
+                            cambios[`medidor_${mid}_liberado`] = { antes: Number(medidor.cliente_id), despues: null };
                         }
-                    } catch (err) {
-                        errores.push(`Error al liberar medidor ${mid}: ${err.message}`);
                     }
-
-                    completadas++;
-                    if (completadas === totalOperaciones) {
-                        return await finalizarOperacion();
-                    }
+                } catch (err) {
+                    errores.push(`Error al liberar medidor ${mid}: ${err.message}`);
                 }
             }
 
-            // Asignar medidores
-            if (totalMedidoresAsignar > 0) {
-                for (const mid of medidor_id) {
-                    try {
-                        const medidorResult = await dbTurso.execute({
-                            sql: `SELECT * FROM medidores WHERE id = ?`,
-                            args: [mid]
-                        });
+            // 2. Procesar asignaciones (solo si no hay errores críticos)
+            for (const mid of (Array.isArray(medidor_id) ? medidor_id : [])) {
+                try {
+                    const medidorResult = await dbTurso.execute({
+                        sql: `SELECT * FROM medidores WHERE id = ?`,
+                        args: [mid]
+                    });
 
-                        if (medidorResult.rows.length === 0) {
-                            errores.push(`Medidor ${mid} no encontrado`);
-                        } else {
-                            const medidor = medidorResult.rows[0];
-                            const medidorClienteId = medidor.cliente_id ? Number(medidor.cliente_id) : null;
+                    if (medidorResult.rows.length === 0) {
+                        errores.push(`Medidor ${mid} no encontrado`);
+                    } else {
+                        const medidor = medidorResult.rows[0];
+                        const medidorClienteId = medidor.cliente_id ? Number(medidor.cliente_id) : null;
 
-                            if (medidorClienteId && medidorClienteId !== parseInt(clienteId)) {
-                                errores.push(`Medidor ${mid} ya está asignado a otro cliente`);
-                            } else if (medidorClienteId !== parseInt(clienteId)) {
-                                await dbTurso.execute({
-                                    sql: `UPDATE medidores SET cliente_id = ? WHERE id = ?`,
-                                    args: [clienteId, mid]
-                                });
-
-                                cambios[`medidor_${mid}`] = {
-                                    antes: medidorClienteId,
-                                    despues: parseInt(clienteId)
-                                };
-                            }
+                        if (medidorClienteId && medidorClienteId !== parseInt(clienteId)) {
+                            errores.push(`Medidor ${mid} ya está asignado a otro cliente`);
+                        } else if (medidorClienteId !== parseInt(clienteId)) {
+                            await dbTurso.execute({
+                                sql: `UPDATE medidores SET cliente_id = ? WHERE id = ?`,
+                                args: [clienteId, mid]
+                            });
+                            cambios[`medidor_${mid}_asignado`] = { antes: medidorClienteId, despues: parseInt(clienteId) };
                         }
-                    } catch (err) {
-                        errores.push(`Error al asignar medidor ${mid}: ${err.message}`);
                     }
-
-                    completadas++;
-                    if (completadas === totalOperaciones) {
-                        return await finalizarOperacion();
-                    }
+                } catch (err) {
+                    errores.push(`Error al asignar medidor ${mid}: ${err.message}`);
                 }
             }
 
-            async function finalizarOperacion() {
-                if (errores.length > 0) {
-                    return res.status(400).json({ error: errores });
-                }
-                return await registrarHistorial();
+            if (errores.length > 0) {
+                return res.status(400).json({ error: errores });
             }
+
+            return await registrarHistorial();
 
             async function registrarHistorial() {
                 // Registrar cambios en historial
@@ -467,6 +470,7 @@ const clientesController = {
                 // Datos del cliente actualizado
                 const clienteActualizado = {
                     id: parseInt(clienteId),
+                    numero_predio: numero_predio !== undefined ? safeNumeroPredio : clienteAnterior.numero_predio,
                     nombre: nombre || clienteAnterior.nombre,
                     direccion: direccion || clienteAnterior.direccion,
                     telefono: telefono || clienteAnterior.telefono,
@@ -1008,6 +1012,7 @@ const clientesController = {
             const query = `
                 SELECT 
                     c.id,
+                    c.numero_predio,
                     c.nombre,
                     c.direccion,
                     c.telefono,
@@ -1015,7 +1020,7 @@ const clientesController = {
                     c.correo,
                     c.fecha_eliminacion,
                     c.razon_eliminacion,
-                    u.nombre as eliminado_por_nombre,
+                    u.username as eliminado_por_nombre,
                     (SELECT COUNT(*) FROM facturas f WHERE f.cliente_id = c.id) as total_facturas,
                     (SELECT COUNT(*) FROM medidores m WHERE m.cliente_id = c.id) as total_medidores
                 FROM clientes c

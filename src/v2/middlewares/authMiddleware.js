@@ -59,32 +59,39 @@ async function authMiddleware(req, res, next) {
 
         const session = result.rows[0];
 
-        // 3. Verificar expiración real del JWT y extraer Scopes
+        // 3. Verificar firma y expiración del JWT — se rechaza si falla, sin excepciones
         let decoded;
         try {
             decoded = jwt.verify(token, process.env.JWT_SECRET);
         } catch (jwtError) {
-            console.warn('JWT Verify check failed (legacy token?):', jwtError.message);
-            // Si falla el verify pero está en DB, podría ser un token legacy sin fecha de expiración o firma antigua.
-            // Decidimos si permitirlo o no. Para migración segura, si está en DB session activo, confiamos en DB.
-            // Pero para scopes, necesitamos claims.
-            decoded = { scope: "default" }; // Fallback
+            // Token con firma inválida, expirado o manipulado — rechazar siempre
+            // NO usar fallback: permitir tokens inválidos es una vulnerabilidad de seguridad
+            return res.status(401).json({
+                error: "Token inválido o expirado",
+                code: "TOKEN_INVALID"
+            });
         }
 
-        // 4. Verificar si algún refresh token del usuario fue revocado recientemente
+        // 4. Verificar si algún refresh token del usuario fue revocado DESPUÉS de que
+        //    se emitió este access token (decoded.iat). Esto garantiza que:
+        //    - Un logout/revocación ANTES del login actual no afecte la nueva sesión.
+        //    - Un logout/revocación DESPUÉS del login actual sí invalide la sesión activa.
+        //    Los tokens revocados con razon_revocacion = 'rotation' son parte del flujo normal
+        //    y NO deben invalidar la sesión activa.
         const refreshCheck = await dbTurso.execute({
             sql: `
                 SELECT id 
                 FROM refresh_tokens 
                 WHERE usuario_id = ? 
                   AND revocado = 1
+                  AND (razon_revocacion IS NULL OR razon_revocacion != 'rotation')
                   AND datetime(revocado_en) > datetime(?, 'unixepoch')
                 LIMIT 1
             `,
-            args: [session.usuario_id, Math.floor(Date.now() / 1000) - 900] // 15 min atrás
+            args: [session.usuario_id, decoded.iat] // Solo revocaciones DESPUÉS de emitir este token
         });
 
-        // Si se revocó un refresh token hace menos de 15 min, invalidar sesión
+        // Si se revocó un refresh token hace menos de 15 min por logout/revocación manual, invalidar sesión
         if (refreshCheck.rows.length > 0) {
             return res.status(401).json({
                 error: "Sesión revocada",
@@ -99,6 +106,12 @@ async function authMiddleware(req, res, next) {
             rol: decoded.rol, // Rol del usuario (desde el token)
             app_id: session.app_id // ID de la app si existe
         };
+
+        // Actualizar ultimo_uso de la sesión en cada request (fire-and-forget, sin bloquear)
+        dbTurso.execute({
+            sql: `UPDATE sesiones SET ultimo_uso = datetime('now') WHERE token = ?`,
+            args: [token]
+        }).catch(err => console.warn('[authMiddleware] ultimo_uso update failed:', err.message));
 
         next(); // continuar a la ruta
     } catch (err) {

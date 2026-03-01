@@ -30,12 +30,8 @@ const tarifasController = {
      */
     async registrarTarifa(req, res) {
         try {
-            let { nombre, descripcion, fecha_inicio, fecha_fin, modificado_por } = req.body;
-
-            // Asignar modificado_por desde el token si no viene en el body
-            if (!modificado_por && req.usuario) {
-                modificado_por = req.usuario.id;
-            }
+            const { nombre, descripcion, fecha_inicio, fecha_fin } = req.body;
+            const modificado_por = req.usuario.id; // Siempre desde el token JWT
 
             // Validar que la fecha inicio sea menor a fecha fin
             if (fecha_fin && new Date(fecha_inicio) > new Date(fecha_fin)) {
@@ -398,7 +394,7 @@ const tarifasController = {
         try {
             const { id } = req.params;
             const { nombre, descripcion, fecha_inicio, fecha_fin } = req.body;
-            const modificado_por = req.usuario?.id || req.body.modificado_por;
+            const modificado_por = req.usuario.id; // Siempre desde el token JWT
 
             if (!descripcion || !fecha_inicio || !modificado_por) {
                 return res.status(400).json({ error: 'Faltan campos requeridos' });

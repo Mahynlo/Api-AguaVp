@@ -7,7 +7,7 @@
  * Gestiona la detección de candidatos a corte y la ejecución de órdenes.
  */
 
-import dbTurso from "../../database/db-sqlite.js";
+import dbTurso, { sqlite } from "../../database/db-sqlite.js";
 
 const cortesController = {
 
@@ -148,27 +148,21 @@ const cortesController = {
                 return res.status(400).json({ error: "El servicio ya se encuentra cortado" });
             }
 
-            // 2. Registrar en historial cortes_servicio
-            const insertCorte = `
-                INSERT INTO cortes_servicio (
-                    cliente_id, medidor_id, fecha_corte, motivo, 
-                    autorizado_por, observaciones
-                ) VALUES (?, ?, datetime('now'), ?, ?, ?)
-            `;
+            // 2 y 3. Registrar corte y actualizar medidor — operación atómica.
+            // Si falla cualquiera de las dos, SQLite hace rollback automático.
+            const transaccionCorte = sqlite.transaction(() => {
+                sqlite.prepare(`
+                    INSERT INTO cortes_servicio (cliente_id, medidor_id, fecha_corte, motivo, autorizado_por, observaciones)
+                    VALUES (?, ?, datetime('now'), ?, ?, ?)
+                `).run(medidor.cliente_id, medidor_id, motivo, autorizado_por || null, observaciones || '');
 
-            await dbTurso.execute({
-                sql: insertCorte,
-                args: [medidor.cliente_id, medidor_id, motivo, autorizado_por, observaciones || '']
+                sqlite.prepare(`
+                    UPDATE medidores SET estado_servicio = 'Cortado', fecha_corte = date('now')
+                    WHERE id = ?
+                `).run(medidor_id);
             });
 
-            // 3. Actualizar estado del medidor
-            const updateMedidor = `
-                UPDATE medidores 
-                SET estado_servicio = 'Cortado' 
-                WHERE id = ?
-            `;
-
-            await dbTurso.execute({ sql: updateMedidor, args: [medidor_id] });
+            transaccionCorte();
 
             res.json({
                 success: true,

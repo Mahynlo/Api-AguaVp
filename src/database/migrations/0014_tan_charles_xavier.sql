@@ -1,0 +1,1 @@
+ALTER TABLE `configuracion_servicio` ADD `dias_vencimiento_factura` integer DEFAULT 30 NOT NULL;

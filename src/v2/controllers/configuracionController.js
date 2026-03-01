@@ -34,6 +34,7 @@ const configuracionController = {
                     facturas_para_tercer_aviso: 3,
                     facturas_para_corte: 4,
                     dias_gracia: 0,
+                    dias_vencimiento_factura: 30,
                     activo: 1,
                     mensaje: "Configuración por defecto (sin registros en BD)"
                 });
@@ -58,7 +59,8 @@ const configuracionController = {
                 facturas_para_segundo_aviso,
                 facturas_para_tercer_aviso,
                 facturas_para_corte,
-                dias_gracia
+                dias_gracia,
+                dias_vencimiento_factura
             } = req.body;
 
             // tiny validation
@@ -82,10 +84,11 @@ const configuracionController = {
                     facturas_para_tercer_aviso,
                     facturas_para_corte,
                     dias_gracia,
+                    dias_vencimiento_factura,
                     modificado_por,
                     fecha_modificacion,
                     activo
-                ) VALUES (?, ?, ?, ?, ?, ?, datetime('now'), 1)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), 1)
             `;
 
             const args = [
@@ -94,6 +97,7 @@ const configuracionController = {
                 facturas_para_tercer_aviso || 3,
                 facturas_para_corte || 4,
                 dias_gracia || 0,
+                dias_vencimiento_factura != null ? Number(dias_vencimiento_factura) : 30,
                 modificado_por
             ];
 

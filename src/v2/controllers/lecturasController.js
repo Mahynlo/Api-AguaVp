@@ -27,6 +27,7 @@
  */
 
 import dbTurso from '../../database/db-sqlite.js';
+import { calcularTarifaDesdeDB } from '../../utils/tarifaUtils.js';
 
 // Managers SSE - Configurados dinámicamente
 let sseManager = null;
@@ -63,76 +64,26 @@ const generarFacturaAutomatica = async (params) => {
             return { success: false, error: 'Ya existe una factura para esta lectura' };
         }
 
-        // Obtener rangos de la tarifa
-        const rangosQuery = `
-            SELECT consumo_min, consumo_max, precio_por_m3 
-            FROM rangos_tarifas 
-            WHERE tarifa_id = ? 
-            ORDER BY consumo_min ASC
-        `;
-        const rangosResult = await dbTurso.execute({
-            sql: rangosQuery,
-            args: [tarifa_id]
+        // Calcular total usando la lógica de tarifas escalonadas (fuente de verdad única)
+        let total;
+        try {
+            const resultado = await calcularTarifaDesdeDB(consumo_m3, tarifa_id, dbTurso);
+            total = resultado.total;
+        } catch (tarifaError) {
+            return { success: false, error: tarifaError.message };
+}
+
+        // Calcular fecha de vencimiento desde configuración (default 30 días)
+        const configResult = await dbTurso.execute({
+            sql: `SELECT dias_vencimiento_factura FROM configuracion_servicio WHERE activo = 1 ORDER BY id DESC LIMIT 1`,
+            args: []
         });
+        const diasVencimiento = configResult.rows.length > 0
+            ? (Number(configResult.rows[0].dias_vencimiento_factura) || 30)
+            : 30;
 
-        if (rangosResult.rows.length === 0) {
-            return { success: false, error: 'La tarifa no tiene rangos definidos' };
-        }
-
-        const rangos = rangosResult.rows;
-
-        // Calcular total basado en tarifa progresiva/escalonada
-        // Estructura: consumo_min y consumo_max definen el rango, precio_por_m3 es lo que se cobra
-        let total = 0;
-        const consumoEntero = Math.floor(consumo_m3);
-        let rangoEncontrado = false;
-
-        for (const rango of rangos) {
-            const consumo_min = Number(rango.consumo_min);
-            const consumo_max = Number(rango.consumo_max);
-            const precio_por_m3 = Number(rango.precio_por_m3);
-
-            if (consumoEntero > consumo_max) {
-                // El consumo supera este rango completamente
-                if (consumo_min === 0) {
-                    // Primer rango (base): se cobra el precio completo del rango
-                    total += precio_por_m3;
-                } else {
-                    // Rangos superiores: se cobra precio × metros del rango
-                    const metros_en_rango = consumo_max - consumo_min + 1;
-                    total += metros_en_rango * precio_por_m3;
-                }
-            } else if (consumoEntero >= consumo_min) {
-                // El consumo está dentro de este rango (rango final)
-                if (consumo_min === 0) {
-                    // Primer rango (base): se cobra el precio completo del rango base
-                    total += precio_por_m3;
-                } else {
-                    // Rangos superiores: se cobra precio × metros consumidos en este rango
-                    const metros_consumidos_en_rango = consumoEntero - consumo_min + 1;
-                    total += metros_consumidos_en_rango * precio_por_m3;
-                }
-                rangoEncontrado = true;
-                break; // Ya encontramos el rango final, salir del bucle
-            }
-        }
-
-        // Si el consumo excede todos los rangos, usar el último rango para el excedente
-        if (!rangoEncontrado && rangos.length > 0) {
-            const ultimoRango = rangos[rangos.length - 1];
-            const ultimo_consumo_max = Number(ultimoRango.consumo_max);
-            const ultimo_precio_por_m3 = Number(ultimoRango.precio_por_m3);
-
-            // Calcular excedente usando el último rango
-            const excedente = consumoEntero - ultimo_consumo_max;
-            total += excedente * ultimo_precio_por_m3;
-        }
-
-        total = parseFloat(total.toFixed(2));
-
-        // Calcular fecha de vencimiento (30 días después)
         const fechaVencimiento = new Date(fecha_emision);
-        fechaVencimiento.setDate(fechaVencimiento.getDate() + 30);
+        fechaVencimiento.setDate(fechaVencimiento.getDate() + diasVencimiento);
         const fecha_vencimiento_str = fechaVencimiento.toISOString().split('T')[0];
 
         // Insertar factura
@@ -210,12 +161,12 @@ const lecturasController = {
      * Registrar nueva lectura - V1 logic con generación automática de facturas
      */
     async registrarLectura(req, res) {
-        console.log('Registrar lectura v2:', req.body);
         try {
-            const { medidor_id, ruta_id, consumo_m3, fecha_lectura, periodo, modificado_por } = req.body;
+            const { medidor_id, ruta_id, consumo_m3, fecha_lectura, periodo } = req.body;
+            const modificado_por = req.usuario.id; // Siempre desde el token JWT
 
             // Validación básica
-            if (!medidor_id || !ruta_id || consumo_m3 == null || !fecha_lectura || !modificado_por) {
+            if (!medidor_id || !ruta_id || consumo_m3 == null || !fecha_lectura) {
                 return res.status(400).json({ error: 'Faltan campos requeridos' });
             }
 
@@ -248,13 +199,13 @@ const lecturasController = {
 
             // Insertar lectura
             const insertQuery = `
-                INSERT INTO lecturas (medidor_id, ruta_id, consumo_m3, fecha_lectura, periodo, modificado_por)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO lecturas (medidor_id, ruta_id, consumo_m3, fecha_lectura, periodo, modificado_por, estado)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             `;
 
             const insertResult = await dbTurso.execute({
                 sql: insertQuery,
-                args: [medidor_id, ruta_id, consumo_m3, fecha_lectura, periodo || null, modificado_por]
+                args: [medidor_id, ruta_id, consumo_m3, fecha_lectura, periodo || null, modificado_por, 'pendiente']
             });
 
             const lectura_id = Number(insertResult.lastInsertRowid);
@@ -316,61 +267,27 @@ const lecturasController = {
                 }
             }
 
-            // 🔥 GENERAR FACTURA AUTOMÁTICAMENTE (lógica de V1)
-            let facturaResult = null;
-
-            // Verificar que el cliente tenga una tarifa asignada
-            if (lecturaCompleta && lecturaCompleta.cliente_tarifa_id && lecturaCompleta.cliente_id) {
-                console.log('🧾 Iniciando generación automática de factura...');
-
-                const facturaParams = {
+            return res.status(201).json({
+                success: true,
+                message: 'Lectura registrada exitosamente',
+                data: {
                     lectura_id,
-                    cliente_id: lecturaCompleta.cliente_id,
-                    tarifa_id: lecturaCompleta.cliente_tarifa_id,
-                    consumo_m3,
-                    fecha_emision: fecha_lectura,
-                    modificado_por
-                };
-
-                facturaResult = await generarFacturaAutomatica(facturaParams);
-
-                if (facturaResult.success) {
-                    console.log('✅ Factura generada automáticamente:', facturaResult.factura_id);
-                } else {
-                    console.warn('⚠️ No se pudo generar factura automática:', facturaResult.error);
+                    detalles: {
+                        id: lectura_id,
+                        medidor_id: Number(lecturaCompleta.medidor_id),
+                        ruta_id: Number(lecturaCompleta.ruta_id || 0),
+                        consumo_m3: Number(lecturaCompleta.consumo_m3),
+                        fecha_lectura: lecturaCompleta.fecha_lectura,
+                        periodo: lecturaCompleta.periodo,
+                        estado: 'pendiente',
+                        modificado_por: Number(lecturaCompleta.modificado_por || 0),
+                        medidor_numero: lecturaCompleta.medidor_numero,
+                        medidor_ubicacion: lecturaCompleta.medidor_ubicacion,
+                        cliente_nombre: lecturaCompleta.cliente_nombre,
+                        ruta_nombre: lecturaCompleta.ruta_nombre
+                    }
                 }
-            } else {
-                console.warn('⚠️ Cliente no tiene tarifa asignada o cliente_id faltante, no se puede generar factura automática');
-            }
-
-            // Respuesta final incluyendo información de factura si se generó
-            const response = {
-                mensaje: 'Lectura registrada exitosamente',
-                lectura_id,
-                detalles: {
-                    id: lectura_id,
-                    medidor_id: Number(lecturaCompleta.medidor_id),
-                    ruta_id: Number(lecturaCompleta.ruta_id || 0),
-                    consumo_m3: Number(lecturaCompleta.consumo_m3),
-                    fecha_lectura: lecturaCompleta.fecha_lectura,
-                    periodo: lecturaCompleta.periodo,
-                    modificado_por: Number(lecturaCompleta.modificado_por || 0),
-                    medidor_numero: lecturaCompleta.medidor_numero,
-                    medidor_ubicacion: lecturaCompleta.medidor_ubicacion,
-                    cliente_nombre: lecturaCompleta.cliente_nombre,
-                    ruta_nombre: lecturaCompleta.ruta_nombre
-                }
-            };
-
-            if (facturaResult && facturaResult.success) {
-                response.factura_generada = {
-                    factura_id: facturaResult.factura_id,
-                    total: facturaResult.total,
-                    mensaje: 'Factura generada automáticamente'
-                };
-            }
-
-            return res.status(201).json(response);
+            });
 
         } catch (error) {
             console.error('Error al registrar lectura v2:', error);
@@ -387,10 +304,17 @@ const lecturasController = {
 
             const baseQuery = `
                 SELECT 
-                    l.id, l.medidor_id, l.consumo_m3, l.fecha_lectura, l.periodo, l.modificado_por,
-                    u.username AS modificado_por_nombre
+                    l.id, l.medidor_id, l.ruta_id, l.consumo_m3, l.fecha_lectura, l.periodo,
+                    l.estado, l.modificado_por, l.fecha_creacion,
+                    u.username AS modificado_por_nombre,
+                    m.numero_serie AS medidor_numero,
+                    c.id AS cliente_id, c.nombre AS cliente_nombre,
+                    r.nombre AS ruta_nombre
                 FROM lecturas l
-                JOIN usuarios u ON l.modificado_por = u.id
+                LEFT JOIN usuarios u ON l.modificado_por = u.id
+                LEFT JOIN medidores m ON l.medidor_id = m.id
+                LEFT JOIN clientes c ON m.cliente_id = c.id
+                LEFT JOIN rutas r ON l.ruta_id = r.id
             `;
 
             const query = id
@@ -409,11 +333,18 @@ const lecturasController = {
             const formatearLectura = (row) => ({
                 id: Number(row.id),
                 medidor_id: Number(row.medidor_id),
+                ruta_id: row.ruta_id ? Number(row.ruta_id) : null,
                 consumo_m3: Number(row.consumo_m3),
                 fecha_lectura: row.fecha_lectura,
                 periodo: row.periodo,
+                estado: row.estado || 'pendiente',
+                fecha_creacion: row.fecha_creacion,
                 modificado_por: Number(row.modificado_por),
-                modificado_por_nombre: row.modificado_por_nombre
+                modificado_por_nombre: row.modificado_por_nombre,
+                medidor_numero: row.medidor_numero,
+                cliente_id: row.cliente_id ? Number(row.cliente_id) : null,
+                cliente_nombre: row.cliente_nombre,
+                ruta_nombre: row.ruta_nombre
             });
 
             if (id) {
@@ -435,26 +366,33 @@ const lecturasController = {
     async modificarLectura(req, res) {
         try {
             const { id } = req.params;
-            const { medidor_id, consumo_m3, fecha_lectura, periodo, modificado_por } = req.body;
+            const { medidor_id, consumo_m3, fecha_lectura, periodo } = req.body;
+            const modificado_por = req.usuario.id; // Siempre desde el token JWT
 
-            // Validación básica
-            if (!medidor_id || !consumo_m3 || !fecha_lectura || !modificado_por) {
-                return res.status(400).json({ error: 'Faltan campos requeridos' });
+            // Al menos un campo modificable
+            if (medidor_id === undefined && consumo_m3 == null && fecha_lectura === undefined && periodo === undefined) {
+                return res.status(400).json({ success: false, message: 'Debe proporcionar al menos un campo para modificar' });
             }
 
-            const query = `
-                UPDATE lecturas
-                SET medidor_id = ?, consumo_m3 = ?, fecha_lectura = ?, periodo = ?, modificado_por = ?
-                WHERE id = ?
-            `;
+            // Construcción dinámica del SET para actualización parcial
+            const setClauses = [];
+            const args = [];
+            if (medidor_id !== undefined)  { setClauses.push('medidor_id = ?');    args.push(medidor_id); }
+            if (consumo_m3 != null)         { setClauses.push('consumo_m3 = ?');    args.push(consumo_m3); }
+            if (fecha_lectura !== undefined) { setClauses.push('fecha_lectura = ?'); args.push(fecha_lectura); }
+            if (periodo !== undefined)       { setClauses.push('periodo = ?');       args.push(periodo); }
+            // Al modificar una lectura vuelve a estado pendiente (necesita re-facturar)
+            setClauses.push('estado = ?');       args.push('pendiente');
+            setClauses.push('modificado_por = ?'); args.push(modificado_por);
+            args.push(id);
 
             const result = await dbTurso.execute({
-                sql: query,
-                args: [medidor_id, consumo_m3, fecha_lectura, periodo || null, modificado_por, id]
+                sql: `UPDATE lecturas SET ${setClauses.join(', ')} WHERE id = ?`,
+                args
             });
 
             if (result.rowsAffected === 0) {
-                return res.status(404).json({ error: 'Lectura no encontrada' });
+                return res.status(404).json({ success: false, message: 'Lectura no encontrada' });
             }
 
             // Obtener datos para notificación SSE
@@ -495,7 +433,7 @@ const lecturasController = {
                 }
             }
 
-            return res.status(200).json({ mensaje: 'Lectura modificada exitosamente' });
+            return res.status(200).json({ success: true, message: 'Lectura modificada exitosamente' });
 
         } catch (error) {
             console.error('Error al modificar lectura v2:', error);
@@ -535,9 +473,7 @@ const lecturasController = {
             });
 
             if (result.rows.length === 0) {
-                return res.status(404).json({
-                    mensaje: 'No se encontraron lecturas para esa ruta y periodo'
-                });
+                return res.status(200).json({ lecturas: [] });
             }
 
             const lecturas = result.rows.map(row => ({
@@ -561,17 +497,33 @@ const lecturasController = {
      * Generar facturas para lecturas sin factura - V1 function (generación masiva)
      */
     async generarFacturasParaLecturasSinFactura(req, res) {
-        console.log('Generando facturas para lecturas sin factura v2...');
-
         try {
-            const { periodo, fecha_emision } = req.body;
-            const modificado_por = req.usuario?.id || 1;
+            const { periodo, fecha_emision, ruta_id } = req.body;
+            const modificado_por = req.usuario?.id;
 
-            if (!periodo || !fecha_emision) {
-                return res.status(400).json({ error: 'Faltan campos requeridos: periodo y fecha_emision' });
+            if (!modificado_por) {
+                return res.status(401).json({ success: false, message: 'No se pudo identificar al usuario autenticado' });
             }
 
-            // Obtener lecturas sin factura
+            if (!periodo || !fecha_emision) {
+                return res.status(400).json({ success: false, message: 'Faltan campos requeridos: periodo y fecha_emision' });
+            }
+
+            // Obtener lecturas pendientes sin factura (con filtro opcional por ruta)
+            const condiciones = [
+                'f.id IS NULL',
+                'l.periodo = ?',
+                "l.estado = 'pendiente'",
+                'c.tarifa_id IS NOT NULL',
+                'm.cliente_id IS NOT NULL'
+            ];
+            const queryArgs = [periodo];
+
+            if (ruta_id) {
+                condiciones.push('l.ruta_id = ?');
+                queryArgs.push(ruta_id);
+            }
+
             const query = `
                 SELECT 
                     l.id as lectura_id,
@@ -586,23 +538,19 @@ const lecturasController = {
                 LEFT JOIN medidores m ON l.medidor_id = m.id
                 LEFT JOIN clientes c ON m.cliente_id = c.id
                 LEFT JOIN facturas f ON l.id = f.lectura_id
-                WHERE f.id IS NULL 
-                AND l.periodo = ?
-                AND c.tarifa_id IS NOT NULL
-                AND m.cliente_id IS NOT NULL
+                WHERE ${condiciones.join(' AND ')}
             `;
 
-            const result = await dbTurso.execute({ sql: query, args: [periodo] });
+            const result = await dbTurso.execute({ sql: query, args: queryArgs });
             const lecturasSinFactura = result.rows || [];
 
             if (lecturasSinFactura.length === 0) {
-                return res.status(404).json({
-                    mensaje: 'No se encontraron lecturas sin factura para el periodo especificado',
-                    periodo
+                return res.status(200).json({
+                    success: true,
+                    message: 'No hay lecturas pendientes de facturar para los criterios indicados',
+                    data: { periodo, ruta_id: ruta_id || null, facturas_generadas: 0, detalles: [] }
                 });
             }
-
-            console.log(`Encontradas ${lecturasSinFactura.length} lecturas sin factura`);
 
             const resultados = {
                 periodo,
@@ -637,6 +585,11 @@ const lecturasController = {
                             factura_id: facturaResult.factura_id,
                             total: facturaResult.total,
                             estado: 'generada'
+                        });
+                        // Marcar la lectura como facturada
+                        await dbTurso.execute({
+                            sql: 'UPDATE lecturas SET estado = ? WHERE id = ?',
+                            args: ['facturada', Number(lectura.lectura_id)]
                         });
                     } else {
                         resultados.facturas_fallidas++;
@@ -681,8 +634,9 @@ const lecturasController = {
             }
 
             return res.status(200).json({
-                mensaje: 'Proceso de generación masiva de facturas completado',
-                ...resultados
+                success: true,
+                message: 'Proceso de generación de facturas completado',
+                data: resultados
             });
 
         } catch (error) {

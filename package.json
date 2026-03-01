@@ -1,9 +1,20 @@
 {
-  "name": "api-aguavp",
+  "name": "@aguavp/api-server",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Agua VP API Server - Controlable SQLite server with auto-migrations",
   "type": "module",
+  "exports": {
+    ".": {
+      "import": "./src/api-module.js",
+      "require": "./src/api-module.js"
+    }
+  },
+  "main": "./src/api-module.js",
+  "files": [
+    "src/",
+    "!src/**/*.test.js",
+    "!src/test/"
+  ],
   "scripts": {
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js src/test/unit",
     "test:unit": "node --experimental-vm-modules node_modules/jest/bin/jest.js src/test/unit",
@@ -37,7 +48,6 @@
     "jsonwebtoken": "^9.0.2",
     "node-cron": "^4.2.1",
     "socket.io": "^4.8.1",
-    "sqlite3": "^5.1.7",
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-express": "^5.0.1",
     "uuid": "^11.1.0",

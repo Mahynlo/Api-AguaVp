@@ -16,6 +16,18 @@ const medidorBaseSchema = {
     .transform(val => val.toUpperCase())
     .pipe(z.string().regex(/^[A-Z0-9-]+$/, 'El número de serie solo puede contener letras mayúsculas, números y guiones')),
   
+  marca: z.string()
+    .min(2, 'La marca debe tener al menos 2 caracteres')
+    .max(100, 'La marca no puede exceder 100 caracteres')
+    .nullable()
+    .optional(),
+  
+  modelo: z.string()
+    .min(1, 'El modelo debe tener al menos 1 carácter')
+    .max(100, 'El modelo no puede exceder 100 caracteres')
+    .nullable()
+    .optional(),
+  
   ubicacion: z.string()
     .min(5, 'La ubicación debe tener al menos 5 caracteres')
     .max(200, 'La ubicación no puede exceder 200 caracteres'),
@@ -65,12 +77,18 @@ export const actualizarMedidorSchema = z.object({
     .optional(),
   
   numero_serie: medidorBaseSchema.numero_serie.optional(),
+  marca: medidorBaseSchema.marca,
+  modelo: medidorBaseSchema.modelo,
   ubicacion: medidorBaseSchema.ubicacion.optional(),
   fecha_instalacion: medidorBaseSchema.fecha_instalacion.optional(),
   latitud: medidorBaseSchema.latitud.optional(),
   longitud: medidorBaseSchema.longitud.optional(),
   estado_medidor: medidorBaseSchema.estado_medidor.optional(),
-  estado_servicio: medidorBaseSchema.estado_servicio.optional()
+  estado_servicio: medidorBaseSchema.estado_servicio.optional(),
+  fecha_corte: z.string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato de fecha inválido (YYYY-MM-DD)')
+    .nullable()
+    .optional()
 }).strict().refine(
   data => Object.keys(data).length > 0,
   { message: 'Debe proporcionar al menos un campo para actualizar' }
@@ -89,6 +107,8 @@ export const buscarMedidorSchema = z.object({
   estado_medidor: z.enum(['Activo', 'Inactivo', 'Retirado', 'No instalado']).optional(),
   estado_servicio: z.enum(['Activo', 'Cortado']).optional(),
   numero_serie: z.string().optional(),
+  search: z.string().optional(),
+  ubicacion: z.string().optional(),
   page: z.string().regex(/^\d+$/).transform(Number).optional(),
   limit: z.string().regex(/^\d+$/).transform(Number).optional()
 });

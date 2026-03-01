@@ -349,7 +349,7 @@ router.get('/sesionesActivas/:usuarioId', appKeyMiddleware, authMiddleware, auth
  *       500:
  *         description: Error al renovar token
  */
-router.post('/refresh', authController.refresh);
+router.post('/refresh', appKeyMiddleware, authController.refresh);
 
 /**
  * @swagger
@@ -482,5 +482,55 @@ router.delete('/sesiones/:sesionId', appKeyMiddleware, authMiddleware, authContr
  *         description: Error al cerrar sesiones
  */
 router.delete('/sesiones/usuario/:usuarioId/todas', appKeyMiddleware, authMiddleware, authController.cerrarTodasSesiones);
+
+/**
+ * @swagger
+ * /api/v2/auth/cambiar-contrasena:
+ *   put:
+ *     summary: Cambiar contraseña del usuario autenticado
+ *     tags: [Auth V2]
+ *     security:
+ *       - AppKeyAuth: []
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [contraseña_actual, contraseña_nueva, confirmar_contraseña_nueva]
+ *             properties:
+ *               contraseña_actual:
+ *                 type: string
+ *               contraseña_nueva:
+ *                 type: string
+ *               confirmar_contraseña_nueva:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Contraseña cambiada. Otras sesiones cerradas.
+ *       401:
+ *         description: Contraseña actual incorrecta
+ *       500:
+ *         description: Error interno
+ */
+router.put('/cambiar-contrasena', appKeyMiddleware, authMiddleware, validate(cambiarContraseñaSchema), authController.cambiarContraseña);
+
+/**
+ * @swagger
+ * /api/v2/auth/me:
+ *   get:
+ *     summary: Datos del usuario autenticado actualmente
+ *     tags: [Auth V2]
+ *     security:
+ *       - AppKeyAuth: []
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Datos del usuario
+ *       500:
+ *         description: Error interno
+ */
+router.get('/me', appKeyMiddleware, authMiddleware, authController.me);
 
 export default router;

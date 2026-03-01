@@ -10,6 +10,14 @@ import { z } from 'zod';
 
 // Esquema base para cliente
 const clienteBaseSchema = {
+  numero_predio: z.string()
+    .min(1, 'El número de predio no puede estar vacío')
+    .max(50, 'El número de predio no puede exceder 50 caracteres')
+    .regex(/^[a-zA-Z0-9\-\/]+$/, 'El número de predio solo puede contener letras, números, guiones y diagonales')
+    .transform(val => val.trim().toUpperCase())
+    .nullable()
+    .optional(),
+
   nombre: z.string()
     .min(3, 'El nombre debe tener al menos 3 caracteres')
     .max(100, 'El nombre no puede exceder 100 caracteres')
@@ -49,6 +57,7 @@ const clienteBaseSchema = {
 // Esquema para crear un cliente
 export const crearClienteSchema = z.object({
   ...clienteBaseSchema,
+  numero_predio: clienteBaseSchema.numero_predio, // Explícito para claridad (opcional al crear)
   estado_cliente: z.enum(['Activo', 'Inactivo', 'Suspendido'], {
     errorMap: () => ({ message: 'Estado debe ser: Activo, Inactivo o Suspendido' })
   }).optional().default('Activo'),
@@ -60,6 +69,7 @@ export const crearClienteSchema = z.object({
 
 // Esquema para actualizar un cliente (todos los campos opcionales)
 export const actualizarClienteSchema = z.object({
+  numero_predio: clienteBaseSchema.numero_predio,
   nombre: clienteBaseSchema.nombre.optional(),
   direccion: clienteBaseSchema.direccion.optional(),
   telefono: clienteBaseSchema.telefono.optional(),
@@ -100,6 +110,7 @@ export const buscarClienteSchema = z.object({
   ciudad: z.string().optional(),
   estado_cliente: z.enum(['Activo', 'Inactivo', 'Suspendido', 'Eliminado']).optional(),
   nombre: z.string().optional(),
+  numero_predio: z.string().optional(),
   page: z.string().regex(/^\d+$/).transform(Number).optional(),
   limit: z.string().regex(/^\d+$/).transform(Number).optional()
 });

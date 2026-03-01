@@ -55,8 +55,8 @@ export const registrarUsuarioSchema = z.object({
     .max(20, 'El usuario no puede exceder 20 caracteres')
     .regex(/^[a-zA-Z0-9_]+$/, 'El usuario solo puede contener letras, números y guiones bajos'),
 
-  rol: z.enum(['admin', 'operador', 'lecturista', 'superadmin', 'administrador', 'usuario'], {
-    errorMap: () => ({ message: 'Rol inválido' })
+  rol: z.enum(['superadmin', 'administrador', 'operador'], {
+    errorMap: () => ({ message: 'Rol inválido. Roles permitidos: superadmin, administrador, operador' })
   }).default('operador'),
 
   telefono: z.string()

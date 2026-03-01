@@ -26,8 +26,8 @@ export const crearFacturaSchema = z.object({
     .or(z.string().regex(/^\d+$/).transform(Number)),
 
   consumo_m3: z.number()
-    .min(0, 'El consumo no puede ser negativo')
-    .or(z.string().regex(/^\d+\.?\d*$/).transform(Number)),
+    .min(0.001, 'El consumo debe ser mayor a cero')
+    .or(z.string().regex(/^\d+\.?\d*$/).transform(Number).refine(v => v > 0, 'El consumo debe ser mayor a cero')),
 
   fecha_emision: z.string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato de fecha inválido (YYYY-MM-DD)'),

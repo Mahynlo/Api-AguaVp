@@ -12,6 +12,7 @@ export const lecturas = sqliteTable('lecturas', {
   fecha_lectura: text('fecha_lectura').notNull(),
   consumo_m3: numeric('consumo_m3').notNull(),
   periodo: text('periodo'),
+  estado: text('estado').default('pendiente'),  // 'pendiente' | 'facturada'
   modificado_por: integer('modificado_por').references(() => usuarios.id),
   fecha_creacion: text('fecha_creacion').default(sql`(datetime('now'))`),
 });
