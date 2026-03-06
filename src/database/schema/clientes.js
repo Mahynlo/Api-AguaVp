@@ -17,6 +17,7 @@ export const clientes = sqliteTable('clientes', {
   }).notNull().default('Activo'),
   tarifa_id: integer('tarifa_id').references(() => tarifas.id),
   modificado_por: integer('modificado_por').references(() => usuarios.id),
+  saldo_anterior: numeric('saldo_anterior').notNull().default(0),
   fecha_creacion: text('fecha_creacion').default(sql`(datetime('now'))`),
   fecha_eliminacion: text('fecha_eliminacion'),
   eliminado_por: integer('eliminado_por').references(() => usuarios.id),

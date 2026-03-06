@@ -18,6 +18,7 @@ export const facturas = sqliteTable('facturas', {
   saldo_pendiente: numeric('saldo_pendiente').notNull().default(0),
   estado: text('estado', { enum: ['Pagado', 'Pendiente', 'Parcial', 'Vencida', 'En Convenio'] }).notNull(),
   modificado_por: integer('modificado_por').references(() => usuarios.id),
+  cargo_saldo_anterior: numeric('cargo_saldo_anterior').notNull().default(0),
   fecha_creacion: text('fecha_creacion').default(sql`(datetime('now'))`),
 });
 
