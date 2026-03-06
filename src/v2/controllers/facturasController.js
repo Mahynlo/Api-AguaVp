@@ -20,6 +20,7 @@
 
 import dbTurso from '../../database/db-sqlite.js';
 import { calcularTarifaDesdeDB } from '../../utils/tarifaUtils.js';
+import { calcularVencimientoHabil } from '../../utils/timezone.js';
 
 // Managers SSE - Configurados dinámicamente
 let sseManager = null;
@@ -105,10 +106,8 @@ const facturasController = {
                 ? (Number(configResult.rows[0].dias_vencimiento_factura) || 30)
                 : 30;
 
-            // Calcular fecha de vencimiento
-            const fechaVencimiento = new Date(fecha_emision);
-            fechaVencimiento.setDate(fechaVencimiento.getDate() + diasVencimiento);
-            const fecha_vencimiento_str = fechaVencimiento.toISOString().split('T')[0];
+            // Calcular fecha de vencimiento (en día hábil, respetando feriados MX)
+            const fecha_vencimiento_str = calcularVencimientoHabil(diasVencimiento, fecha_emision);
 
             // Insertar factura
             const insertQuery = `

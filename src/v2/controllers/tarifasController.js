@@ -13,6 +13,7 @@
  */
 
 import dbTurso from '../../database/db-sqlite.js';
+import { nowDate } from '../../utils/timezone.js';
 
 // Managers SSE - Configurados dinámicamente
 let sseManager = null;
@@ -326,9 +327,9 @@ const tarifasController = {
             const tarifasConRangos = result.rows.map(tarifa => {
                 const tId = Number(tarifa.id);
                 // Determinar si está activa/vigente en el backend también es útil
-                const hoy = new Date();
-                const fInicio = new Date(tarifa.fecha_inicio);
-                const fFin = tarifa.fecha_fin ? new Date(tarifa.fecha_fin) : null;
+                const hoy = nowDate();
+                const fInicio = tarifa.fecha_inicio;
+                const fFin = tarifa.fecha_fin || null;
                 const activa = hoy >= fInicio && (!fFin || hoy <= fFin);
 
                 return {
@@ -626,9 +627,9 @@ const tarifasController = {
             }));
 
             // Determinar si la tarifa está activa
-            const hoy = new Date();
-            const fechaInicio = new Date(tarifa.fecha_inicio);
-            const fechaFin = tarifa.fecha_fin ? new Date(tarifa.fecha_fin) : null;
+            const hoy = nowDate();
+            const fechaInicio = tarifa.fecha_inicio;
+            const fechaFin = tarifa.fecha_fin || null;
             const estaActiva = fechaInicio <= hoy && (!fechaFin || fechaFin >= hoy);
 
             res.json({
