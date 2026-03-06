@@ -158,54 +158,165 @@ const generarFacturaAutomatica = async (params) => {
 
 const lecturasController = {
     /**
-     * Registrar nueva lectura - V1 logic con generación automática de facturas
+     * Registrar nueva lectura - V2 con lógica de lectura real de medidor
+     *
+     * FLUJO NUEVO (recomendado):
+     *   Body: { medidor_id, ruta_id, lectura_actual, vuelta_cero?, fecha_lectura, periodo }
+     *   - El backend busca lectura_anterior (última lectura_actual del medidor o lectura_base)
+     *   - Calcula consumo_m3 automáticamente
+     *   - Valida lectura_actual >= lectura_anterior (salvo vuelta_cero)
+     *   - Edge case rollover: consumo = (capacidad_maxima ?? 99999) - ant + act
+     *
+     * FLUJO LEGACY (compatibilidad):
+     *   Body: { medidor_id, ruta_id, consumo_m3, fecha_lectura, periodo }
+     *   - Se acepta consumo directo; lectura_anterior y lectura_actual quedan NULL
      */
     async registrarLectura(req, res) {
         try {
-            const { medidor_id, ruta_id, consumo_m3, fecha_lectura, periodo } = req.body;
-            const modificado_por = req.usuario.id; // Siempre desde el token JWT
+            const {
+                medidor_id,
+                ruta_id,
+                lectura_actual,
+                vuelta_cero = false,
+                consumo_m3: consumo_m3_legacy,
+                fecha_lectura,
+                periodo
+            } = req.body;
+            const modificado_por = req.usuario.id;
 
-            // Validación básica
-            if (!medidor_id || !ruta_id || consumo_m3 == null || !fecha_lectura) {
-                return res.status(400).json({ error: 'Faltan campos requeridos' });
+            // Validaciones básicas de campo
+            if (!medidor_id || !ruta_id || !fecha_lectura) {
+                return res.status(400).json({ error: 'Faltan campos requeridos (medidor_id, ruta_id, fecha_lectura)' });
+            }
+            if (lectura_actual === undefined && consumo_m3_legacy === undefined) {
+                return res.status(400).json({ error: 'Debe proporcionar lectura_actual o consumo_m3' });
             }
 
-            // Validar existencia del medidor
-            const medidorQuery = `SELECT id FROM medidores WHERE id = ?`;
+            // Validar existencia del medidor (y obtener lectura_base + capacidad_maxima)
+            const medidorQuery = `SELECT id, lectura_base, capacidad_maxima FROM medidores WHERE id = ?`;
             const medidorResult = await dbTurso.execute({ sql: medidorQuery, args: [medidor_id] });
-
             if (medidorResult.rows.length === 0) {
                 return res.status(404).json({ error: 'Medidor no encontrado' });
             }
+            const medidor = medidorResult.rows[0];
 
             // Validar existencia de la ruta
-            const rutaQuery = `SELECT id FROM rutas WHERE id = ?`;
-            const rutaResult = await dbTurso.execute({ sql: rutaQuery, args: [ruta_id] });
-
+            const rutaResult = await dbTurso.execute({ sql: `SELECT id FROM rutas WHERE id = ?`, args: [ruta_id] });
             if (rutaResult.rows.length === 0) {
                 return res.status(404).json({ error: 'Ruta no encontrada' });
             }
 
-            // Verificar si ya existe una lectura para el mismo medidor y periodo
-            const verificacionQuery = `SELECT id FROM lecturas WHERE medidor_id = ? AND periodo = ?`;
-            const verificacionResult = await dbTurso.execute({
-                sql: verificacionQuery,
+            // Verificar que el medidor está asignado a esta ruta
+            const perteneceResult = await dbTurso.execute({
+                sql: `SELECT 1 FROM rutas_puntos WHERE ruta_id = ? AND medidor_id = ?`,
+                args: [ruta_id, medidor_id]
+            });
+            if (perteneceResult.rows.length === 0) {
+                return res.status(400).json({ error: 'El medidor no está asignado a esta ruta' });
+            }
+
+            // Verificar si ya existe lectura para el mismo medidor y periodo
+            const dupeResult = await dbTurso.execute({
+                sql: `SELECT id FROM lecturas WHERE medidor_id = ? AND periodo = ?`,
                 args: [medidor_id, periodo]
             });
-
-            if (verificacionResult.rows.length > 0) {
+            if (dupeResult.rows.length > 0) {
                 return res.status(409).json({ error: 'Ya existe una lectura registrada para este medidor y periodo' });
             }
 
-            // Insertar lectura
+            // ============================================================
+            // CÁLCULO DE CONSUMO
+            // ============================================================
+            let consumo_m3_final;
+            let lectura_anterior_val = null;
+            let lectura_actual_val = null;
+            let vuelta_cero_val = 0;
+
+            if (lectura_actual !== undefined) {
+                // --- FLUJO NUEVO ---
+                const lectActual = parseFloat(lectura_actual);
+                if (isNaN(lectActual) || lectActual < 0) {
+                    return res.status(400).json({ error: 'lectura_actual debe ser un número >= 0' });
+                }
+
+                // Buscar lectura_anterior: última lectura_actual registrada para este medidor
+                const prevQuery = `
+                    SELECT lectura_actual
+                    FROM lecturas
+                    WHERE medidor_id = ? AND lectura_actual IS NOT NULL
+                    ORDER BY fecha_lectura DESC
+                    LIMIT 1
+                `;
+                const prevResult = await dbTurso.execute({ sql: prevQuery, args: [medidor_id] });
+                let lectAnterior = null;
+
+                if (prevResult.rows.length > 0 && prevResult.rows[0].lectura_actual !== null) {
+                    lectAnterior = parseFloat(prevResult.rows[0].lectura_actual);
+                } else if (medidor.lectura_base !== null && medidor.lectura_base !== undefined) {
+                    // Sin historial → usar lectura_base del medidor
+                    lectAnterior = parseFloat(medidor.lectura_base);
+                }
+                // Si lectAnterior sigue null → primer registro del medidor sin base;
+                // se acepta cualquier valor y consumo = 0 (lectura de inicio)
+
+                lectura_actual_val = lectActual;
+                lectura_anterior_val = lectAnterior;
+
+                if (lectAnterior === null) {
+                    // Primera lectura sin punto de referencia: consumo 0 (se registra como lectura de inicio)
+                    consumo_m3_final = 0;
+                } else if (vuelta_cero) {
+                    // --- ROLLOVER ---
+                    if (lectActual >= lectAnterior) {
+                        return res.status(400).json({
+                            error: 'vuelta_cero marcado pero lectura_actual es mayor o igual a lectura_anterior. Desmarca el flag o verifica los valores.'
+                        });
+                    }
+                    const capMax = (medidor.capacidad_maxima !== null && medidor.capacidad_maxima !== undefined)
+                        ? parseFloat(medidor.capacidad_maxima)
+                        : 99999;
+                    consumo_m3_final = parseFloat(((capMax - lectAnterior) + lectActual).toFixed(4));
+                    vuelta_cero_val = 1;
+                } else {
+                    // --- FLUJO NORMAL ---
+                    if (lectActual < lectAnterior) {
+                        return res.status(422).json({
+                            error: `La lectura actual (${lectActual}) no puede ser menor a la lectura anterior (${lectAnterior}). Si el medidor dio la vuelta a cero, marca el flag vuelta_cero.`,
+                            lectura_anterior: lectAnterior,
+                            lectura_actual: lectActual
+                        });
+                    }
+                    consumo_m3_final = parseFloat((lectActual - lectAnterior).toFixed(4));
+                }
+
+            } else {
+                // --- FLUJO LEGACY (consumo_m3 directo) ---
+                consumo_m3_final = parseFloat(consumo_m3_legacy);
+                if (isNaN(consumo_m3_final) || consumo_m3_final <= 0) {
+                    return res.status(400).json({ error: 'consumo_m3 debe ser mayor a cero' });
+                }
+            }
+
+            // Insertar lectura con todos los valores
             const insertQuery = `
-                INSERT INTO lecturas (medidor_id, ruta_id, consumo_m3, fecha_lectura, periodo, modificado_por, estado)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO lecturas
+                  (medidor_id, ruta_id, consumo_m3, lectura_anterior, lectura_actual, vuelta_cero, fecha_lectura, periodo, modificado_por, estado)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `;
 
             const insertResult = await dbTurso.execute({
                 sql: insertQuery,
-                args: [medidor_id, ruta_id, consumo_m3, fecha_lectura, periodo || null, modificado_por, 'pendiente']
+                args: [
+                    medidor_id, ruta_id,
+                    consumo_m3_final,
+                    lectura_anterior_val,
+                    lectura_actual_val,
+                    vuelta_cero_val,
+                    fecha_lectura,
+                    periodo || null,
+                    modificado_por,
+                    'pendiente'
+                ]
             });
 
             const lectura_id = Number(insertResult.lastInsertRowid);
@@ -213,7 +324,7 @@ const lecturasController = {
             // Obtener datos completos para SSE y facturación
             const lecturaCompletaQuery = `
                 SELECT 
-                    l.*, 
+                    l.*,
                     m.numero_serie as medidor_numero,
                     m.ubicacion as medidor_ubicacion,
                     c.nombre as cliente_nombre,
@@ -226,41 +337,30 @@ const lecturasController = {
                 LEFT JOIN rutas r ON l.ruta_id = r.id
                 WHERE l.id = ?
             `;
-
-            const lecturaCompletaResult = await dbTurso.execute({
-                sql: lecturaCompletaQuery,
-                args: [lectura_id]
-            });
-
+            const lecturaCompletaResult = await dbTurso.execute({ sql: lecturaCompletaQuery, args: [lectura_id] });
             const lecturaCompleta = lecturaCompletaResult.rows[0];
 
-            // Enviar notificaciones SSE para la lectura
+            // Notificaciones SSE
             if (sseManager && notificationManager && lecturaCompleta) {
                 try {
-                    // Notificar a operadores sobre nueva lectura
                     notificationManager.lecturaRegistrada({
                         id: lectura_id,
                         medidor_id,
                         medidor_numero: lecturaCompleta.medidor_numero,
                         cliente_nombre: lecturaCompleta.cliente_nombre,
-                        consumo_m3,
+                        consumo_m3: consumo_m3_final,
+                        lectura_anterior: lectura_anterior_val,
+                        lectura_actual: lectura_actual_val,
                         fecha_lectura,
                         periodo: periodo || null,
                         ruta_nombre: lecturaCompleta.ruta_nombre,
                         message: `Lectura registrada para medidor ${lecturaCompleta.medidor_numero}`
                     }, modificado_por);
 
-                    // Notificar progreso de ruta con alertaSistema
                     notificationManager.alertaSistema(
                         `Progreso de ruta: medidor ${lecturaCompleta.medidor_numero} completado`,
                         'info',
-                        {
-                            ruta_id,
-                            medidor_id,
-                            lectura_id,
-                            consumo_m3,
-                            tipo: 'progreso_ruta'
-                        }
+                        { ruta_id, medidor_id, lectura_id, consumo_m3: consumo_m3_final, tipo: 'progreso_ruta' }
                     );
                 } catch (sseError) {
                     console.warn('Error enviando notificaciones SSE de lectura:', sseError);
@@ -276,7 +376,10 @@ const lecturasController = {
                         id: lectura_id,
                         medidor_id: Number(lecturaCompleta.medidor_id),
                         ruta_id: Number(lecturaCompleta.ruta_id || 0),
-                        consumo_m3: Number(lecturaCompleta.consumo_m3),
+                        consumo_m3: consumo_m3_final,
+                        lectura_anterior: lectura_anterior_val,
+                        lectura_actual: lectura_actual_val,
+                        vuelta_cero: vuelta_cero_val === 1,
                         fecha_lectura: lecturaCompleta.fecha_lectura,
                         periodo: lecturaCompleta.periodo,
                         estado: 'pendiente',
@@ -366,21 +469,22 @@ const lecturasController = {
     async modificarLectura(req, res) {
         try {
             const { id } = req.params;
-            const { medidor_id, consumo_m3, fecha_lectura, periodo } = req.body;
+            const { medidor_id, lectura_actual, consumo_m3, fecha_lectura, periodo } = req.body;
             const modificado_por = req.usuario.id; // Siempre desde el token JWT
 
             // Al menos un campo modificable
-            if (medidor_id === undefined && consumo_m3 == null && fecha_lectura === undefined && periodo === undefined) {
+            if (medidor_id === undefined && lectura_actual === undefined && consumo_m3 == null && fecha_lectura === undefined && periodo === undefined) {
                 return res.status(400).json({ success: false, message: 'Debe proporcionar al menos un campo para modificar' });
             }
 
             // Construcción dinámica del SET para actualización parcial
             const setClauses = [];
             const args = [];
-            if (medidor_id !== undefined)  { setClauses.push('medidor_id = ?');    args.push(medidor_id); }
-            if (consumo_m3 != null)         { setClauses.push('consumo_m3 = ?');    args.push(consumo_m3); }
-            if (fecha_lectura !== undefined) { setClauses.push('fecha_lectura = ?'); args.push(fecha_lectura); }
-            if (periodo !== undefined)       { setClauses.push('periodo = ?');       args.push(periodo); }
+            if (medidor_id !== undefined)    { setClauses.push('medidor_id = ?');    args.push(medidor_id); }
+            if (lectura_actual !== undefined) { setClauses.push('lectura_actual = ?'); args.push(lectura_actual); }
+            if (consumo_m3 != null)           { setClauses.push('consumo_m3 = ?');    args.push(consumo_m3); }
+            if (fecha_lectura !== undefined)  { setClauses.push('fecha_lectura = ?'); args.push(fecha_lectura); }
+            if (periodo !== undefined)        { setClauses.push('periodo = ?');       args.push(periodo); }
             // Al modificar una lectura vuelve a estado pendiente (necesita re-facturar)
             setClauses.push('estado = ?');       args.push('pendiente');
             setClauses.push('modificado_por = ?'); args.push(modificado_por);

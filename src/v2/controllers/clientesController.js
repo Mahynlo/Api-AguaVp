@@ -177,29 +177,29 @@ const clientesController = {
                 const offset = (pageNum - 1) * limitNum;
                 const searchTerm = search ? `%${search}%` : null;
 
-                let countQuery = `SELECT COUNT(*) as total FROM clientes`;
-                let dataQuery = `SELECT * FROM clientes`;
+                let countQuery = `SELECT COUNT(*) as total FROM clientes c`;
+                let dataQuery = `SELECT c.*, t.nombre as tarifa_nombre FROM clientes c LEFT JOIN tarifas t ON c.tarifa_id = t.id`;
 
                 let whereArgs = [];
                 let conditions = [];
 
                 if (searchTerm) {
-                    conditions.push(`(nombre LIKE ? OR telefono LIKE ? OR correo LIKE ? OR ciudad LIKE ? OR numero_predio LIKE ?)`);
+                    conditions.push(`(c.nombre LIKE ? OR c.telefono LIKE ? OR c.correo LIKE ? OR c.ciudad LIKE ? OR c.numero_predio LIKE ?)`);
                     whereArgs.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
                 }
 
                 if (numero_predio) {
-                    conditions.push(`numero_predio = ?`);
+                    conditions.push(`c.numero_predio = ?`);
                     whereArgs.push(numero_predio.toString().toUpperCase());
                 }
 
                 if (ciudad && ciudad !== 'All') {
-                    conditions.push(`ciudad = ?`);
+                    conditions.push(`c.ciudad = ?`);
                     whereArgs.push(ciudad);
                 }
 
                 if (estado && estado !== 'All') {
-                    conditions.push(`estado_cliente = ?`);
+                    conditions.push(`c.estado_cliente = ?`);
                     whereArgs.push(estado);
                 }
 
@@ -213,7 +213,7 @@ const clientesController = {
                 const total = Number(countResult.rows[0].total);
 
                 // 2. Obtener datos
-                dataQuery += whereClause + ` ORDER BY nombre ASC LIMIT ? OFFSET ?`;
+                dataQuery += whereClause + ` ORDER BY c.nombre ASC LIMIT ? OFFSET ?`;
                 const dataArgs = [...whereArgs, limitNum, offset];
 
                 const result = await dbTurso.execute({
@@ -232,6 +232,7 @@ const clientesController = {
                     correo: cliente.correo,
                     estado_cliente: cliente.estado_cliente,
                     tarifa_id: cliente.tarifa_id ? Number(cliente.tarifa_id) : null,
+                    tarifa_nombre: cliente.tarifa_nombre || null,
                     modificado_por: cliente.modificado_por ? Number(cliente.modificado_por) : null,
                     fecha_creacion: cliente.fecha_creacion
                 }));
@@ -250,7 +251,7 @@ const clientesController = {
 
             // Comportamiento Legacy (sin paginación, descarga todo)
             // Útil si hay otros consumidores del API que no esperan paginación
-            const query = `SELECT * FROM clientes ORDER BY nombre ASC`;
+            const query = `SELECT c.*, t.nombre as tarifa_nombre FROM clientes c LEFT JOIN tarifas t ON c.tarifa_id = t.id ORDER BY c.nombre ASC`;
             const result = await dbTurso.execute({ sql: query });
 
             // Convertir BigInt a Number para compatibilidad JSON
@@ -264,6 +265,7 @@ const clientesController = {
                 correo: cliente.correo,
                 estado_cliente: cliente.estado_cliente,
                 tarifa_id: cliente.tarifa_id ? Number(cliente.tarifa_id) : null,
+                tarifa_nombre: cliente.tarifa_nombre || null,
                 modificado_por: cliente.modificado_por ? Number(cliente.modificado_por) : null,
                 fecha_creacion: cliente.fecha_creacion
             }));

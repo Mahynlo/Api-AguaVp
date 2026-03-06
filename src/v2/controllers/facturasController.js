@@ -416,10 +416,7 @@ const facturasController = {
             }
 
             if (periodo && !id && result.rows.length === 0) {
-                return res.status(404).json({
-                    error: 'No se encontraron facturas para el periodo especificado',
-                    periodo
-                });
+                return res.status(200).json([]);
             }
 
             // Formateo optimizado con destructuring

@@ -22,7 +22,7 @@ const clienteBaseSchema = {
     .min(3, 'El nombre debe tener al menos 3 caracteres')
     .max(100, 'El nombre no puede exceder 100 caracteres')
     .regex(/^[a-zA-ZáéíóúÁÉÍÓÚñÑ\s\.]+$/, 'El nombre solo puede contener letras y espacios')
-    .transform(val => val.trim().replace(/\b\w/g, c => c.toUpperCase())), // Capitalizar
+    .transform(val => val.trim().split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ')), // Capitalizar (Unicode-safe)
 
   direccion: z.string()
     .min(5, 'La dirección debe tener al menos 5 caracteres')

@@ -1,6 +1,6 @@
 {
   "name": "@aguavp/api-server",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Agua VP API Server - Controlable SQLite server with auto-migrations",
   "type": "module",
   "exports": {

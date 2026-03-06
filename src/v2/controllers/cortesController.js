@@ -37,21 +37,26 @@ const cortesController = {
                     c.id as cliente_id,
                     c.nombre as cliente_nombre,
                     c.direccion,
-                    COUNT(f.id) as facturas_vencidas,
+                    COUNT(CASE WHEN f.estado = 'Vencida' THEN f.id END) as facturas_vencidas,
                     SUM(f.saldo_pendiente) as deuda_total,
                     MIN(f.fecha_vencimiento) as fecha_vencimiento_mas_antigua,
                     cp.id as convenio_id,
                     cp.saldo_restante as convenio_saldo,
-                    cp.numero_parcialidades as convenio_parcialidades
+                    cp.numero_parcialidades as convenio_parcialidades,
+                    (SELECT COUNT(*) FROM parcialidades_convenio pc WHERE pc.convenio_id = cp.id AND pc.estado = 'Pendiente') as parcialidades_pendientes,
+                    cp.numero_parcialidades as total_parcialidades
                 FROM medidores m
                 JOIN clientes c ON m.cliente_id = c.id
                 JOIN lecturas l ON l.medidor_id = m.id
                 JOIN facturas f ON f.lectura_id = l.id
                 LEFT JOIN convenios_pago cp ON cp.medidor_id = m.id AND cp.estado = 'Activo'
                 WHERE f.saldo_pendiente > 0 
-                AND f.estado = 'Vencida'
-                AND f.fecha_vencimiento <= date('now', '-' || ? || ' days')
+                AND f.estado IN ('Vencida', 'En Convenio')
                 AND m.estado_servicio IN ('Activo', 'Cortado')
+                AND (
+                    (f.estado = 'Vencida' AND f.fecha_vencimiento <= date('now', '-' || ? || ' days'))
+                    OR f.estado = 'En Convenio'
+                )
                 GROUP BY m.id, m.numero_serie, m.estado_servicio, c.id, c.nombre, c.direccion, cp.id, cp.saldo_restante, cp.numero_parcialidades
                 HAVING facturas_vencidas >= ? OR cp.id IS NOT NULL
                 ORDER BY 
@@ -89,7 +94,9 @@ const cortesController = {
                     convenio: tieneConvenio ? {
                         id: row.convenio_id,
                         saldo_restante: Number(row.convenio_saldo),
-                        parcialidades: Number(row.convenio_parcialidades)
+                        parcialidades: Number(row.convenio_parcialidades),
+                        parcialidades_pendientes: Number(row.parcialidades_pendientes || 0),
+                        total_parcialidades: Number(row.total_parcialidades || 0)
                     } : null,
                     tiene_convenio: tieneConvenio,
                     accion_sugerida: tieneConvenio ? "En Convenio" :

@@ -10,62 +10,82 @@ import { z } from 'zod';
 
 // Esquema para registrar una lectura (basado en registrarLectura del controlador)
 export const registrarLecturaSchema = z.object({
-  medidor_id: z.number()
-    .int('El ID del medidor debe ser un número entero')
-    .positive('El ID del medidor debe ser positivo')
-    .or(z.string().regex(/^\d+$/).transform(Number)),
-  
-  ruta_id: z.number()
-    .int('El ID de la ruta debe ser un número entero')
-    .positive('El ID de la ruta debe ser positivo')
-    .or(z.string().regex(/^\d+$/).transform(Number)),
-  
-  consumo_m3: z.number()
-    .min(0.001, 'El consumo debe ser mayor a cero')
-    .or(z.string().regex(/^\d+\.?\d*$/).transform(Number).refine(v => v > 0, 'El consumo debe ser mayor a cero')),
-  
+  medidor_id: z.union([
+    z.number().int('El ID del medidor debe ser un número entero').positive(),
+    z.string().regex(/^\d+$/).transform(Number)
+  ]),
+
+  ruta_id: z.union([
+    z.number().int('El ID de la ruta debe ser un número entero').positive(),
+    z.string().regex(/^\d+$/).transform(Number)
+  ]),
+
+  // --- Flujo nuevo (recomendado) ---
+  // El operador ingresa la lectura real del totalizador del medidor.
+  // El backend calcula consumo_m3 = lectura_actual - lectura_anterior.
+  lectura_actual: z.union([
+    z.number().min(0, 'La lectura actual no puede ser negativa'),
+    z.string().regex(/^\d+\.?\d*$/).transform(Number).refine(v => v >= 0)
+  ]).optional(),
+
+  // Flag para "vuelta a cero" (rollover): el medidor llegó al máximo y reinició.
+  vuelta_cero: z.boolean().optional().default(false),
+
+  // --- Flujo legacy (compatibilidad retroactiva) ---
+  consumo_m3: z.union([
+    z.number().min(0, 'El consumo no puede ser negativo'),
+    z.string().regex(/^\d+\.?\d*$/).transform(Number).refine(v => v >= 0)
+  ]).optional(),
+
   fecha_lectura: z.string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato de fecha inválido (YYYY-MM-DD)'),
-  
+
   periodo: z.string()
     .regex(/^\d{4}-\d{2}$/, 'Formato de período inválido (YYYY-MM)')
     .optional(),
-  
-  modificado_por: z.number()
-    .int('El ID del usuario debe ser un número entero')
-    .positive('El ID del usuario debe ser positivo')
-    .or(z.string().regex(/^\d+$/).transform(Number))
-    .optional() // Ignorado: siempre se toma de req.usuario.id en el controlador
-}).strict();
+
+  modificado_por: z.union([
+    z.number().int().positive(),
+    z.string().regex(/^\d+$/).transform(Number)
+  ]).nullable().optional()
+}).refine(
+  data => data.lectura_actual !== undefined || data.consumo_m3 !== undefined,
+  { message: 'Debe proporcionar lectura_actual (flujo nuevo) o consumo_m3 (flujo legacy)' }
+);
 
 // Esquema para actualizar una lectura
 export const actualizarLecturaSchema = z.object({
-  medidor_id: z.number()
-    .int('El ID del medidor debe ser un número entero')
-    .positive('El ID del medidor debe ser positivo')
-    .or(z.string().regex(/^\d+$/).transform(Number))
-    .optional(),
-  
-  consumo_m3: z.number()
-    .min(0.001, 'El consumo debe ser mayor a cero')
-    .or(z.string().regex(/^\d+\.?\d*$/).transform(Number).refine(v => v > 0, 'El consumo debe ser mayor a cero'))
-    .optional(),
-  
+  medidor_id: z.union([
+    z.number().int().positive(),
+    z.string().regex(/^\d+$/).transform(Number)
+  ]).optional(),
+
+  // Lectura actual del medidor (flujo nuevo — rectificación)
+  lectura_actual: z.union([
+    z.number().min(0, 'La lectura actual no puede ser negativa'),
+    z.string().regex(/^\d+\.?\d*$/).transform(Number).refine(v => v >= 0)
+  ]).optional(),
+
+  // Consumo calculado (flujo legacy o calculado en frontend)
+  consumo_m3: z.union([
+    z.number().min(0, 'El consumo no puede ser negativo'),
+    z.string().regex(/^\d+\.?\d*$/).transform(Number).refine(v => v >= 0)
+  ]).optional(),
+
   fecha_lectura: z.string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato de fecha inválido (YYYY-MM-DD)')
     .optional(),
-  
+
   periodo: z.string()
     .regex(/^\d{4}-\d{2}$/, 'Formato de período inválido (YYYY-MM)')
     .optional(),
-  
-  modificado_por: z.number()
-    .int('El ID del usuario debe ser un número entero')
-    .positive('El ID del usuario debe ser positivo')
-    .or(z.string().regex(/^\d+$/).transform(Number))
-    .optional()
-}).strict().refine(
-  data => Object.keys(data).length > 0,
+
+  modificado_por: z.union([
+    z.number().int().positive(),
+    z.string().regex(/^\d+$/).transform(Number)
+  ]).nullable().optional()
+}).refine(
+  data => Object.keys(data).filter(k => k !== 'modificado_por').length > 0,
   { message: 'Debe proporcionar al menos un campo para actualizar' }
 );
 

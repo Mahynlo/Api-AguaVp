@@ -64,7 +64,19 @@ export const crearMedidorSchema = z.object({
     .nullable()
     .optional(),
   
-  ...medidorBaseSchema
+  ...medidorBaseSchema,
+
+  // Campos para sistema de lecturas reales (migración 0016)
+  lectura_base: z.number()
+    .min(0, 'La lectura base no puede ser negativa')
+    .or(z.string().regex(/^\d+\.?\d*$/).transform(Number).refine(v => v >= 0))
+    .nullable()
+    .optional(),
+  capacidad_maxima: z.number()
+    .positive('La capacidad máxima debe ser positiva')
+    .or(z.string().regex(/^\d+\.?\d*$/).transform(Number).refine(v => v > 0))
+    .nullable()
+    .optional()
 }).strict();
 
 // Esquema para actualizar un medidor
@@ -87,6 +99,17 @@ export const actualizarMedidorSchema = z.object({
   estado_servicio: medidorBaseSchema.estado_servicio.optional(),
   fecha_corte: z.string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato de fecha inválido (YYYY-MM-DD)')
+    .nullable()
+    .optional(),
+  // Campos para sistema de lecturas reales (migración 0016)
+  lectura_base: z.number()
+    .min(0, 'La lectura base no puede ser negativa')
+    .or(z.string().regex(/^\d+\.?\d*$/).transform(Number).refine(v => v >= 0))
+    .nullable()
+    .optional(),
+  capacidad_maxima: z.number()
+    .positive('La capacidad máxima debe ser positiva')
+    .or(z.string().regex(/^\d+\.?\d*$/).transform(Number).refine(v => v > 0))
     .nullable()
     .optional()
 }).strict().refine(

@@ -40,6 +40,9 @@ export const medidores = sqliteTable('medidores', {
     enum: ['Activo', 'Cortado']
   }).default('Activo'),
   fecha_corte: text('fecha_corte'),
+  // Columnas para sistema de lecturas reales (migración 0016)
+  lectura_base: numeric('lectura_base'),       // lectura al instalar / inicio del sistema
+  capacidad_maxima: numeric('capacidad_maxima'), // límite del totalizador antes del rollover (default runtime: 99999.99)
   fecha_creacion: text('fecha_creacion').default(sql`(datetime('now'))`),
 });
 

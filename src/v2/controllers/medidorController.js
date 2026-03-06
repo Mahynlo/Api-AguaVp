@@ -40,7 +40,7 @@ const MedidorController = {
      * Registrar medidor - V1 logic
      */
     registrarMedidor: async (req, res) => {
-        const { cliente_id, numero_serie, marca, modelo, ubicacion, fecha_instalacion, latitud, longitud, estado_medidor } = req.body;
+        const { cliente_id, numero_serie, marca, modelo, ubicacion, fecha_instalacion, latitud, longitud, estado_medidor, lectura_base, capacidad_maxima } = req.body;
 
         if (!numero_serie || !ubicacion || !fecha_instalacion || !latitud || !longitud) {
             return res.status(400).json({ success: false, message: "Todos los campos obligatorios excepto cliente_id" });
@@ -73,13 +73,13 @@ const MedidorController = {
 
             // Insertar nuevo medidor
             const insertQuery = `
-                INSERT INTO medidores (cliente_id, numero_serie, marca, modelo, ubicacion, fecha_instalacion, latitud, longitud, estado_medidor)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO medidores (cliente_id, numero_serie, marca, modelo, ubicacion, fecha_instalacion, latitud, longitud, estado_medidor, lectura_base, capacidad_maxima)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `;
 
             const insertResult = await dbTurso.execute({
                 sql: insertQuery,
-                args: [cliente_id || null, numero_serie, marca || null, modelo || null, ubicacion, fecha_instalacion, latitud, longitud, estado_medidor || 'Activo']
+                args: [cliente_id || null, numero_serie, marca || null, modelo || null, ubicacion, fecha_instalacion, latitud, longitud, estado_medidor || 'Activo', lectura_base ?? null, capacidad_maxima ?? null]
             });
 
             const nuevoMedidorId = Number(insertResult.lastInsertRowid); // Convertir BigInt a Number
@@ -171,7 +171,7 @@ const MedidorController = {
                 const searchTerm = search ? `%${search}%` : null;
 
                 let countQuery = `SELECT COUNT(*) as total FROM medidores`;
-                let dataQuery = `SELECT * FROM medidores`;
+                let dataQuery = `SELECT m.*, rp.ruta_id, r.nombre AS ruta_nombre FROM medidores m LEFT JOIN rutas_puntos rp ON rp.medidor_id = m.id LEFT JOIN rutas r ON r.id = rp.ruta_id`;
 
                 let whereArgs = [];
                 let conditions = [];
@@ -212,7 +212,7 @@ const MedidorController = {
                 const total = Number(countResult.rows[0].total);
 
                 // 2. Obtener datos
-                dataQuery += whereClause + ` ORDER BY fecha_creacion DESC LIMIT ? OFFSET ?`;
+                dataQuery += whereClause + ` ORDER BY m.fecha_creacion DESC LIMIT ? OFFSET ?`;
                 const dataArgs = [...whereArgs, limitNum, offset];
 
                 const result = await dbTurso.execute({
@@ -224,7 +224,9 @@ const MedidorController = {
                 const medidores = result.rows.map(row => ({
                     ...row,
                     id: Number(row.id),
-                    cliente_id: row.cliente_id ? Number(row.cliente_id) : null
+                    cliente_id: row.cliente_id ? Number(row.cliente_id) : null,
+                    ruta_id: row.ruta_id ? Number(row.ruta_id) : null,
+                    ruta_nombre: row.ruta_nombre || null
                 }));
 
                 return res.json({
@@ -239,14 +241,22 @@ const MedidorController = {
                 });
             }
 
-            // Comportamiento Legacy (sin parámetros, trae todo)
-            const query = `SELECT * FROM medidores ORDER BY fecha_creacion DESC`;
+            // Comportamiento Legacy (sin parámetros, trae todo — incluye info de ruta asignada)
+            const query = `
+                SELECT m.*, rp.ruta_id, r.nombre AS ruta_nombre
+                FROM medidores m
+                LEFT JOIN rutas_puntos rp ON rp.medidor_id = m.id
+                LEFT JOIN rutas r ON r.id = rp.ruta_id
+                ORDER BY m.fecha_creacion DESC
+            `;
             const result = await dbTurso.execute({ sql: query });
 
             const medidores = result.rows.map(row => ({
                 ...row,
                 id: Number(row.id),
-                cliente_id: row.cliente_id ? Number(row.cliente_id) : null
+                cliente_id: row.cliente_id ? Number(row.cliente_id) : null,
+                ruta_id: row.ruta_id ? Number(row.ruta_id) : null,
+                ruta_nombre: row.ruta_nombre || null
             }));
 
             res.json(medidores);
@@ -262,9 +272,9 @@ const MedidorController = {
      */
     modificarMedidor: async (req, res) => {
         const { id } = req.params;
-        const { cliente_id, numero_serie, marca, modelo, ubicacion, fecha_instalacion, latitud, longitud, estado_medidor, estado_servicio, fecha_corte } = req.body;
+        const { cliente_id, numero_serie, marca, modelo, ubicacion, fecha_instalacion, latitud, longitud, estado_medidor, estado_servicio, fecha_corte, lectura_base, capacidad_maxima } = req.body;
 
-        if (!cliente_id && !numero_serie && !marca && !modelo && !ubicacion && !fecha_instalacion && !latitud && !longitud && !estado_medidor && !estado_servicio && fecha_corte === undefined) {
+        if (!cliente_id && !numero_serie && !marca && !modelo && !ubicacion && !fecha_instalacion && !latitud && !longitud && !estado_medidor && !estado_servicio && fecha_corte === undefined && lectura_base === undefined && capacidad_maxima === undefined) {
             return res.status(400).json({ success: false, message: "Al menos un campo es obligatorio" });
         }
 
@@ -332,6 +342,10 @@ const MedidorController = {
                 cambios.estado_servicio = { antes: medidorExistente.estado_servicio, despues: estado_servicio };
             if (fecha_corte !== undefined && fecha_corte !== medidorExistente.fecha_corte)
                 cambios.fecha_corte = { antes: medidorExistente.fecha_corte, despues: fecha_corte };
+            if (lectura_base !== undefined && String(lectura_base) !== String(medidorExistente.lectura_base))
+                cambios.lectura_base = { antes: medidorExistente.lectura_base, despues: lectura_base };
+            if (capacidad_maxima !== undefined && String(capacidad_maxima) !== String(medidorExistente.capacidad_maxima))
+                cambios.capacidad_maxima = { antes: medidorExistente.capacidad_maxima, despues: capacidad_maxima };
 
             // Actualizar medidor
             const updateQuery = `
@@ -346,7 +360,9 @@ const MedidorController = {
                     longitud = COALESCE(?, longitud),
                     estado_medidor = COALESCE(?, estado_medidor),
                     estado_servicio = COALESCE(?, estado_servicio),
-                    fecha_corte = COALESCE(?, fecha_corte)
+                    fecha_corte = COALESCE(?, fecha_corte),
+                    lectura_base = CASE WHEN ? IS NULL THEN lectura_base ELSE ? END,
+                    capacidad_maxima = CASE WHEN ? IS NULL THEN capacidad_maxima ELSE ? END
                 WHERE id = ?
             `;
 
@@ -364,6 +380,10 @@ const MedidorController = {
                     estado_medidor ?? null,
                     estado_servicio ?? null,
                     fecha_corte ?? null,
+                    lectura_base !== undefined ? lectura_base : null,
+                    lectura_base !== undefined ? lectura_base : null,
+                    capacidad_maxima !== undefined ? capacidad_maxima : null,
+                    capacidad_maxima !== undefined ? capacidad_maxima : null,
                     id
                 ]
             });
@@ -402,6 +422,8 @@ const MedidorController = {
                 estado_medidor: estado_medidor || medidorExistente.estado_medidor,
                 estado_servicio: estado_servicio || medidorExistente.estado_servicio,
                 fecha_corte: fecha_corte !== undefined ? fecha_corte : medidorExistente.fecha_corte,
+                lectura_base: lectura_base !== undefined ? lectura_base : medidorExistente.lectura_base,
+                capacidad_maxima: capacidad_maxima !== undefined ? capacidad_maxima : medidorExistente.capacidad_maxima,
                 cambios_realizados: Object.keys(cambios),
                 modificado_por: req.usuario?.id || 1
             };

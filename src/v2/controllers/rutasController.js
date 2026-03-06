@@ -116,17 +116,15 @@ const rutasController = {
             const ruta_id = Number(rutaResult.lastInsertRowid); // Convertir BigInt a Number
 
             // Insertar puntos de la ruta
-            const insertPuntoQuery = `
-                INSERT INTO rutas_puntos (ruta_id, medidor_id, orden)
-                VALUES (?, ?, ?)
-            `;
-
-            for (let index = 0; index < puntos.length; index++) {
-                const punto = puntos[index];
-                await dbTurso.execute({
-                    sql: insertPuntoQuery,
-                    args: [ruta_id, punto.id, index + 1]
+            // Insertar puntos en una transacción — atómico y mucho más rápido que N awaits
+            if (puntos.length > 0) {
+                const insertPuntoStmt = dbTurso.sqlite.prepare(
+                    `INSERT INTO rutas_puntos (ruta_id, medidor_id, orden) VALUES (?, ?, ?)`
+                );
+                const insertarPuntos = dbTurso.sqlite.transaction((pts) => {
+                    pts.forEach((p, i) => insertPuntoStmt.run(ruta_id, p.id, i + 1));
                 });
+                insertarPuntos(puntos);
             }
 
             // Datos completos de la ruta para notificaciones SSE
@@ -322,77 +320,69 @@ const rutasController = {
                 total_puntos: Number(row.total_puntos)
             }));
 
-            // Para cada ruta, obtener información detallada de medidores (igual que V1)
-            const rutasDetalladas = [];
+            // Obtener medidores de TODAS las rutas de la página en una sola query (evita N+1)
+            const idsPlaceholder2 = rutasPageIds.map(() => '?').join(',');
+            const medidoresBulkQuery = `
+                SELECT
+                    rp.ruta_id,
+                    m.numero_serie,
+                    m.id AS medidor_id,
+                    CASE WHEN l.id IS NOT NULL THEN 1 ELSE 0 END AS tiene_lectura
+                FROM rutas_puntos rp
+                JOIN medidores m ON rp.medidor_id = m.id
+                LEFT JOIN lecturas l ON l.medidor_id = m.id
+                    AND l.ruta_id = rp.ruta_id
+                    AND l.periodo = ?
+                WHERE rp.ruta_id IN (${idsPlaceholder2})
+                ORDER BY rp.ruta_id, rp.orden ASC
+            `;
 
-            for (let index = 0; index < rutas.length; index++) {
-                const ruta = rutas[index];
+            const medidoresBulkResult = await dbTurso.execute({
+                sql: medidoresBulkQuery,
+                args: [periodo, ...rutasPageIds]
+            });
 
-                const medidoresQuery = `
-                    SELECT 
-                        m.numero_serie,
-                        m.id as medidor_id,
-                        CASE WHEN l.id IS NOT NULL THEN 1 ELSE 0 END as tiene_lectura
-                    FROM rutas_puntos rp
-                    JOIN medidores m ON rp.medidor_id = m.id
-                    LEFT JOIN lecturas l ON l.medidor_id = m.id 
-                        AND l.ruta_id = rp.ruta_id 
-                        AND l.periodo = ?
-                    WHERE rp.ruta_id = ?
-                    ORDER BY rp.orden ASC
-                `;
-
-                const medidoresResult = await dbTurso.execute({
-                    sql: medidoresQuery,
-                    args: [periodo, ruta.id]
+            // Agrupar medidores por ruta_id en un Map para lookup O(1)
+            const medidoresPorRuta = new Map();
+            for (const row of medidoresBulkResult.rows) {
+                const rid = Number(row.ruta_id);
+                if (!medidoresPorRuta.has(rid)) medidoresPorRuta.set(rid, []);
+                medidoresPorRuta.get(rid).push({
+                    medidor_id: Number(row.medidor_id),
+                    numero_serie: row.numero_serie,
+                    tiene_lectura: row.tiene_lectura
                 });
+            }
 
-                const medidores = medidoresResult.rows.map(row => ({
-                    ...row,
-                    medidor_id: Number(row.medidor_id)
-                }));
-
-                // Procesar datos de medidores (igual que V1)
+            // Construir objetos de ruta con estadísticas calculadas
+            const rutasFinales = rutas.map(ruta => {
+                const medidores = medidoresPorRuta.get(ruta.id) || [];
                 const numeros_serie = medidores.map(m => m.numero_serie);
-                const medidores_completados = medidores
-                    .filter(m => m.tiene_lectura === 1)
-                    .map(m => m.numero_serie);
-                const medidores_faltantes = medidores
-                    .filter(m => m.tiene_lectura === 0)
-                    .map(m => m.numero_serie);
-
+                const medidores_completados = medidores.filter(m => m.tiene_lectura === 1).map(m => m.numero_serie);
+                const medidores_faltantes  = medidores.filter(m => m.tiene_lectura === 0).map(m => m.numero_serie);
                 const completadas = medidores_completados.length;
-                const faltantes = medidores_faltantes.length;
+                const faltantes   = medidores_faltantes.length;
                 const total_puntos = medidores.length;
                 const porcentaje_completado = total_puntos > 0
                     ? Math.round((completadas / total_puntos) * 100)
                     : 0;
-
-                // Construir objeto de ruta con información completa (igual que V1)
-                const rutaDetallada = {
+                return {
                     id: ruta.id,
                     nombre: ruta.nombre,
                     descripcion: ruta.descripcion,
                     fecha_creacion: ruta.fecha_creacion,
                     distancia_km: ruta.distancia_km,
                     creado_por: ruta.creado_por,
-                    total_puntos: total_puntos,
-                    completadas: completadas,
-                    faltantes: faltantes,
-                    porcentaje_completado: porcentaje_completado,
-                    numeros_serie: numeros_serie,
-                    medidores_completados: medidores_completados,
-                    medidores_faltantes: medidores_faltantes,
+                    total_puntos,
+                    completadas,
+                    faltantes,
+                    porcentaje_completado,
+                    numeros_serie,
+                    medidores_completados,
+                    medidores_faltantes,
                     periodo_mostrado: periodo
                 };
-
-                rutasDetalladas.push(rutaDetallada);
-            }
-
-            // Filtrar elementos undefined y ordenar por fecha de creación (igual que V1)
-            const rutasFinales = rutasDetalladas
-                .filter(r => r !== undefined)
-                .sort((a, b) => new Date(b.fecha_creacion) - new Date(a.fecha_creacion));
+            });
 
             return res.status(200).json({
                 periodo: periodo,
@@ -478,15 +468,38 @@ const rutasController = {
                     m.latitud,
                     m.longitud,
                     m.estado_medidor,
+                    m.lectura_base,
+                    m.capacidad_maxima,
                     c.id AS cliente_id,
                     c.nombre AS cliente_nombre,
                     c.direccion AS cliente_direccion,
                     c.telefono AS cliente_telefono,
-                    c.estado_cliente
+                    c.estado_cliente,
+                    (
+                        SELECT lectura_actual
+                        FROM lecturas
+                        WHERE medidor_id = m.id AND lectura_actual IS NOT NULL
+                        ORDER BY fecha_lectura DESC
+                        LIMIT 1
+                    ) AS ultima_lectura_real,
+                    (
+                        SELECT lectura_anterior
+                        FROM lecturas
+                        WHERE medidor_id = m.id AND lectura_actual IS NOT NULL
+                        ORDER BY fecha_lectura DESC
+                        LIMIT 1
+                    ) AS ultima_lectura_anterior_real,
+                    (
+                        SELECT id
+                        FROM lecturas
+                        WHERE medidor_id = m.id AND lectura_actual IS NOT NULL
+                        ORDER BY fecha_lectura DESC
+                        LIMIT 1
+                    ) AS ultima_lectura_id_real
                 FROM rutas r
                 JOIN rutas_puntos rp ON r.id = rp.ruta_id
                 JOIN medidores m ON rp.medidor_id = m.id
-                JOIN clientes c ON m.cliente_id = c.id
+                LEFT JOIN clientes c ON m.cliente_id = c.id
                 WHERE r.id = ?
                 ORDER BY rp.orden ASC
             `;
@@ -505,27 +518,44 @@ const rutasController = {
                 ...row,
                 ruta_id: Number(row.ruta_id),
                 medidor_id: Number(row.medidor_id),
-                cliente_id: Number(row.cliente_id)
+                cliente_id: row.cliente_id !== null && row.cliente_id !== undefined ? Number(row.cliente_id) : null
             }));
 
             const ruta = {
                 ruta_id: rows[0].ruta_id,
                 nombre: rows[0].ruta_nombre,
                 descripcion: rows[0].ruta_descripcion,
-                puntos: rows.map(r => ({
-                    orden: r.orden,
-                    medidor_id: r.medidor_id,
-                    numero_serie: r.numero_serie,
-                    ubicacion: r.ubicacion,
-                    latitud: r.latitud,
-                    longitud: r.longitud,
-                    estado_medidor: r.estado_medidor,
-                    cliente_id: r.cliente_id,
-                    cliente_nombre: r.cliente_nombre,
-                    cliente_direccion: r.cliente_direccion,
-                    cliente_telefono: r.cliente_telefono,
-                    estado_cliente: r.estado_cliente
-                }))
+                puntos: rows.map(r => {
+                    // Lectura anterior disponible: última lectura real > lectura_base > null
+                    const lectAnterior = r.ultima_lectura_real !== null && r.ultima_lectura_real !== undefined
+                        ? Number(r.ultima_lectura_real)
+                        : (r.lectura_base !== null && r.lectura_base !== undefined
+                            ? Number(r.lectura_base)
+                            : null);
+                    return {
+                        orden: r.orden,
+                        medidor_id: r.medidor_id,
+                        numero_serie: r.numero_serie,
+                        ubicacion: r.ubicacion,
+                        latitud: r.latitud,
+                        longitud: r.longitud,
+                        estado_medidor: r.estado_medidor,
+                        lectura_base: r.lectura_base !== null && r.lectura_base !== undefined ? Number(r.lectura_base) : null,
+                        capacidad_maxima: r.capacidad_maxima !== null && r.capacidad_maxima !== undefined ? Number(r.capacidad_maxima) : null,
+                        lectura_anterior_disponible: lectAnterior,  // null = primera lectura sin referencia
+                        ultima_lectura_anterior: r.ultima_lectura_anterior_real !== null && r.ultima_lectura_anterior_real !== undefined
+                            ? Number(r.ultima_lectura_anterior_real)
+                            : null,
+                        ultima_lectura_id: r.ultima_lectura_id_real !== null && r.ultima_lectura_id_real !== undefined
+                            ? Number(r.ultima_lectura_id_real)
+                            : null,
+                        cliente_id: r.cliente_id,
+                        cliente_nombre: r.cliente_nombre,
+                        cliente_direccion: r.cliente_direccion,
+                        cliente_telefono: r.cliente_telefono,
+                        estado_cliente: r.estado_cliente
+                    };
+                })
             };
 
             return res.status(200).json({ ruta });
@@ -650,18 +680,15 @@ const rutasController = {
                     args: [ruta_id]
                 });
 
-                // 2. Insertar los nuevos medidores con su orden
+                // 2. Insertar los nuevos medidores en una transacción
                 if (puntos.length > 0) {
-                    for (let i = 0; i < puntos.length; i++) {
-                        const insertQuery = `
-                            INSERT INTO rutas_puntos (ruta_id, medidor_id, orden)
-                            VALUES (?, ?, ?)
-                        `;
-                        await dbTurso.execute({
-                            sql: insertQuery,
-                            args: [ruta_id, puntos[i].id, i + 1]
-                        });
-                    }
+                    const insertPuntoStmt = dbTurso.sqlite.prepare(
+                        `INSERT INTO rutas_puntos (ruta_id, medidor_id, orden) VALUES (?, ?, ?)`
+                    );
+                    const insertarPuntos = dbTurso.sqlite.transaction((pts) => {
+                        pts.forEach((p, i) => insertPuntoStmt.run(Number(ruta_id), p.id, i + 1));
+                    });
+                    insertarPuntos(puntos);
                     medidores_actualizados = puntos.length;
                 }
             }
@@ -820,18 +847,14 @@ const rutasController = {
                 });
             }
 
-            // Actualizar el orden de cada medidor
-            for (const item of orden) {
-                const updateQuery = `
-                    UPDATE rutas_puntos 
-                    SET orden = ?
-                    WHERE ruta_id = ? AND medidor_id = ?
-                `;
-                await dbTurso.execute({
-                    sql: updateQuery,
-                    args: [item.orden, ruta_id, item.medidor_id]
-                });
-            }
+            // Actualizar el orden de todos los medidores en una sola transacción
+            const reordenarStmt = dbTurso.sqlite.prepare(
+                `UPDATE rutas_puntos SET orden = ? WHERE ruta_id = ? AND medidor_id = ?`
+            );
+            const reordenarTodos = dbTurso.sqlite.transaction((items) => {
+                items.forEach(item => reordenarStmt.run(item.orden, Number(ruta_id), item.medidor_id));
+            });
+            reordenarTodos(orden);
 
             // Notificar cambios
             if (notificationManager) {

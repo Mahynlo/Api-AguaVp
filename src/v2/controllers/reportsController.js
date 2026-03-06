@@ -403,6 +403,7 @@ const ReportsController = {
                 SELECT 
                     c.id as cliente_id,
                     c.nombre as cliente_nombre,
+                    c.numero_predio,
                     c.ciudad as localidad,
                     c.direccion,
                     m.id as medidor_id,
@@ -413,10 +414,9 @@ const ReportsController = {
                     l_ant.consumo_m3 as consumo_anterior,
                     0 as lectura_anterior_calculada
                 FROM clientes c
-                JOIN medidores m ON c.id = m.cliente_id
+                LEFT JOIN medidores m ON c.id = m.cliente_id AND m.estado_medidor != 'Retirado'
                 LEFT JOIN lecturas l_ant ON m.id = l_ant.medidor_id AND l_ant.periodo = ?
                 WHERE c.estado_cliente = 'Activo'
-                AND m.estado_medidor != 'Retirado'
             `;
 
             const params = [mesAnterior];
@@ -440,21 +440,26 @@ const ReportsController = {
                     porLocalidad[loc] = [];
                 }
 
+                const tieneMedidor = !!row.medidor_id;
                 porLocalidad[loc].push({
+                    id: row.cliente_id,
+                    numero_predio: row.numero_predio || null,
                     cliente: row.cliente_nombre,
-                    medidor: {
+                    direccion: row.direccion || '',
+                    sin_medidor: !tieneMedidor,
+                    medidor: tieneMedidor ? {
                         serie: row.numero_serie,
                         ubicacion: row.medidor_ubicacion,
                         coordenadas: {
                             lat: row.latitud ? Number(row.latitud) : null,
                             lng: row.longitud ? Number(row.longitud) : null
                         }
-                    },
-                    lectura_anterior: {
+                    } : null,
+                    lectura_anterior: tieneMedidor ? {
                         periodo: mesAnterior,
                         valor: 0,
                         consumo_registrado: Number(row.consumo_anterior || 0)
-                    }
+                    } : null
                 });
                 totalClientes++;
             });

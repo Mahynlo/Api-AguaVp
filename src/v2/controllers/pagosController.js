@@ -19,7 +19,7 @@
  */
 
 
-import dbTurso from '../../database/db-sqlite.js';
+import dbTurso, { sqlite } from '../../database/db-sqlite.js';
 
 // === FUNCIONES UTILITARIAS PARA MANEJO PRECISO DE DECIMALES ===
 /**
@@ -67,6 +67,7 @@ const pagosController = {
 
     /**
      * Registrar nuevo pago (V1 compatible)
+     * Usa transacción atómica para prevenir pagos duplicados y race conditions
      */
     registrarPago: async (req, res) => {
         try {
@@ -90,60 +91,57 @@ const pagosController = {
                 return res.status(400).json({ error: 'La cantidad entregada debe ser mayor a cero' });
             }
 
-            // Verificar existencia de la factura y obtener el saldo
-            const facturaQuery = `SELECT id, saldo_pendiente, estado, convenio_id FROM facturas WHERE id = ?`;
-            const facturaResult = await dbTurso.execute({
-                sql: facturaQuery,
-                args: [factura_id]
-            });
+            // ── Transacción atómica: lectura de saldo + inserción de pago ──
+            // Previene race conditions donde dos pagos simultáneos leen el mismo saldo
+            const ejecutarPago = sqlite.transaction(() => {
+                // 1. Verificar existencia de la factura y obtener el saldo (dentro de la txn)
+                const factura = sqlite.prepare(
+                    `SELECT id, saldo_pendiente, estado, convenio_id FROM facturas WHERE id = ?`
+                ).get(factura_id);
 
-            if (facturaResult.rows.length === 0) {
-                return res.status(404).json({ error: 'Factura no encontrada' });
-            }
+                if (!factura) {
+                    throw { statusCode: 404, error: 'Factura no encontrada' };
+                }
 
-            const factura = facturaResult.rows[0];
+                // VALIDACIÓN: Bloquear pagos a facturas en convenio
+                if (factura.convenio_id !== null) {
+                    throw {
+                        statusCode: 403,
+                        error: 'Esta factura está incluida en un convenio de pago activo.',
+                        mensaje: 'Debe pagar las parcialidades del convenio en lugar de la factura directamente.',
+                        convenio_id: factura.convenio_id,
+                        tipo_error: 'FACTURA_EN_CONVENIO'
+                    };
+                }
 
-            // VALIDACIÓN: Bloquear pagos a facturas en convenio
-            if (factura.convenio_id !== null) {
-                return res.status(403).json({
-                    error: 'Esta factura está incluida en un convenio de pago activo.',
-                    mensaje: 'Debe pagar las parcialidades del convenio en lugar de la factura directamente.',
-                    convenio_id: factura.convenio_id,
-                    tipo_error: 'FACTURA_EN_CONVENIO'
-                });
-            }
+                const saldo = toDecimal(factura.saldo_pendiente);
 
-            const saldo = toDecimal(factura.saldo_pendiente);
+                if (saldo <= 0) {
+                    throw { statusCode: 400, error: 'La factura ya está completamente pagada' };
+                }
 
-            if (saldo <= 0) {
-                return res.status(400).json({ error: 'La factura ya está completamente pagada' });
-            }
+                const monto = toDecimal(Math.min(saldo, cantidad_entregada)); // Nunca más del saldo
+                const cambio = restaDecimal(cantidad_entregada, monto);
 
-            const monto = toDecimal(Math.min(saldo, cantidad_entregada)); // Nunca más del saldo
-            const cambio = restaDecimal(cantidad_entregada, monto);
+                // Validación adicional para evitar errores de trigger
+                if (monto > saldo + 0.01) { // Tolerancia de 1 centavo
+                    throw {
+                        statusCode: 400,
+                        error: 'El monto del pago excede el saldo pendiente',
+                        detalles: {
+                            saldo_pendiente: saldo,
+                            monto_solicitado: monto,
+                            cantidad_entregada: cantidad_entregada
+                        }
+                    };
+                }
 
-            // Validación adicional para evitar errores de trigger
-            if (monto > saldo + 0.01) { // Tolerancia de 1 centavo
-                return res.status(400).json({
-                    error: 'El monto del pago excede el saldo pendiente',
-                    detalles: {
-                        saldo_pendiente: saldo,
-                        monto_solicitado: monto,
-                        cantidad_entregada: cantidad_entregada
-                    }
-                });
-            }
-
-            // Insertar pago
-            const insertQuery = `
-                INSERT INTO pagos (
-                    factura_id, fecha_pago, monto, cantidad_entregada, cambio, metodo_pago, comentario, modificado_por
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            `;
-
-            const insertResult = await dbTurso.execute({
-                sql: insertQuery,
-                args: [
+                // 2. Insertar pago (triggers actualizar_saldo_factura y actualizar_estado_factura se ejecutan aquí)
+                const insertResult = sqlite.prepare(`
+                    INSERT INTO pagos (
+                        factura_id, fecha_pago, monto, cantidad_entregada, cambio, metodo_pago, comentario, modificado_por
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                `).run(
                     factura_id,
                     fecha_pago,
                     monto,
@@ -152,12 +150,19 @@ const pagosController = {
                     metodo_pago,
                     comentario || null,
                     modificado_por
-                ]
+                );
+
+                return {
+                    pagoId: Number(insertResult.lastInsertRowid),
+                    monto,
+                    cambio
+                };
             });
 
-            const pagoId = Number(insertResult.lastInsertRowid); // Convertir BigInt a Number
+            // Ejecutar la transacción
+            const { pagoId, monto, cambio } = ejecutarPago();
 
-            // Obtener datos completos del pago para notificaciones SSE
+            // Obtener datos completos del pago para notificaciones SSE (fuera de la txn, solo lectura)
             const pagoCompletoQuery = `
                 SELECT p.*, f.id as factura_numero, c.nombre as cliente_nombre
                 FROM pagos p
@@ -216,6 +221,10 @@ const pagosController = {
             return res.status(201).json(response);
 
         } catch (error) {
+            // Errores controlados lanzados desde la transacción
+            if (error.statusCode) {
+                return res.status(error.statusCode).json(error);
+            }
             console.error('Error al registrar pago:', error);
             return res.status(500).json({ error: 'Error interno del servidor' });
         }
@@ -468,6 +477,7 @@ const pagosController = {
 
     /**
      * Modificar pago (V1 compatible)
+     * Si se modifica el monto, recalcula el saldo_pendiente de la factura asociada
      */
     modificarPago: async (req, res) => {
         try {
@@ -475,16 +485,86 @@ const pagosController = {
             const { fecha_pago, monto, metodo_pago, comentario } = req.body;
             const modificado_por = req.usuario.id; // Siempre desde el token JWT
 
-            // Construir UPDATE dinámico (solo los campos enviados)
+            // Si se está cambiando el monto, usar transacción para recalcular saldo
+            if (monto !== undefined) {
+                const ejecutarModificacion = sqlite.transaction(() => {
+                    // 1. Obtener pago actual
+                    const pagoActual = sqlite.prepare(
+                        'SELECT id, factura_id, monto FROM pagos WHERE id = ?'
+                    ).get(id);
+
+                    if (!pagoActual) {
+                        throw { statusCode: 404, error: 'Pago no encontrado' };
+                    }
+
+                    const montoAnterior = toDecimal(pagoActual.monto);
+                    const montoNuevo = toDecimal(monto);
+                    const diferencia = restaDecimal(montoNuevo, montoAnterior);
+
+                    // 2. Verificar que el nuevo monto no exceda el saldo disponible
+                    if (diferencia > 0 && pagoActual.factura_id) {
+                        const factura = sqlite.prepare(
+                            'SELECT saldo_pendiente FROM facturas WHERE id = ?'
+                        ).get(pagoActual.factura_id);
+
+                        if (factura) {
+                            const saldoActual = toDecimal(factura.saldo_pendiente);
+                            if (diferencia > saldoActual + 0.01) {
+                                throw {
+                                    statusCode: 400,
+                                    error: 'El nuevo monto excede el saldo pendiente disponible',
+                                    detalles: {
+                                        saldo_disponible: saldoActual,
+                                        incremento_solicitado: diferencia
+                                    }
+                                };
+                            }
+                        }
+                    }
+
+                    // 3. Actualizar el pago
+                    const setClauses = ['modificado_por = ?', 'monto = ?'];
+                    const args = [modificado_por, montoNuevo];
+
+                    if (fecha_pago !== undefined) { setClauses.push('fecha_pago = ?'); args.push(fecha_pago); }
+                    if (metodo_pago !== undefined) { setClauses.push('metodo_pago = ?'); args.push(metodo_pago); }
+                    if (comentario !== undefined) { setClauses.push('comentario = ?'); args.push(comentario); }
+
+                    args.push(id);
+                    sqlite.prepare(
+                        `UPDATE pagos SET ${setClauses.join(', ')} WHERE id = ?`
+                    ).run(...args);
+
+                    // 4. Recalcular saldo_pendiente de la factura
+                    if (pagoActual.factura_id && diferencia !== 0) {
+                        sqlite.prepare(
+                            `UPDATE facturas SET saldo_pendiente = ROUND(saldo_pendiente - ?, 2) WHERE id = ?`
+                        ).run(diferencia, pagoActual.factura_id);
+                        // El trigger actualizar_estado_factura se encargará del estado
+                    }
+                });
+
+                try {
+                    ejecutarModificacion();
+                } catch (error) {
+                    if (error.statusCode) {
+                        return res.status(error.statusCode).json(error);
+                    }
+                    throw error;
+                }
+
+                return res.status(200).json({ success: true, message: 'Pago modificado exitosamente' });
+            }
+
+            // Sin cambio de monto — actualización simple
             const setClauses = ['modificado_por = ?'];
             const args = [modificado_por];
 
             if (fecha_pago !== undefined)  { setClauses.push('fecha_pago = ?');  args.push(fecha_pago); }
-            if (monto !== undefined)       { setClauses.push('monto = ?');       args.push(monto); }
             if (metodo_pago !== undefined) { setClauses.push('metodo_pago = ?'); args.push(metodo_pago); }
             if (comentario !== undefined)  { setClauses.push('comentario = ?');  args.push(comentario); }
 
-            if (setClauses.length === 0) {
+            if (setClauses.length <= 1) {
                 return res.status(400).json({ error: 'No se proporcionaron campos para actualizar' });
             }
 
