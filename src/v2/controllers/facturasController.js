@@ -20,6 +20,7 @@
 
 import dbTurso from '../../database/db-sqlite.js';
 import { calcularTarifaDesdeDB } from '../../utils/tarifaUtils.js';
+import { nowDate, esDiaHabil, siguienteDiaHabil } from '../../utils/timezone.js';
 
 // Managers SSE - Configurados dinámicamente
 let sseManager = null;
@@ -37,11 +38,26 @@ const facturasController = {
     async generarFactura(req, res) {
         console.log('Generar factura v2:', req.body);
         try {
-            const { lectura_id, cliente_id, tarifa_id, consumo_m3, fecha_emision } = req.body;
+            const { lectura_id, cliente_id, tarifa_id, consumo_m3 } = req.body;
+            // Si el frontend no manda fecha_emision (o manda null), usamos el día actual en Hermosillo
+            let fecha_emision = req.body.fecha_emision || nowDate();
             const modificado_por = req.usuario.id; // Siempre desde el token JWT
 
-            if (!lectura_id || !cliente_id || !tarifa_id || consumo_m3 == null || !fecha_emision || !modificado_por) {
+            if (!lectura_id || !cliente_id || !tarifa_id || consumo_m3 == null || !modificado_por) {
                 return res.status(400).json({ error: 'Faltan campos requeridos' });
+            }
+
+            // Validar que la fecha sea YYYY-MM-DD
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha_emision)) {
+                return res.status(400).json({ error: 'El formato de fecha_emision debe ser YYYY-MM-DD' });
+            }
+
+            // Si cae en feriado o fin de semana, avanzar al siguiente día hábil
+            let aviso_fecha = null;
+            if (!esDiaHabil(fecha_emision)) {
+                const fecha_ajustada = siguienteDiaHabil(fecha_emision);
+                aviso_fecha = `La fecha ${fecha_emision} no es día hábil. Se ajustó automáticamente a ${fecha_ajustada}.`;
+                fecha_emision = fecha_ajustada;
             }
 
             // Verificar si ya existe una factura para esta lectura
@@ -105,10 +121,15 @@ const facturasController = {
                 ? (Number(configResult.rows[0].dias_vencimiento_factura) || 30)
                 : 30;
 
-            // Calcular fecha de vencimiento
-            const fechaVencimiento = new Date(fecha_emision);
+            // Calcular fecha de vencimiento a partir de fecha_emision (ya validada)
+            // Parseo local para evitar desfase UTC
+            const [fAnio, fMes, fDia] = fecha_emision.split('-').map(Number);
+            const fechaVencimiento = new Date(fAnio, fMes - 1, fDia);
             fechaVencimiento.setDate(fechaVencimiento.getDate() + diasVencimiento);
-            const fecha_vencimiento_str = fechaVencimiento.toISOString().split('T')[0];
+            // Avanzar vencimiento al siguiente día hábil si cae en feriado/fin de semana
+            const fecha_vencimiento_str = siguienteDiaHabil(
+                `${fechaVencimiento.getFullYear()}-${String(fechaVencimiento.getMonth() + 1).padStart(2, '0')}-${String(fechaVencimiento.getDate()).padStart(2, '0')}`
+            );
 
             // Insertar factura
             const insertQuery = `
@@ -175,6 +196,7 @@ const facturasController = {
                 mensaje: 'Factura generada exitosamente',
                 factura_id,
                 total_calculado: total,
+                ...(aviso_fecha && { aviso: aviso_fecha }),
                 detalles: {
                     id: Number(facturaCompleta.id),
                     cliente_nombre: facturaCompleta.cliente_nombre,

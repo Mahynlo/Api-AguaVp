@@ -113,6 +113,91 @@ export function finDia() {
     return formatInTimeZone(new Date(), TIMEZONE, 'yyyy-MM-dd') + ' 23:59:59';
 }
 
+/**
+ * Retorna los feriados oficiales de México (Art. 74 LFT) para un año dado.
+ * Se incluyen también los feriados por decreto presidencial comunes.
+ * @param {number} anio
+ * @returns {Set<string>} Set de fechas en formato 'YYYY-MM-DD'
+ */
+export function obtenerFeriadosMexico(anio) {
+    const feriados = new Set();
+
+    // Feriados fijos Art. 74 LFT
+    feriados.add(`${anio}-01-01`); // Año Nuevo
+    feriados.add(`${anio}-05-01`); // Día del Trabajo
+    feriados.add(`${anio}-09-16`); // Independencia
+    feriados.add(`${anio}-11-20`); // Revolución
+    feriados.add(`${anio}-12-25`); // Navidad
+
+    // Transmisión del Poder Ejecutivo (cada 6 años: 2024, 2030...)
+    if (anio % 6 === 0) {
+        feriados.add(`${anio}-10-01`);
+    }
+
+    // Feriados con lunes de puente (se observan el lunes más cercano)
+    // Día de la Constitución: primer lunes de febrero
+    const constitucion = primerLunesDesMes(anio, 2);
+    feriados.add(constitucion);
+
+    // Natalicio de Benito Juárez: tercer lunes de marzo
+    const juarez = tercerLunesDeMes(anio, 3);
+    feriados.add(juarez);
+
+    return feriados;
+}
+
+/** Devuelve el primer lunes del mes (mes: 1-12) en formato 'YYYY-MM-DD' */
+function primerLunesDesMes(anio, mes) {
+    const d = new Date(anio, mes - 1, 1);
+    // getDay: 0=Dom, 1=Lun ... 6=Sáb
+    const diaSemana = d.getDay();
+    const diasHastaLunes = diaSemana === 1 ? 0 : (8 - diaSemana) % 7;
+    d.setDate(1 + diasHastaLunes);
+    return d.toISOString().slice(0, 10);
+}
+
+/** Devuelve el tercer lunes del mes (mes: 1-12) en formato 'YYYY-MM-DD' */
+function tercerLunesDeMes(anio, mes) {
+    const d = new Date(anio, mes - 1, 1);
+    const diaSemana = d.getDay();
+    const diasHastaLunes = diaSemana === 1 ? 0 : (8 - diaSemana) % 7;
+    // Primer lunes + 14 días = tercer lunes
+    d.setDate(1 + diasHastaLunes + 14);
+    return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Verifica si una fecha es día hábil (no es sábado, domingo ni feriado oficial).
+ * @param {string} fechaStr - Fecha en formato 'YYYY-MM-DD'
+ * @returns {boolean}
+ */
+export function esDiaHabil(fechaStr) {
+    // Parsear como fecha local (no UTC) para evitar desfase de zona horaria
+    const [anio, mes, dia] = fechaStr.split('-').map(Number);
+    const fecha = new Date(anio, mes - 1, dia);
+    const diaSemana = fecha.getDay(); // 0=Dom, 6=Sáb
+    if (diaSemana === 0 || diaSemana === 6) return false;
+
+    const feriados = obtenerFeriadosMexico(anio);
+    return !feriados.has(fechaStr);
+}
+
+/**
+ * Avanza la fecha hasta el siguiente día hábil (inclusive: si ya es hábil, la devuelve).
+ * @param {string} fechaStr - Fecha en formato 'YYYY-MM-DD'
+ * @returns {string} Fecha hábil en formato 'YYYY-MM-DD'
+ */
+export function siguienteDiaHabil(fechaStr) {
+    let [anio, mes, dia] = fechaStr.split('-').map(Number);
+    let fecha = new Date(anio, mes - 1, dia);
+
+    while (!esDiaHabil(fecha.toISOString().slice(0, 10))) {
+        fecha.setDate(fecha.getDate() + 1);
+    }
+
+    return fecha.toISOString().slice(0, 10);
+}
+
 export default {
     now,
     nowDate,
@@ -124,5 +209,8 @@ export default {
     estaVencida,
     inicioDia,
     finDia,
+    obtenerFeriadosMexico,
+    esDiaHabil,
+    siguienteDiaHabil,
     TIMEZONE
 };

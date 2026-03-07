@@ -28,6 +28,7 @@
 
 import dbTurso from '../../database/db-sqlite.js';
 import { calcularTarifaDesdeDB } from '../../utils/tarifaUtils.js';
+import { nowDate, esDiaHabil, siguienteDiaHabil } from '../../utils/timezone.js';
 
 // Managers SSE - Configurados dinámicamente
 let sseManager = null;
@@ -50,7 +51,11 @@ export const setSSEManagers = (sseManagerInstance, notificationManagerInstance) 
  * @returns {Promise<Object>} - Resultado de la generación de factura
  */
 const generarFacturaAutomatica = async (params) => {
-    const { lectura_id, cliente_id, tarifa_id, consumo_m3, fecha_emision, modificado_por } = params;
+    let { lectura_id, cliente_id, tarifa_id, consumo_m3, fecha_emision, modificado_por } = params;
+
+    // Asegurar que fecha_emision sea un día hábil
+    if (!fecha_emision) fecha_emision = nowDate();
+    fecha_emision = siguienteDiaHabil(fecha_emision);
 
     try {
         // Verificar si ya existe una factura para esta lectura
@@ -82,9 +87,13 @@ const generarFacturaAutomatica = async (params) => {
             ? (Number(configResult.rows[0].dias_vencimiento_factura) || 30)
             : 30;
 
-        const fechaVencimiento = new Date(fecha_emision);
-        fechaVencimiento.setDate(fechaVencimiento.getDate() + diasVencimiento);
-        const fecha_vencimiento_str = fechaVencimiento.toISOString().split('T')[0];
+        // Parseo local para evitar desfase UTC al sumar días
+        const [fAnio, fMes, fDia] = fecha_emision.split('-').map(Number);
+        const fechaVencimientoBase = new Date(fAnio, fMes - 1, fDia);
+        fechaVencimientoBase.setDate(fechaVencimientoBase.getDate() + diasVencimiento);
+        const fecha_vencimiento_str = siguienteDiaHabil(
+            `${fechaVencimientoBase.getFullYear()}-${String(fechaVencimientoBase.getMonth() + 1).padStart(2, '0')}-${String(fechaVencimientoBase.getDate()).padStart(2, '0')}`
+        );
 
         // Insertar factura
         const insertFacturaQuery = `
@@ -602,15 +611,28 @@ const lecturasController = {
      */
     async generarFacturasParaLecturasSinFactura(req, res) {
         try {
-            const { periodo, fecha_emision, ruta_id } = req.body;
+            const { periodo, ruta_id } = req.body;
+            // fecha_emision es opcional; si no se manda, se usa el día actual en Hermosillo
+            let fecha_emision = req.body.fecha_emision || nowDate();
             const modificado_por = req.usuario?.id;
 
             if (!modificado_por) {
                 return res.status(401).json({ success: false, message: 'No se pudo identificar al usuario autenticado' });
             }
 
-            if (!periodo || !fecha_emision) {
-                return res.status(400).json({ success: false, message: 'Faltan campos requeridos: periodo y fecha_emision' });
+            if (!periodo) {
+                return res.status(400).json({ success: false, message: 'Falta campo requerido: periodo' });
+            }
+
+            // Validar formato y ajustar al siguiente día hábil si es necesario
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha_emision)) {
+                return res.status(400).json({ success: false, message: 'El formato de fecha_emision debe ser YYYY-MM-DD' });
+            }
+            let aviso_fecha = null;
+            if (!esDiaHabil(fecha_emision)) {
+                const fecha_ajustada = siguienteDiaHabil(fecha_emision);
+                aviso_fecha = `La fecha ${fecha_emision} no es día hábil. Se ajustó automáticamente a ${fecha_ajustada}.`;
+                fecha_emision = fecha_ajustada;
             }
 
             // Obtener lecturas pendientes sin factura (con filtro opcional por ruta)
@@ -740,6 +762,7 @@ const lecturasController = {
             return res.status(200).json({
                 success: true,
                 message: 'Proceso de generación de facturas completado',
+                ...(aviso_fecha && { aviso: aviso_fecha }),
                 data: resultados
             });
 
