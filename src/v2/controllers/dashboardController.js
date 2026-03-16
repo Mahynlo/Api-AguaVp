@@ -8,18 +8,14 @@
  */
 
 import dbTurso from "../../database/db-sqlite.js";
+import { limitesMensuales } from '../../utils/timezone.js';
 
 const dashboardController = {
 
     getDashboardStats: async (req, res) => {
         try {
-            // Fechas para cálculos comparativos (Mes actual vs Mes anterior)
-            const now = new Date();
-            const startOfCurrentMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
-            const startOfNextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1).toISOString().split('T')[0];
-            
-            const startOfPreviousMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().split('T')[0];
-            const endOfPreviousMonth = startOfCurrentMonth; // El inicio del mes actual es el fin del anterior (exclusivo)
+            // Fechas para cálculos comparativos (Mes actual vs Mes anterior) - GMT-7
+            const { inicioMesActual: startOfCurrentMonth, inicioMesSiguiente: startOfNextMonth, inicioMesAnterior: startOfPreviousMonth, finMesAnterior: endOfPreviousMonth } = limitesMensuales();
 
             // --- 1. Resumen de Consumo (lecturas) ---
             // Mes Actual

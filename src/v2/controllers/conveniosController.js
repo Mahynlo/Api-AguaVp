@@ -8,7 +8,8 @@
  */
 
 import dbTurso, { sqlite } from "../../database/db-sqlite.js";
-import { addMonths, format, parseISO } from 'date-fns';
+import { addMonths, format } from 'date-fns';
+import { nowDate, siguienteDiaHabil, calcularVencimiento } from '../../utils/timezone.js';
 
 const conveniosController = {
 
@@ -66,7 +67,8 @@ const conveniosController = {
             // 3-6. OPERACIÓN ATÓMICA: convenio + facturas + medidor + parcialidades.
             // Si falla cualquier paso, SQLite hace rollback completo.
             // Ninguno de los pasos queda a medias en la BD.
-            const fechaInicio = new Date();
+            const fechaInicioStr = nowDate();
+            const fechaInicio = new Date(fechaInicioStr.replace(/-/g, '/'));
             const mesesSumar = periodicidad === 'quincenal' ? Math.ceil(numero_parcialidades / 2) : numero_parcialidades;
             const fechaFin = addMonths(fechaInicio, mesesSumar);
             // Redondear a 2 decimales para evitar acumulación de error flotante en las cuotas
@@ -86,7 +88,7 @@ const conveniosController = {
                 `).run(
                     cliente_id, medidor_id, deudaTotal, Number(monto_inicial),
                     saldoDiferir, numero_parcialidades, periodicidad || 'mensual',
-                    format(fechaInicio, 'yyyy-MM-dd'), format(fechaFin, 'yyyy-MM-dd'),
+                    fechaInicioStr, format(fechaFin, 'yyyy-MM-dd'),
                     autorizado_por, observaciones || null
                 );
                 convenioId = Number(r.lastInsertRowid);
@@ -115,14 +117,14 @@ const conveniosController = {
                 `);
 
                 for (let i = 1; i <= numero_parcialidades; i++) {
-                    let fechaVencimiento;
+                    let fechaVencStr;
                     if (periodicidad === 'quincenal') {
-                        fechaVencimiento = new Date(fechaInicio);
-                        fechaVencimiento.setDate(fechaVencimiento.getDate() + (i * 15));
+                        // Cada 15 días, ajustando a día hábil
+                        fechaVencStr = siguienteDiaHabil(calcularVencimiento(i * 15, fechaInicioStr));
                     } else {
-                        fechaVencimiento = addMonths(fechaInicio, i);
+                        // Mensual, ajustando a día hábil
+                        fechaVencStr = siguienteDiaHabil(format(addMonths(fechaInicio, i), 'yyyy-MM-dd'));
                     }
-                    const fechaVencStr = format(fechaVencimiento, 'yyyy-MM-dd');
                     stmtParcialidad.run(convenioId, i, montoPorParcialidad, fechaVencStr);
                     parcialidades.push({ numero: i, monto: montoPorParcialidad, vencimiento: fechaVencStr });
                 }
