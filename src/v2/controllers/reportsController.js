@@ -42,6 +42,7 @@ const ReportsController = {
                 SELECT 
                     f.id as folio_factura,
                     f.fecha_emision,
+                    f.fecha_vencimiento,
                     f.total as total_mes,
                     f.estado as estado_factura,
                     f.saldo_pendiente,
@@ -204,6 +205,7 @@ const ReportsController = {
                     detalle_facturacion: {
                         mes_facturado: obtenerNombreMes(f.mes_facturado + '-01'),
                         fecha_lectura: f.fecha_lectura,
+                        fecha_vencimiento: f.fecha_vencimiento,
                         total_mes: Number(f.total_mes),
                         saldo_pendiente_mes: Number(f.saldo_pendiente),
                         deuda_acumulada_anterior: deudaAnterior,

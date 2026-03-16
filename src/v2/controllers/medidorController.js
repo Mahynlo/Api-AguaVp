@@ -292,6 +292,25 @@ const MedidorController = {
 
             const medidorExistente = medidorResult.rows[0];
 
+            // Regla de integridad: no permitir cambiar lectura_base si ya existen lecturas
+            // porque esa base se usa como punto de arranque del historial de consumo.
+            if (lectura_base !== undefined && String(lectura_base) !== String(medidorExistente.lectura_base)) {
+                const lecturasCountResult = await dbTurso.execute({
+                    sql: `SELECT COUNT(*) AS total FROM lecturas WHERE medidor_id = ?`,
+                    args: [id]
+                });
+
+                const totalLecturas = Number(lecturasCountResult.rows?.[0]?.total || 0);
+                if (totalLecturas > 0) {
+                    return res.status(409).json({
+                        success: false,
+                        error: "No se puede modificar la lectura base porque el medidor ya tiene lecturas registradas. Esto afectaría la trazabilidad histórica.",
+                        code: "LECTURA_BASE_LOCKED",
+                        total_lecturas: totalLecturas
+                    });
+                }
+            }
+
             // Verificar si el nuevo número de serie ya existe (si se está cambiando)
             if (numero_serie && numero_serie !== medidorExistente.numero_serie) {
                 const verificarSerieQuery = `SELECT id FROM medidores WHERE numero_serie = ? AND id != ?`;
