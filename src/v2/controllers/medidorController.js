@@ -161,45 +161,80 @@ const MedidorController = {
      */
     obtenerMedidores: async (req, res) => {
         try {
-            const { page, limit, search, estado, ubicacion } = req.query;
+            const { page, limit, search, estado, ubicacion, cliente_id, cliente_nombre, numero_predio, asignacion } = req.query;
 
             // Si hay parámetros de paginación o búsqueda
-            if (page || limit || search || estado || ubicacion) {
+            if (page || limit || search || estado || ubicacion || cliente_id || cliente_nombre || numero_predio || asignacion) {
                 const pageNum = parseInt(page) || 1;
                 const limitNum = parseInt(limit) || 60; // Buffer de 60 por defecto
                 const offset = (pageNum - 1) * limitNum;
                 const searchTerm = search ? `%${search}%` : null;
+                const clienteNombreTerm = cliente_nombre ? `%${cliente_nombre}%` : null;
+                const numeroPredioTerm = numero_predio ? `%${numero_predio}%` : null;
 
-                let countQuery = `SELECT COUNT(*) as total FROM medidores`;
-                let dataQuery = `SELECT m.*, rp.ruta_id, r.nombre AS ruta_nombre FROM medidores m LEFT JOIN rutas_puntos rp ON rp.medidor_id = m.id LEFT JOIN rutas r ON r.id = rp.ruta_id`;
+                let countQuery = `
+                    SELECT COUNT(*) as total
+                    FROM medidores m
+                    LEFT JOIN clientes c ON c.id = m.cliente_id
+                `;
+                let dataQuery = `
+                    SELECT m.*, c.nombre AS cliente_nombre, c.numero_predio, rp.ruta_id, r.nombre AS ruta_nombre
+                    FROM medidores m
+                    LEFT JOIN clientes c ON c.id = m.cliente_id
+                    LEFT JOIN rutas_puntos rp ON rp.medidor_id = m.id
+                    LEFT JOIN rutas r ON r.id = rp.ruta_id
+                `;
 
                 let whereArgs = [];
                 let conditions = [];
 
                 if (searchTerm) {
-                    conditions.push(`(numero_serie LIKE ? OR marca LIKE ? OR modelo LIKE ? OR ubicacion LIKE ?)`);
-                    whereArgs.push(searchTerm, searchTerm, searchTerm, searchTerm);
+                    conditions.push(`(m.numero_serie LIKE ? OR m.marca LIKE ? OR m.modelo LIKE ? OR m.ubicacion LIKE ? OR c.nombre LIKE ? OR c.numero_predio LIKE ?)`);
+                    whereArgs.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
                 }
 
                 if (estado && estado !== 'All') {
                     if (estado === 'Cortado') {
-                        conditions.push(`estado_servicio = ?`);
+                        conditions.push(`m.estado_servicio = ?`);
                         whereArgs.push(estado);
                     } else if (estado === 'Activo') {
                         // "Activo" podría significar estado_medidor='Activo' AND estado_servicio='Activo'
                         // O simplemente estado_medidor='Activo'. Asumiremos estado_servicio='Activo' para ser consistentes con la vista de cortes.
-                        conditions.push(`(estado_medidor = ? AND estado_servicio = 'Activo')`);
+                        conditions.push(`(m.estado_medidor = ? AND m.estado_servicio = 'Activo')`);
                         whereArgs.push('Activo');
                     } else {
-                        conditions.push(`estado_medidor = ?`);
+                        conditions.push(`m.estado_medidor = ?`);
                         whereArgs.push(estado);
                     }
                 }
 
                 // Filtro de ubicación exacto (si fuera necesario) o búsqueda general
                 if (ubicacion && ubicacion !== 'All') {
-                    conditions.push(`ubicacion LIKE ?`);
+                    conditions.push(`m.ubicacion LIKE ?`);
                     whereArgs.push(`%${ubicacion}%`);
+                }
+
+                if (cliente_id && cliente_id !== 'All') {
+                    conditions.push(`m.cliente_id = ?`);
+                    whereArgs.push(cliente_id);
+                }
+
+                if (clienteNombreTerm) {
+                    conditions.push(`c.nombre LIKE ?`);
+                    whereArgs.push(clienteNombreTerm);
+                }
+
+                if (numeroPredioTerm) {
+                    conditions.push(`c.numero_predio LIKE ?`);
+                    whereArgs.push(numeroPredioTerm);
+                }
+
+                if (asignacion && asignacion !== 'All') {
+                    if (asignacion === 'asignados') {
+                        conditions.push(`m.cliente_id IS NOT NULL`);
+                    } else if (asignacion === 'sin_asignar' || asignacion === 'no_asignados') {
+                        conditions.push(`m.cliente_id IS NULL`);
+                    }
                 }
 
                 const whereClause = conditions.length > 0 ? ' WHERE ' + conditions.join(' AND ') : '';
@@ -243,8 +278,9 @@ const MedidorController = {
 
             // Comportamiento Legacy (sin parámetros, trae todo — incluye info de ruta asignada)
             const query = `
-                SELECT m.*, rp.ruta_id, r.nombre AS ruta_nombre
+                SELECT m.*, c.nombre AS cliente_nombre, c.numero_predio, rp.ruta_id, r.nombre AS ruta_nombre
                 FROM medidores m
+                LEFT JOIN clientes c ON c.id = m.cliente_id
                 LEFT JOIN rutas_puntos rp ON rp.medidor_id = m.id
                 LEFT JOIN rutas r ON r.id = rp.ruta_id
                 ORDER BY m.fecha_creacion DESC
