@@ -51,7 +51,8 @@ describe('ReportsController - Lista de Lecturas', () => {
                 medidor_ubicacion: 'Frente',
                 latitud: 29.1,
                 longitud: -110.1,
-                consumo_anterior: 20
+                consumo_anterior: 20,
+                lectura_fisica_anterior: 12405
             },
             {
                 cliente_id: 2,
@@ -63,7 +64,8 @@ describe('ReportsController - Lista de Lecturas', () => {
                 medidor_ubicacion: 'Patio',
                 latitud: 29.2,
                 longitud: -110.2,
-                consumo_anterior: 15
+                consumo_anterior: 15,
+                lectura_fisica_anterior: 12090
             },
             {
                 cliente_id: 3,
@@ -75,7 +77,8 @@ describe('ReportsController - Lista de Lecturas', () => {
                 medidor_ubicacion: 'Entrada',
                 latitud: 29.3,
                 longitud: -110.3,
-                consumo_anterior: null // Sin lectura previa
+                consumo_anterior: null, // Sin lectura previa
+                lectura_fisica_anterior: null
             }
         ];
 
@@ -110,6 +113,8 @@ describe('ReportsController - Lista de Lecturas', () => {
         expect(mesaGroup).toBeDefined();
         expect(mesaGroup.total_clientes).toBe(1);
         expect(mesaGroup.clientes[0].lectura_anterior.consumo_registrado).toBe(0); // Null handled as 0
+        expect(mesaGroup.clientes[0].lectura_anterior.lectura_fisica).toBeNull();
+        expect(nacoriGroup.clientes[0].lectura_anterior.lectura_fisica).toBe(12405);
     });
 
     test('debe filtrar por localidad si se proporciona', async () => {

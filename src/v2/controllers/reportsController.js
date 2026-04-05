@@ -414,6 +414,7 @@ const ReportsController = {
                     m.latitud,
                     m.longitud,
                     l_ant.consumo_m3 as consumo_anterior,
+                    l_ant.lectura_actual as lectura_fisica_anterior,
                     0 as lectura_anterior_calculada
                 FROM clientes c
                 LEFT JOIN medidores m ON c.id = m.cliente_id AND m.estado_medidor != 'Retirado'
@@ -460,7 +461,10 @@ const ReportsController = {
                     lectura_anterior: tieneMedidor ? {
                         periodo: mesAnterior,
                         valor: 0,
-                        consumo_registrado: Number(row.consumo_anterior || 0)
+                        consumo_registrado: Number(row.consumo_anterior || 0),
+                        lectura_fisica: row.lectura_fisica_anterior !== null && row.lectura_fisica_anterior !== undefined
+                            ? Number(row.lectura_fisica_anterior)
+                            : null
                     } : null
                 });
                 totalClientes++;
