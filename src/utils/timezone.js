@@ -53,6 +53,22 @@ export function obtenerFeriadosMexico(anio) {
 }
 
 /**
+ * Obtiene feriados adicionales configurados por entorno.
+ * Variable soportada: API_FERIADOS_ADICIONALES="YYYY-MM-DD,YYYY-MM-DD"
+ * @returns {string[]} Fechas válidas en formato YYYY-MM-DD
+ */
+export function obtenerFeriadosAdicionales() {
+    const raw = process.env.API_FERIADOS_ADICIONALES || '';
+    if (!raw || typeof raw !== 'string') return [];
+
+    return raw
+        .split(/[;,\s]+/)
+        .map(v => v.trim())
+        .filter(Boolean)
+        .filter(v => /^\d{4}-\d{2}-\d{2}$/.test(v));
+}
+
+/**
  * Obtiene el N-ésimo lunes de un mes dado
  * @param {number} anio
  * @param {number} mes - 0-indexed (0=enero, 11=diciembre)
@@ -180,8 +196,9 @@ export function esDiaHabil(fecha) {
     // Verificar feriados
     const anio = getYear(fechaObj);
     const fechaStr = format(fechaObj, 'yyyy-MM-dd');
-    const feriados = obtenerFeriadosMexico(anio);
-    return !feriados.includes(fechaStr);
+    const feriadosOficiales = obtenerFeriadosMexico(anio);
+    const feriadosAdicionales = obtenerFeriadosAdicionales();
+    return !feriadosOficiales.includes(fechaStr) && !feriadosAdicionales.includes(fechaStr);
 }
 
 /**
@@ -275,6 +292,7 @@ export default {
     siguienteDiaHabil,
     sumarDiasHabiles,
     obtenerFeriadosMexico,
+    obtenerFeriadosAdicionales,
     limitesMensuales,
     estaVencida,
     inicioDia,

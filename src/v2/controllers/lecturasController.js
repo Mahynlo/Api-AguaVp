@@ -28,7 +28,7 @@
 
 import dbTurso from '../../database/db-sqlite.js';
 import { calcularTarifaDesdeDB } from '../../utils/tarifaUtils.js';
-import { nowDate, esDiaHabil, siguienteDiaHabil } from '../../utils/timezone.js';
+import { nowDate, esDiaHabil, siguienteDiaHabil, calcularVencimientoHabil } from '../../utils/timezone.js';
 
 // Managers SSE - Configurados dinámicamente
 let sseManager = null;
@@ -37,6 +37,16 @@ let notificationManager = null;
 export const setSSEManagers = (sseManagerInstance, notificationManagerInstance) => {
     sseManager = sseManagerInstance;
     notificationManager = notificationManagerInstance;
+};
+
+const parseBooleanInput = (value) => {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number') return value === 1;
+    if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase();
+        return normalized === 'true' || normalized === '1' || normalized === 'si' || normalized === 'sí';
+    }
+    return false;
 };
 
 /**
@@ -87,13 +97,8 @@ const generarFacturaAutomatica = async (params) => {
             ? (Number(configResult.rows[0].dias_vencimiento_factura) || 30)
             : 30;
 
-        // Parseo local para evitar desfase UTC al sumar días
-        const [fAnio, fMes, fDia] = fecha_emision.split('-').map(Number);
-        const fechaVencimientoBase = new Date(fAnio, fMes - 1, fDia);
-        fechaVencimientoBase.setDate(fechaVencimientoBase.getDate() + diasVencimiento);
-        const fecha_vencimiento_str = siguienteDiaHabil(
-            `${fechaVencimientoBase.getFullYear()}-${String(fechaVencimientoBase.getMonth() + 1).padStart(2, '0')}-${String(fechaVencimientoBase.getDate()).padStart(2, '0')}`
-        );
+        // Vencimiento = fecha_emision + N días, moviendo al siguiente día hábil si cae en inhábil.
+        const fecha_vencimiento_str = calcularVencimientoHabil(diasVencimiento, fecha_emision);
 
         // Insertar factura
         const insertFacturaQuery = `
@@ -612,6 +617,8 @@ const lecturasController = {
     async generarFacturasParaLecturasSinFactura(req, res) {
         try {
             const { periodo, ruta_id } = req.body;
+            const recalcular = parseBooleanInput(req.body.recalcular) || parseBooleanInput(req.body.forzar_recalculo);
+            const motivoRecalculo = typeof req.body.motivo_recalculo === 'string' ? req.body.motivo_recalculo.trim() : '';
             // fecha_emision es opcional; si no se manda, se usa el día actual en Hermosillo
             let fecha_emision = req.body.fecha_emision || nowDate();
             const modificado_por = req.usuario?.id;
@@ -637,12 +644,16 @@ const lecturasController = {
 
             // Obtener lecturas pendientes sin factura (con filtro opcional por ruta)
             const condiciones = [
-                'f.id IS NULL',
                 'l.periodo = ?',
-                "l.estado = 'pendiente'",
                 'c.tarifa_id IS NOT NULL',
                 'm.cliente_id IS NOT NULL'
             ];
+            if (!recalcular) {
+                condiciones.push('f.id IS NULL');
+                condiciones.push("l.estado = 'pendiente'");
+            } else {
+                condiciones.push("l.estado IN ('pendiente', 'facturada')");
+            }
             const queryArgs = [periodo];
 
             if (ruta_id) {
@@ -659,7 +670,11 @@ const lecturasController = {
                     m.cliente_id,
                     c.tarifa_id,
                     c.nombre as cliente_nombre,
-                    m.numero_serie as medidor_numero
+                    m.numero_serie as medidor_numero,
+                    f.id as factura_existente_id,
+                    f.total as factura_existente_total,
+                    f.saldo_pendiente as factura_existente_saldo,
+                    f.estado as factura_existente_estado
                 FROM lecturas l
                 LEFT JOIN medidores m ON l.medidor_id = m.id
                 LEFT JOIN clientes c ON m.cliente_id = c.id
@@ -681,8 +696,11 @@ const lecturasController = {
             const resultados = {
                 periodo,
                 fecha_emision,
+                recalculo_activado: recalcular,
+                motivo_recalculo: recalcular ? (motivoRecalculo || null) : null,
                 total_lecturas: lecturasSinFactura.length,
                 facturas_generadas: 0,
+                facturas_recalculadas: 0,
                 facturas_fallidas: 0,
                 detalles: []
             };
@@ -690,6 +708,102 @@ const lecturasController = {
             // Procesar cada lectura
             for (const lectura of lecturasSinFactura) {
                 try {
+                    const facturaExistenteId = lectura.factura_existente_id ? Number(lectura.factura_existente_id) : null;
+
+                    if (recalcular && facturaExistenteId) {
+                        const pagosResult = await dbTurso.execute({
+                            sql: 'SELECT COALESCE(SUM(monto), 0) AS total_pagado FROM pagos WHERE factura_id = ?',
+                            args: [facturaExistenteId]
+                        });
+                        const totalPagado = Number(pagosResult.rows[0]?.total_pagado || 0);
+
+                        if (totalPagado > 0) {
+                            resultados.facturas_fallidas++;
+                            resultados.detalles.push({
+                                lectura_id: Number(lectura.lectura_id),
+                                factura_id: facturaExistenteId,
+                                cliente_nombre: lectura.cliente_nombre,
+                                medidor_numero: lectura.medidor_numero,
+                                error: `No se puede recalcular: la factura ya tiene pagos registrados (${totalPagado}).`,
+                                estado: 'fallida'
+                            });
+                            continue;
+                        }
+
+                        const nuevoTotalResult = await calcularTarifaDesdeDB(Number(lectura.consumo_m3), lectura.tarifa_id, dbTurso);
+                        const nuevoTotal = Number(nuevoTotalResult.total);
+                        const totalAnterior = Number(lectura.factura_existente_total || 0);
+                        const saldoAnterior = Number(lectura.factura_existente_saldo || 0);
+                        const estadoAnterior = lectura.factura_existente_estado || 'Pendiente';
+
+                        await dbTurso.execute({
+                            sql: `
+                                UPDATE facturas
+                                SET tarifa_id = ?, total = ?, saldo_pendiente = ?, estado = ?, modificado_por = ?
+                                WHERE id = ?
+                            `,
+                            args: [
+                                Number(lectura.tarifa_id),
+                                nuevoTotal,
+                                nuevoTotal,
+                                'Pendiente',
+                                modificado_por,
+                                facturaExistenteId
+                            ]
+                        });
+
+                        const cambiosRecalculo = {
+                            accion: 'recalculo_factura_desde_lectura',
+                            lectura_id: Number(lectura.lectura_id),
+                            factura_id: facturaExistenteId,
+                            periodo,
+                            motivo_recalculo: motivoRecalculo || null,
+                            consumo_m3: Number(lectura.consumo_m3),
+                            antes: {
+                                total: totalAnterior,
+                                saldo_pendiente: saldoAnterior,
+                                estado: estadoAnterior
+                            },
+                            despues: {
+                                total: nuevoTotal,
+                                saldo_pendiente: nuevoTotal,
+                                estado: 'Pendiente'
+                            }
+                        };
+
+                        await dbTurso.execute({
+                            sql: `
+                                INSERT INTO historial_cambios (tabla, operacion, registro_id, modificado_por, cambios)
+                                VALUES (?, ?, ?, ?, ?)
+                            `,
+                            args: [
+                                'facturas',
+                                'RECALCULO',
+                                facturaExistenteId,
+                                modificado_por,
+                                JSON.stringify(cambiosRecalculo)
+                            ]
+                        });
+
+                        await dbTurso.execute({
+                            sql: 'UPDATE lecturas SET estado = ? WHERE id = ?',
+                            args: ['facturada', Number(lectura.lectura_id)]
+                        });
+
+                        resultados.facturas_recalculadas++;
+                        resultados.detalles.push({
+                            lectura_id: Number(lectura.lectura_id),
+                            factura_id: facturaExistenteId,
+                            cliente_nombre: lectura.cliente_nombre,
+                            medidor_numero: lectura.medidor_numero,
+                            consumo_m3: Number(lectura.consumo_m3),
+                            total_anterior: totalAnterior,
+                            total_nuevo: nuevoTotal,
+                            estado: 'recalculada'
+                        });
+                        continue;
+                    }
+
                     const facturaParams = {
                         lectura_id: lectura.lectura_id,
                         cliente_id: lectura.cliente_id,
@@ -759,9 +873,31 @@ const lecturasController = {
                 }
             }
 
+            if (notificationManager && recalcular && resultados.facturas_recalculadas > 0) {
+                try {
+                    notificationManager.alertaSistema(
+                        `${resultados.facturas_recalculadas} factura(s) recalculada(s)`,
+                        'info',
+                        {
+                            periodo,
+                            total_recalculadas: resultados.facturas_recalculadas,
+                            total_generadas: resultados.facturas_generadas,
+                            total_fallidas: resultados.facturas_fallidas,
+                            operador_id: modificado_por,
+                            accion: 'facturas_recalculadas_masivo',
+                            motivo_recalculo: motivoRecalculo || null
+                        }
+                    );
+                } catch (sseError) {
+                    console.warn('Error enviando notificación SSE de recálculo de facturas:', sseError);
+                }
+            }
+
             return res.status(200).json({
                 success: true,
-                message: 'Proceso de generación de facturas completado',
+                message: recalcular
+                    ? 'Proceso de generación y recálculo de facturas completado'
+                    : 'Proceso de generación de facturas completado',
                 ...(aviso_fecha && { aviso: aviso_fecha }),
                 data: resultados
             });

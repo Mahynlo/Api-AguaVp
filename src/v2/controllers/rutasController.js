@@ -342,6 +342,28 @@ const rutasController = {
                 args: [periodo, ...rutasPageIds]
             });
 
+            // Obtener cuántas facturas existen por ruta en el período mostrado
+            const facturasBulkQuery = `
+                SELECT
+                    l.ruta_id,
+                    COUNT(f.id) AS facturas_generadas_periodo
+                FROM lecturas l
+                JOIN facturas f ON f.lectura_id = l.id
+                WHERE l.periodo = ?
+                  AND l.ruta_id IN (${idsPlaceholder2})
+                GROUP BY l.ruta_id
+            `;
+
+            const facturasBulkResult = await dbTurso.execute({
+                sql: facturasBulkQuery,
+                args: [periodo, ...rutasPageIds]
+            });
+
+            const facturasPorRuta = new Map();
+            for (const row of facturasBulkResult.rows) {
+                facturasPorRuta.set(Number(row.ruta_id), Number(row.facturas_generadas_periodo || 0));
+            }
+
             // Agrupar medidores por ruta_id en un Map para lookup O(1)
             const medidoresPorRuta = new Map();
             for (const row of medidoresBulkResult.rows) {
@@ -366,6 +388,7 @@ const rutasController = {
                 const porcentaje_completado = total_puntos > 0
                     ? Math.round((completadas / total_puntos) * 100)
                     : 0;
+                const facturas_generadas_periodo = facturasPorRuta.get(ruta.id) || 0;
                 return {
                     id: ruta.id,
                     nombre: ruta.nombre,
@@ -380,7 +403,9 @@ const rutasController = {
                     numeros_serie,
                     medidores_completados,
                     medidores_faltantes,
-                    periodo_mostrado: periodo
+                    periodo_mostrado: periodo,
+                    facturas_generadas_periodo,
+                    tiene_facturacion_periodo: facturas_generadas_periodo > 0
                 };
             });
 
