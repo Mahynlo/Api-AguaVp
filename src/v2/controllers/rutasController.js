@@ -379,16 +379,23 @@ const rutasController = {
             // Construir objetos de ruta con estadísticas calculadas
             const rutasFinales = rutas.map(ruta => {
                 const medidores = medidoresPorRuta.get(ruta.id) || [];
-                const numeros_serie = medidores.map(m => m.numero_serie);
-                const medidores_completados = medidores.filter(m => m.tiene_lectura === 1).map(m => m.numero_serie);
-                const medidores_faltantes  = medidores.filter(m => m.tiene_lectura === 0).map(m => m.numero_serie);
+                const facturas_generadas_periodo = facturasPorRuta.get(ruta.id) || 0;
+
+                // Si el periodo ya tiene facturación, se considera cerrado para captura:
+                // no se muestran como pendientes medidores agregados posteriormente.
+                const medidoresBase = facturas_generadas_periodo > 0
+                    ? medidores.filter(m => m.tiene_lectura === 1)
+                    : medidores;
+
+                const numeros_serie = medidoresBase.map(m => m.numero_serie);
+                const medidores_completados = medidoresBase.filter(m => m.tiene_lectura === 1).map(m => m.numero_serie);
+                const medidores_faltantes  = medidoresBase.filter(m => m.tiene_lectura === 0).map(m => m.numero_serie);
                 const completadas = medidores_completados.length;
                 const faltantes   = medidores_faltantes.length;
-                const total_puntos = medidores.length;
+                const total_puntos = medidoresBase.length;
                 const porcentaje_completado = total_puntos > 0
                     ? Math.round((completadas / total_puntos) * 100)
                     : 0;
-                const facturas_generadas_periodo = facturasPorRuta.get(ruta.id) || 0;
                 return {
                     id: ruta.id,
                     nombre: ruta.nombre,
@@ -405,7 +412,8 @@ const rutasController = {
                     medidores_faltantes,
                     periodo_mostrado: periodo,
                     facturas_generadas_periodo,
-                    tiene_facturacion_periodo: facturas_generadas_periodo > 0
+                    tiene_facturacion_periodo: facturas_generadas_periodo > 0,
+                    periodo_cerrado: facturas_generadas_periodo > 0
                 };
             });
 
@@ -960,6 +968,19 @@ const rutasController = {
 
             const ruta = rutaResult.rows[0];
 
+            // Si ya existen facturas para la ruta en este periodo, se trata como periodo cerrado.
+            const cierrePeriodoResult = await dbTurso.execute({
+                sql: `
+                    SELECT COUNT(*) AS total_facturas
+                    FROM facturas f
+                    JOIN lecturas l ON l.id = f.lectura_id
+                    WHERE l.ruta_id = ? AND l.periodo = ?
+                `,
+                args: [ruta_id, periodo]
+            });
+            const totalFacturasPeriodo = Number(cierrePeriodoResult.rows[0]?.total_facturas || 0);
+            const periodoCerrado = totalFacturasPeriodo > 0;
+
             // Obtener estadísticas detalladas
             const statsQuery = `
                 SELECT 
@@ -979,10 +1000,9 @@ const rutasController = {
             });
 
             const stats = statsResult.rows[0];
-            const total = Number(stats.total_medidores);
-            const leidos = Number(stats.medidores_leidos);
-            const pendientes = Number(stats.medidores_pendientes);
-            const porcentaje = total > 0 ? Math.round((leidos / total) * 100) : 0;
+            const totalRaw = Number(stats.total_medidores);
+            const leidosRaw = Number(stats.medidores_leidos);
+            const pendientesRaw = Number(stats.medidores_pendientes);
 
             // Obtener lista detallada de medidores con su estado
             const medidoresQuery = `
@@ -1010,7 +1030,7 @@ const rutasController = {
                 args: [periodo, ruta_id]
             });
 
-            const medidores = medidoresResult.rows.map(row => ({
+            const medidoresRaw = medidoresResult.rows.map(row => ({
                 medidor_id: Number(row.medidor_id),
                 numero_serie: row.numero_serie,
                 ubicacion: row.ubicacion,
@@ -1020,6 +1040,16 @@ const rutasController = {
                 consumo: row.consumo_m3,
                 fecha_lectura: row.fecha_lectura
             }));
+
+            // En periodo cerrado, solo mostrar/contar medidores ya leídos para ese periodo.
+            const medidores = periodoCerrado
+                ? medidoresRaw.filter(m => m.estado === 'Leído')
+                : medidoresRaw;
+
+            const total = periodoCerrado ? medidores.length : totalRaw;
+            const leidos = periodoCerrado ? medidores.length : leidosRaw;
+            const pendientes = periodoCerrado ? 0 : pendientesRaw;
+            const porcentaje = total > 0 ? Math.round((leidos / total) * 100) : 0;
 
             const medidores_leidos = medidores.filter(m => m.estado === 'Leído');
             const medidores_pendientes = medidores.filter(m => m.estado === 'Pendiente');
@@ -1036,7 +1066,9 @@ const rutasController = {
                     medidores_leidos: leidos,
                     medidores_pendientes: pendientes,
                     porcentaje_completado: porcentaje,
-                    porcentaje_pendiente: 100 - porcentaje
+                    porcentaje_pendiente: 100 - porcentaje,
+                    periodo_cerrado: periodoCerrado,
+                    total_facturas_periodo: totalFacturasPeriodo
                 },
                 detalle: {
                     medidores_leidos: medidores_leidos,

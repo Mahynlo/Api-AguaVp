@@ -20,7 +20,7 @@
 
 import dbTurso from '../../database/db-sqlite.js';
 import { calcularTarifaDesdeDB } from '../../utils/tarifaUtils.js';
-import { nowDate, esDiaHabil, siguienteDiaHabil, calcularVencimientoHabil } from '../../utils/timezone.js';
+import { nowDate, calcularVencimiento } from '../../utils/timezone.js';
 
 // Managers SSE - Configurados dinámicamente
 let sseManager = null;
@@ -50,14 +50,6 @@ const facturasController = {
             // Validar que la fecha sea YYYY-MM-DD
             if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha_emision)) {
                 return res.status(400).json({ error: 'El formato de fecha_emision debe ser YYYY-MM-DD' });
-            }
-
-            // Si cae en feriado o fin de semana, avanzar al siguiente día hábil
-            let aviso_fecha = null;
-            if (!esDiaHabil(fecha_emision)) {
-                const fecha_ajustada = siguienteDiaHabil(fecha_emision);
-                aviso_fecha = `La fecha ${fecha_emision} no es día hábil. Se ajustó automáticamente a ${fecha_ajustada}.`;
-                fecha_emision = fecha_ajustada;
             }
 
             // Verificar si ya existe una factura para esta lectura
@@ -118,11 +110,11 @@ const facturasController = {
                 args: []
             });
             const diasVencimiento = configResult.rows.length > 0
-                ? (Number(configResult.rows[0].dias_vencimiento_factura) || 30)
-                : 30;
+                ? (Number(configResult.rows[0].dias_vencimiento_factura) || 15)
+                : 15;
 
-            // Vencimiento = fecha_emision + N días, moviendo al siguiente día hábil si cae en inhábil.
-            const fecha_vencimiento_str = calcularVencimientoHabil(diasVencimiento, fecha_emision);
+            // Vencimiento = fecha_emision + N días calendario (sin ajuste por día hábil).
+            const fecha_vencimiento_str = calcularVencimiento(diasVencimiento, fecha_emision);
 
             // Insertar factura
             const insertQuery = `
@@ -189,7 +181,6 @@ const facturasController = {
                 mensaje: 'Factura generada exitosamente',
                 factura_id,
                 total_calculado: total,
-                ...(aviso_fecha && { aviso: aviso_fecha }),
                 detalles: {
                     id: Number(facturaCompleta.id),
                     cliente_nombre: facturaCompleta.cliente_nombre,
@@ -287,8 +278,10 @@ const facturasController = {
                     
                     -- Información del cliente
                     c.nombre AS cliente_nombre,
+                    c.numero_predio AS cliente_numero_predio,
                     c.direccion AS direccion_cliente,
                     c.telefono AS telefono_cliente,
+                    c.correo AS correo_cliente,
                     
                     -- Información de la tarifa
                     t.nombre AS tarifa_nombre,
@@ -375,9 +368,9 @@ const facturasController = {
                 }
 
                 if (searchTerm) {
-                    whereConditions.push('(LOWER(c.nombre) LIKE ? OR LOWER(c.direccion) LIKE ? OR CAST(f.id AS TEXT) LIKE ? OR LOWER(m.numero_serie) LIKE ?)');
-                    queryParams.push(searchTerm, searchTerm, searchTerm, searchTerm);
-                    countParams.push(searchTerm, searchTerm, searchTerm, searchTerm);
+                    whereConditions.push('(LOWER(c.nombre) LIKE ? OR LOWER(c.direccion) LIKE ? OR LOWER(COALESCE(c.telefono, \'\')) LIKE ? OR LOWER(COALESCE(c.correo, \'\')) LIKE ? OR CAST(f.id AS TEXT) LIKE ? OR LOWER(m.numero_serie) LIKE ? OR LOWER(COALESCE(m.ubicacion, \'\')) LIKE ? OR CAST(COALESCE(c.numero_predio, \'\') AS TEXT) LIKE ?)');
+                    queryParams.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+                    countParams.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
                 }
             }
 
@@ -437,7 +430,8 @@ const facturasController = {
             // Formateo optimizado con destructuring
             const formatearFactura = (factura) => {
                 const {
-                    id, cliente_id, cliente_nombre, direccion_cliente, telefono_cliente,
+                    id, cliente_id, cliente_nombre, cliente_numero_predio, direccion_cliente, telefono_cliente,
+                    correo_cliente,
                     lectura_id, consumo_m3, costo_por_m3, total, saldo_pendiente, estado,
                     fecha_emision, fecha_vencimiento, modificado_por, modificado_por_nombre,
                     fecha_creacion, tarifa_id, tarifa_nombre, periodo, mes_facturado,
@@ -450,8 +444,10 @@ const facturasController = {
                     id: Number(id),
                     cliente_id: Number(cliente_id),
                     cliente_nombre,
+                    cliente_numero_predio,
                     direccion_cliente,
                     telefono_cliente,
+                    correo_cliente,
                     lectura_id: Number(lectura_id),
                     consumo_m3: Number(consumo_m3),
                     costo_por_m3: costo_por_m3 ? Number(costo_por_m3) : 0,

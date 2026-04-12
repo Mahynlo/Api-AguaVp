@@ -25,6 +25,7 @@ const router = express.Router();
 // ===================================
 router.get("/configuracion", appKeyMiddleware, authMiddleware, configuracionController.getConfiguracion);
 router.post("/configuracion", appKeyMiddleware, authMiddleware, configuracionController.updateConfiguracion);
+router.post("/configuracion/recalcular-vencimientos", appKeyMiddleware, authMiddleware, configuracionController.recalcularVencimientosPorPeriodo);
 
 // ===================================
 // CORTES DE SERVICIO
@@ -81,12 +82,30 @@ router.get("/convenios/:id", appKeyMiddleware, authMiddleware, conveniosControll
 
 /**
  * @swagger
+ * /api/v2/deudores/convenios/resumen-cobro/{medidor_id}:
+ *   get:
+ *     summary: Obtener resumen de cobro por medidor
+ *     description: Retorna sugerencia de cobro combinando factura del periodo y siguiente parcialidad del convenio.
+ */
+router.get("/convenios/resumen-cobro/:medidor_id", appKeyMiddleware, authMiddleware, conveniosController.obtenerResumenCobroMedidor);
+
+/**
+ * @swagger
  * /api/v2/deudores/convenios/pagar-parcialidad:
  *   post:
  *     summary: Pagar parcialidad de convenio
  *     description: Registra el pago de una cuota del convenio y actualiza el saldo.
  */
 router.post("/convenios/pagar-parcialidad", appKeyMiddleware, authMiddleware, conveniosController.pagarParcialidad);
+
+/**
+ * @swagger
+ * /api/v2/deudores/convenios/pagar-integrado:
+ *   post:
+ *     summary: Registrar pago integrado (factura + convenio)
+ *     description: Permite aplicar en una sola operación monto a factura del periodo y a una o varias parcialidades del convenio.
+ */
+router.post("/convenios/pagar-integrado", appKeyMiddleware, authMiddleware, conveniosController.pagarIntegrado);
 
 export default router;
 

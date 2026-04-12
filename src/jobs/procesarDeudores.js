@@ -13,6 +13,7 @@
 
 import cron from 'node-cron';
 import dbTurso from '../database/db-sqlite.js';
+import { nowDate } from '../utils/timezone.js';
 
 let notificationManager = null;
 
@@ -30,14 +31,15 @@ export const setNotificationManager = (manager) => {
  * @returns {Promise<number>} Cantidad de facturas marcadas como Vencida
  */
 export const marcarFacturasVencidas = async () => {
+    const hoyLocal = nowDate();
     const updateQuery = `
         UPDATE facturas
         SET estado = 'Vencida'
-        WHERE fecha_vencimiento < date('now')
+        WHERE fecha_vencimiento < ?
           AND estado IN ('Pendiente', 'Parcial')
           AND saldo_pendiente > 0
     `;
-    const result = await dbTurso.execute({ sql: updateQuery, args: [] });
+    const result = await dbTurso.execute({ sql: updateQuery, args: [hoyLocal] });
     const cantidad = Number(result.rowsAffected || 0);
     if (cantidad > 0) {
         console.log(`[Job] ${cantidad} factura(s) marcadas como 'Vencida'`);
@@ -50,6 +52,7 @@ export const marcarFacturasVencidas = async () => {
  */
 export const analizarCarteraVencida = async () => {
     const timestamp = new Date().toISOString();
+    const hoyLocal = nowDate();
     console.log(`[Job] Iniciando análisis de cartera: ${timestamp}`);
 
     try {
@@ -74,14 +77,14 @@ export const analizarCarteraVencida = async () => {
                 LEFT JOIN convenios_pago cp ON cp.medidor_id = m.id AND cp.estado = 'Activo'
                 WHERE f.saldo_pendiente > 0 
                 AND f.estado = 'Vencida'
-                AND f.fecha_vencimiento <= date('now', '-' || ? || ' days') -- Período de gracia
+                AND f.fecha_vencimiento <= date(?, '-' || ? || ' days') -- Período de gracia
                 AND m.estado_servicio = 'Activo'
                 AND cp.id IS NULL -- Excluir convenios activos
                 GROUP BY m.id
                 HAVING COUNT(f.id) >= ?
             )
         `;
-        const candidatosRes = await dbTurso.execute({ sql: candidatosQuery, args: [diasGracia, umbralCorte] });
+        const candidatosRes = await dbTurso.execute({ sql: candidatosQuery, args: [hoyLocal, diasGracia, umbralCorte] });
         const numCandidatos = candidatosRes.rows[0]?.total || 0;
 
         // 4. Obtener deuda total vencida

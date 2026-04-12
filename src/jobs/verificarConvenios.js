@@ -17,6 +17,7 @@
 
 import cron from 'node-cron';
 import dbTurso from '../database/db-sqlite.js';
+import { nowDate } from '../utils/timezone.js';
 
 let notificationManager = null;
 
@@ -29,6 +30,7 @@ export const setNotificationManager = (manager) => {
  */
 export const verificarConvenios = async () => {
     const timestamp = new Date().toISOString();
+    const hoyLocal = nowDate();
     console.log(`[Job] Verificando convenios de pago: ${timestamp}`);
 
     try {
@@ -46,11 +48,11 @@ export const verificarConvenios = async () => {
             JOIN convenios_pago c ON p.convenio_id = c.id
             JOIN clientes cl ON c.cliente_id = cl.id
             WHERE p.estado = 'Pendiente'
-            AND p.fecha_vencimiento < date('now')
+            AND p.fecha_vencimiento < ?
             AND c.estado = 'Activo'
         `;
 
-        const vencidasRes = await dbTurso.execute({ sql: parcialidadesVencidasQuery, args: [] });
+        const vencidasRes = await dbTurso.execute({ sql: parcialidadesVencidasQuery, args: [hoyLocal] });
         const parcialidadesVencidas = vencidasRes.rows;
 
         if (parcialidadesVencidas.length === 0) {

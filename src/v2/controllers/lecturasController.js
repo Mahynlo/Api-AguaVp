@@ -28,7 +28,7 @@
 
 import dbTurso from '../../database/db-sqlite.js';
 import { calcularTarifaDesdeDB } from '../../utils/tarifaUtils.js';
-import { nowDate, esDiaHabil, siguienteDiaHabil, calcularVencimientoHabil } from '../../utils/timezone.js';
+import { nowDate, calcularVencimiento } from '../../utils/timezone.js';
 
 // Managers SSE - Configurados dinámicamente
 let sseManager = null;
@@ -63,9 +63,8 @@ const parseBooleanInput = (value) => {
 const generarFacturaAutomatica = async (params) => {
     let { lectura_id, cliente_id, tarifa_id, consumo_m3, fecha_emision, modificado_por } = params;
 
-    // Asegurar que fecha_emision sea un día hábil
+    // Si no se manda fecha_emision, usar fecha actual
     if (!fecha_emision) fecha_emision = nowDate();
-    fecha_emision = siguienteDiaHabil(fecha_emision);
 
     try {
         // Verificar si ya existe una factura para esta lectura
@@ -88,17 +87,17 @@ const generarFacturaAutomatica = async (params) => {
             return { success: false, error: tarifaError.message };
 }
 
-        // Calcular fecha de vencimiento desde configuración (default 30 días)
+        // Calcular fecha de vencimiento desde configuración (default 15 días)
         const configResult = await dbTurso.execute({
             sql: `SELECT dias_vencimiento_factura FROM configuracion_servicio WHERE activo = 1 ORDER BY id DESC LIMIT 1`,
             args: []
         });
         const diasVencimiento = configResult.rows.length > 0
-            ? (Number(configResult.rows[0].dias_vencimiento_factura) || 30)
-            : 30;
+            ? (Number(configResult.rows[0].dias_vencimiento_factura) || 15)
+            : 15;
 
-        // Vencimiento = fecha_emision + N días, moviendo al siguiente día hábil si cae en inhábil.
-        const fecha_vencimiento_str = calcularVencimientoHabil(diasVencimiento, fecha_emision);
+        // Vencimiento = fecha_emision + N días calendario (sin ajuste por día hábil).
+        const fecha_vencimiento_str = calcularVencimiento(diasVencimiento, fecha_emision);
 
         // Insertar factura
         const insertFacturaQuery = `
@@ -236,6 +235,28 @@ const lecturasController = {
             });
             if (dupeResult.rows.length > 0) {
                 return res.status(409).json({ error: 'Ya existe una lectura registrada para este medidor y periodo' });
+            }
+
+            // Si el periodo de la ruta ya tiene facturas generadas, se considera cerrado:
+            // no se permiten altas de nuevas lecturas para medidores agregados posteriormente.
+            const cierrePeriodoResult = await dbTurso.execute({
+                sql: `
+                    SELECT COUNT(*) AS total_facturas
+                    FROM facturas f
+                    JOIN lecturas l ON l.id = f.lectura_id
+                    WHERE l.ruta_id = ? AND l.periodo = ?
+                `,
+                args: [ruta_id, periodo]
+            });
+            const totalFacturasPeriodo = Number(cierrePeriodoResult.rows?.[0]?.total_facturas || 0);
+            if (totalFacturasPeriodo > 0) {
+                return res.status(409).json({
+                    error: 'El periodo ya está cerrado por facturación. No se pueden registrar nuevas lecturas en esta ruta/periodo.',
+                    code: 'PERIODO_RUTA_CERRADO',
+                    ruta_id: Number(ruta_id),
+                    periodo,
+                    total_facturas_periodo: totalFacturasPeriodo
+                });
             }
 
             // ============================================================
@@ -631,15 +652,9 @@ const lecturasController = {
                 return res.status(400).json({ success: false, message: 'Falta campo requerido: periodo' });
             }
 
-            // Validar formato y ajustar al siguiente día hábil si es necesario
+            // Validar formato de fecha
             if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha_emision)) {
                 return res.status(400).json({ success: false, message: 'El formato de fecha_emision debe ser YYYY-MM-DD' });
-            }
-            let aviso_fecha = null;
-            if (!esDiaHabil(fecha_emision)) {
-                const fecha_ajustada = siguienteDiaHabil(fecha_emision);
-                aviso_fecha = `La fecha ${fecha_emision} no es día hábil. Se ajustó automáticamente a ${fecha_ajustada}.`;
-                fecha_emision = fecha_ajustada;
             }
 
             // Obtener lecturas pendientes sin factura (con filtro opcional por ruta)
@@ -898,7 +913,6 @@ const lecturasController = {
                 message: recalcular
                     ? 'Proceso de generación y recálculo de facturas completado'
                     : 'Proceso de generación de facturas completado',
-                ...(aviso_fecha && { aviso: aviso_fecha }),
                 data: resultados
             });
 

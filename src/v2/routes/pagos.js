@@ -64,6 +64,7 @@ import pagosController, { setSSEManagers } from '../controllers/pagosController.
 import {
     validate,
     registrarPagoSchema,
+    registrarPagoDistribuidoSchema,
     actualizarPagoSchema,
     pagoIdParamSchema
 } from '../validators/index.js';
@@ -556,6 +557,7 @@ const configureSSE = (req, res, next) => {
  */
 // Rutas adaptadas de V1 con los mismos endpoints exactos
 router.post('/registrar', appKeyMiddleware, authMiddleware, validate(registrarPagoSchema), configureSSE, pagosController.registrarPago);
+router.post('/distribuir', appKeyMiddleware, authMiddleware, validate(registrarPagoDistribuidoSchema), configureSSE, pagosController.registrarPagoDistribuido);
 
 /**
  * @swagger

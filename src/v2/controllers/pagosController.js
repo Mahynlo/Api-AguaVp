@@ -231,6 +231,146 @@ const pagosController = {
     },
 
     /**
+     * Registrar pago distribuido FIFO por cliente
+     * Aplica un monto global a facturas pendientes del cliente (mas antiguas primero)
+     */
+    registrarPagoDistribuido: async (req, res) => {
+        try {
+            const {
+                cliente_id,
+                fecha_pago,
+                cantidad_entregada,
+                metodo_pago,
+                comentario
+            } = req.body;
+            const modificado_por = req.usuario.id;
+
+            if (!cliente_id || !fecha_pago || cantidad_entregada == null || !metodo_pago || !modificado_por) {
+                return res.status(400).json({ error: 'Faltan campos requeridos' });
+            }
+
+            if (cantidad_entregada <= 0) {
+                return res.status(400).json({ error: 'La cantidad entregada debe ser mayor a cero' });
+            }
+
+            const resultadoDistribucion = sqlite.transaction(() => {
+                const facturasPendientes = sqlite.prepare(`
+                    SELECT
+                        f.id,
+                        f.saldo_pendiente,
+                        f.fecha_emision,
+                        f.created_at,
+                        f.convenio_id,
+                        l.periodo
+                    FROM facturas f
+                    LEFT JOIN lecturas l ON f.lectura_id = l.id
+                    WHERE f.cliente_id = ?
+                        AND f.saldo_pendiente > 0
+                        AND f.estado != 'Pagado'
+                        AND f.convenio_id IS NULL
+                    ORDER BY
+                        COALESCE(f.fecha_emision, f.created_at) ASC,
+                        f.id ASC
+                `).all(cliente_id);
+
+                if (!facturasPendientes || facturasPendientes.length === 0) {
+                    throw { statusCode: 404, error: 'El cliente no tiene facturas pendientes para aplicar pago' };
+                }
+
+                let restante = toDecimal(cantidad_entregada);
+                const aplicaciones = [];
+                const pagoIds = [];
+
+                for (const factura of facturasPendientes) {
+                    if (restante <= 0) break;
+
+                    const saldoFactura = toDecimal(factura.saldo_pendiente);
+                    if (saldoFactura <= 0) continue;
+
+                    const montoAplicado = toDecimal(Math.min(restante, saldoFactura));
+                    if (montoAplicado <= 0) continue;
+
+                    const insertResult = sqlite.prepare(`
+                        INSERT INTO pagos (
+                            factura_id, fecha_pago, monto, cantidad_entregada, cambio, metodo_pago, comentario, modificado_por
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    `).run(
+                        factura.id,
+                        fecha_pago,
+                        montoAplicado,
+                        montoAplicado,
+                        0,
+                        metodo_pago,
+                        comentario || null,
+                        modificado_por
+                    );
+
+                    const saldoAntes = saldoFactura;
+                    const saldoDespues = toDecimal(Math.max(0, saldoAntes - montoAplicado));
+
+                    aplicaciones.push({
+                        factura_id: factura.id,
+                        periodo: factura.periodo || null,
+                        saldo_antes: saldoAntes,
+                        monto_aplicado: montoAplicado,
+                        saldo_despues: saldoDespues
+                    });
+
+                    pagoIds.push(Number(insertResult.lastInsertRowid));
+                    restante = restaDecimal(restante, montoAplicado);
+                }
+
+                if (aplicaciones.length === 0) {
+                    throw { statusCode: 400, error: 'No fue posible aplicar el pago a facturas pendientes' };
+                }
+
+                const montoAplicadoTotal = aplicaciones.reduce((sum, item) => sumaDecimal(sum, item.monto_aplicado), 0);
+                const cambio = toDecimal(Math.max(0, toDecimal(cantidad_entregada) - montoAplicadoTotal));
+
+                return {
+                    pagoIds,
+                    aplicaciones,
+                    montoAplicadoTotal,
+                    cambio,
+                    facturasAfectadas: aplicaciones.length
+                };
+            });
+
+            const response = {
+                mensaje: 'Pago distribuido registrado exitosamente',
+                cliente_id: Number(cliente_id),
+                pagos_ids: resultadoDistribucion.pagoIds,
+                monto_entregado: toDecimal(cantidad_entregada),
+                monto_aplicado: resultadoDistribucion.montoAplicadoTotal,
+                cambio: resultadoDistribucion.cambio,
+                facturas_afectadas: resultadoDistribucion.facturasAfectadas,
+                aplicaciones: resultadoDistribucion.aplicaciones
+            };
+
+            if (notificationManager) {
+                try {
+                    notificationManager.notificacionPersonalizada('pago_distribuido_registrado', {
+                        cliente_id: Number(cliente_id),
+                        monto_aplicado: resultadoDistribucion.montoAplicadoTotal,
+                        facturas_afectadas: resultadoDistribucion.facturasAfectadas,
+                        timestamp: new Date().toISOString()
+                    });
+                } catch (sseError) {
+                    console.warn('Error enviando notificación SSE de pago distribuido:', sseError);
+                }
+            }
+
+            return res.status(201).json(response);
+        } catch (error) {
+            if (error.statusCode) {
+                return res.status(error.statusCode).json(error);
+            }
+            console.error('Error al registrar pago distribuido:', error);
+            return res.status(500).json({ error: 'Error interno del servidor' });
+        }
+    },
+
+    /**
      * Obtener pagos (V1 compatible + paginación)
      */
     obtenerPagos: async (req, res) => {

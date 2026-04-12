@@ -54,6 +54,34 @@ export const registrarPagoSchema = z.object({
     .optional()
 });
 
+// Esquema para registrar un pago distribuido FIFO por cliente
+export const registrarPagoDistribuidoSchema = z.object({
+  cliente_id: z.number()
+    .int('El ID del cliente debe ser un número entero')
+    .positive('El ID del cliente debe ser positivo')
+    .or(z.string().regex(/^\d+$/).transform(Number)),
+
+  fecha_pago: fechaPagoSchema,
+
+  cantidad_entregada: z.number()
+    .positive('La cantidad entregada debe ser mayor a cero')
+    .or(z.string().regex(/^\d+\.?\d*$/).transform(Number)),
+
+  metodo_pago: metodoPagoSchema,
+
+  comentario: z.string()
+    .max(500, 'El comentario no puede exceder 500 caracteres')
+    .nullable()
+    .optional()
+    .transform(val => val || undefined),
+
+  modificado_por: z.number()
+    .int('El ID del usuario debe ser un número entero')
+    .positive('El ID del usuario debe ser positivo')
+    .or(z.string().regex(/^\d+$/).transform(Number))
+    .optional()
+});
+
 // Esquema para actualizar un pago (basado en modificarPago - TODOS los campos requeridos)
 export const actualizarPagoSchema = z.object({
   fecha_pago: fechaPagoSchema,

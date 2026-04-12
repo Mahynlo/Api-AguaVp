@@ -184,8 +184,8 @@ const clientesController = {
                 let conditions = [];
 
                 if (searchTerm) {
-                    conditions.push(`(c.nombre LIKE ? OR c.telefono LIKE ? OR c.correo LIKE ? OR c.ciudad LIKE ? OR c.numero_predio LIKE ?)`);
-                    whereArgs.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+                    conditions.push(`(c.nombre LIKE ? OR c.telefono LIKE ? OR c.correo LIKE ? OR c.ciudad LIKE ? OR c.numero_predio LIKE ? OR c.direccion LIKE ?)`);
+                    whereArgs.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
                 }
 
                 if (numero_predio) {
@@ -356,154 +356,184 @@ const clientesController = {
             if (safeEstadoCliente && safeEstadoCliente !== clienteAnterior.estado_cliente) cambios.estado_cliente = { antes: clienteAnterior.estado_cliente, despues: safeEstadoCliente };
             if (safeTarifaId !== null && safeTarifaId !== clienteAnterior.tarifa_id) cambios.tarifa_id = { antes: clienteAnterior.tarifa_id, despues: safeTarifaId };
 
-            // Actualizar cliente
-            const updateQuery = `
-                UPDATE clientes 
-                SET numero_predio = CASE WHEN ? IS NOT NULL THEN ? ELSE numero_predio END,
-                    nombre = COALESCE(?, nombre),
-                    direccion = COALESCE(?, direccion),
-                    telefono = COALESCE(?, telefono),
-                    ciudad = COALESCE(?, ciudad),
-                    correo = COALESCE(?, correo),
-                    estado_cliente = COALESCE(?, estado_cliente),
-                    tarifa_id = CASE WHEN ? IS NOT NULL THEN ? ELSE tarifa_id END,
-                    modificado_por = ?
-                WHERE id = ?
-            `;
+            const medidoresAsignar = Array.isArray(medidor_id)
+                ? [...new Set(medidor_id.map((v) => Number(v)).filter((v) => Number.isFinite(v) && v > 0))]
+                : (medidor_id != null ? [Number(medidor_id)].filter((v) => Number.isFinite(v) && v > 0) : []);
+            const medidoresLiberar = Array.isArray(medidores_liberados)
+                ? [...new Set(medidores_liberados.map((v) => Number(v)).filter((v) => Number.isFinite(v) && v > 0))]
+                : [];
 
-            await dbTurso.execute({
-                sql: updateQuery,
-                args: [safeNumeroPredio, safeNumeroPredio, safeNombre, safeDireccion, safeTelefono, safeCiudad, safeCorreo, safeEstadoCliente, safeTarifaId, safeTarifaId, safeModificadoPor, safeClienteId]
-            });
+            const sqlite = dbTurso.sqlite;
 
-            // Gestionar medidores
-            const errores = [];
+            const tx = sqlite.transaction(() => {
+                const updateClienteStmt = sqlite.prepare(`
+                    UPDATE clientes
+                    SET numero_predio = CASE WHEN ? IS NOT NULL THEN ? ELSE numero_predio END,
+                        nombre = COALESCE(?, nombre),
+                        direccion = COALESCE(?, direccion),
+                        telefono = COALESCE(?, telefono),
+                        ciudad = COALESCE(?, ciudad),
+                        correo = COALESCE(?, correo),
+                        estado_cliente = COALESCE(?, estado_cliente),
+                        tarifa_id = CASE WHEN ? IS NOT NULL THEN ? ELSE tarifa_id END,
+                        modificado_por = ?
+                    WHERE id = ?
+                `);
 
-            const totalMedidoresAsignar = Array.isArray(medidor_id) ? medidor_id.length : 0;
-            const totalMedidoresLiberar = Array.isArray(medidores_liberados) ? medidores_liberados.length : 0;
+                updateClienteStmt.run(
+                    safeNumeroPredio,
+                    safeNumeroPredio,
+                    safeNombre,
+                    safeDireccion,
+                    safeTelefono,
+                    safeCiudad,
+                    safeCorreo,
+                    safeEstadoCliente,
+                    safeTarifaId,
+                    safeTarifaId,
+                    safeModificadoPor,
+                    safeClienteId
+                );
 
-            // Si no hay operaciones de medidores, ir directo al historial
-            if (totalMedidoresLiberar === 0 && totalMedidoresAsignar === 0) {
-                return await registrarHistorial();
-            }
+                const selectMedidorStmt = sqlite.prepare(`SELECT id, cliente_id FROM medidores WHERE id = ?`);
+                const liberarMedidorStmt = sqlite.prepare(`UPDATE medidores SET cliente_id = NULL WHERE id = ?`);
+                const asignarMedidorStmt = sqlite.prepare(`UPDATE medidores SET cliente_id = ? WHERE id = ?`);
+                const selectRutaPuntoByMedidorStmt = sqlite.prepare(`SELECT ruta_id, orden FROM rutas_puntos WHERE medidor_id = ?`);
+                const updateRutaPuntoMedidorStmt = sqlite.prepare(`UPDATE rutas_puntos SET medidor_id = ? WHERE ruta_id = ? AND medidor_id = ?`);
 
-            // 1. Procesar liberaciones primero (completo antes de asignar)
-            for (const mid of (medidores_liberados || [])) {
-                try {
-                    const medidorResult = await dbTurso.execute({
-                        sql: `SELECT * FROM medidores WHERE id = ?`,
-                        args: [mid]
-                    });
+                for (const mid of medidoresLiberar) {
+                    const medidor = selectMedidorStmt.get(mid);
+                    if (!medidor) {
+                        throw { status: 400, error: [`Medidor ${mid} no encontrado`] };
+                    }
 
-                    if (medidorResult.rows.length === 0) {
-                        errores.push(`Medidor ${mid} no encontrado`);
-                    } else {
-                        const medidor = medidorResult.rows[0];
-                        if (Number(medidor.cliente_id) !== parseInt(clienteId)) {
-                            errores.push(`El medidor ${mid} no pertenece al cliente actual`);
-                        } else {
-                            await dbTurso.execute({
-                                sql: `UPDATE medidores SET cliente_id = NULL WHERE id = ?`,
-                                args: [mid]
-                            });
-                            cambios[`medidor_${mid}_liberado`] = { antes: Number(medidor.cliente_id), despues: null };
+                    if (Number(medidor.cliente_id) !== safeClienteId) {
+                        throw { status: 400, error: [`El medidor ${mid} no pertenece al cliente actual`] };
+                    }
+
+                    liberarMedidorStmt.run(mid);
+                    cambios[`medidor_${mid}_liberado`] = { antes: safeClienteId, despues: null };
+                }
+
+                for (const mid of medidoresAsignar) {
+                    const medidor = selectMedidorStmt.get(mid);
+                    if (!medidor) {
+                        throw { status: 400, error: [`Medidor ${mid} no encontrado`] };
+                    }
+
+                    const medidorClienteId = medidor.cliente_id ? Number(medidor.cliente_id) : null;
+                    if (medidorClienteId && medidorClienteId !== safeClienteId) {
+                        throw { status: 400, error: [`Medidor ${mid} ya está asignado a otro cliente`] };
+                    }
+
+                    if (medidorClienteId !== safeClienteId) {
+                        asignarMedidorStmt.run(safeClienteId, mid);
+                        cambios[`medidor_${mid}_asignado`] = { antes: medidorClienteId, despues: safeClienteId };
+                    }
+                }
+
+                // Migración automática de ruta para reemplazo 1:1
+                // (evita que quede el medidor viejo en ruta sin cliente y el nuevo fuera de ruta).
+                if (medidoresLiberar.length === 1 && medidoresAsignar.length === 1) {
+                    const medidorAnteriorId = Number(medidoresLiberar[0]);
+                    const medidorNuevoId = Number(medidoresAsignar[0]);
+
+                    if (medidorAnteriorId !== medidorNuevoId) {
+                        const rutaDelAnterior = selectRutaPuntoByMedidorStmt.get(medidorAnteriorId);
+                        if (rutaDelAnterior) {
+                            const rutaDelNuevo = selectRutaPuntoByMedidorStmt.get(medidorNuevoId);
+                            if (rutaDelNuevo) {
+                                throw {
+                                    status: 400,
+                                    error: [
+                                        `No se pudo migrar ruta automáticamente: el medidor nuevo ${medidorNuevoId} ya pertenece a una ruta.`
+                                    ]
+                                };
+                            }
+
+                            updateRutaPuntoMedidorStmt.run(
+                                medidorNuevoId,
+                                Number(rutaDelAnterior.ruta_id),
+                                medidorAnteriorId
+                            );
+
+                            cambios.reasignacion_ruta_medidor = {
+                                ruta_id: Number(rutaDelAnterior.ruta_id),
+                                orden: Number(rutaDelAnterior.orden),
+                                medidor_anterior_id: medidorAnteriorId,
+                                medidor_nuevo_id: medidorNuevoId,
+                                accion: 'migracion_automatica_reemplazo_1_a_1'
+                            };
                         }
                     }
-                } catch (err) {
-                    errores.push(`Error al liberar medidor ${mid}: ${err.message}`);
                 }
-            }
 
-            // 2. Procesar asignaciones (solo si no hay errores críticos)
-            for (const mid of (Array.isArray(medidor_id) ? medidor_id : [])) {
-                try {
-                    const medidorResult = await dbTurso.execute({
-                        sql: `SELECT * FROM medidores WHERE id = ?`,
-                        args: [mid]
-                    });
-
-                    if (medidorResult.rows.length === 0) {
-                        errores.push(`Medidor ${mid} no encontrado`);
-                    } else {
-                        const medidor = medidorResult.rows[0];
-                        const medidorClienteId = medidor.cliente_id ? Number(medidor.cliente_id) : null;
-
-                        if (medidorClienteId && medidorClienteId !== parseInt(clienteId)) {
-                            errores.push(`Medidor ${mid} ya está asignado a otro cliente`);
-                        } else if (medidorClienteId !== parseInt(clienteId)) {
-                            await dbTurso.execute({
-                                sql: `UPDATE medidores SET cliente_id = ? WHERE id = ?`,
-                                args: [clienteId, mid]
-                            });
-                            cambios[`medidor_${mid}_asignado`] = { antes: medidorClienteId, despues: parseInt(clienteId) };
-                        }
-                    }
-                } catch (err) {
-                    errores.push(`Error al asignar medidor ${mid}: ${err.message}`);
+                if (medidoresLiberar.length > 0 && medidoresAsignar.length > 0) {
+                    cambios.reasignacion_medidor = {
+                        cliente_id: safeClienteId,
+                        medidores_liberados: medidoresLiberar,
+                        medidores_asignados: medidoresAsignar,
+                        tipo: 'reemplazo_o_reasignacion',
+                        timestamp: new Date().toISOString()
+                    };
                 }
-            }
 
-            if (errores.length > 0) {
-                return res.status(400).json({ error: errores });
-            }
-
-            return await registrarHistorial();
-
-            async function registrarHistorial() {
-                // Registrar cambios en historial
                 if (Object.keys(cambios).length > 0) {
-                    const insertHistorial = `
+                    const insertHistorialStmt = sqlite.prepare(`
                         INSERT INTO historial_cambios (tabla, operacion, registro_id, modificado_por, cambios)
                         VALUES (?, ?, ?, ?, ?)
-                    `;
-
-                    await dbTurso.execute({
-                        sql: insertHistorial,
-                        args: [
-                            'clientes',
-                            'UPDATE',
-                            clienteId,
-                            modificado_por,
-                            JSON.stringify(cambios)
-                        ]
-                    });
+                    `);
+                    insertHistorialStmt.run(
+                        'clientes',
+                        'UPDATE',
+                        safeClienteId,
+                        safeModificadoPor,
+                        JSON.stringify(cambios)
+                    );
                 }
+            });
 
-                // Datos del cliente actualizado
-                const clienteActualizado = {
-                    id: parseInt(clienteId),
-                    numero_predio: numero_predio !== undefined ? safeNumeroPredio : clienteAnterior.numero_predio,
-                    nombre: nombre || clienteAnterior.nombre,
-                    direccion: direccion || clienteAnterior.direccion,
-                    telefono: telefono || clienteAnterior.telefono,
-                    ciudad: ciudad || clienteAnterior.ciudad,
-                    correo: correo || clienteAnterior.correo,
-                    estado_cliente: estado_cliente || clienteAnterior.estado_cliente,
-                    tarifa_id: tarifa_id !== undefined ? tarifa_id : clienteAnterior.tarifa_id,
-                    cambios: cambios,
-                    fecha_modificacion: new Date().toISOString(),
-                    modificado_por: modificado_por
-                };
-
-                // Enviar notificación SSE
-                if (notificationManager) {
-                    try {
-                        notificationManager.alertaSistema(
-                            `Cliente "${clienteActualizado.nombre}" ha sido modificado`,
-                            'info',
-                            {
-                                cliente: clienteActualizado,
-                                cambios_realizados: Object.keys(cambios).length,
-                                accion: 'cliente_actualizado'
-                            }
-                        );
-                    } catch (sseError) {
-                        console.warn('Error enviando notificación SSE:', sseError);
-                    }
+            try {
+                tx();
+            } catch (txError) {
+                if (txError && txError.status && txError.error) {
+                    return res.status(txError.status).json({ error: txError.error });
                 }
-
-                res.json({ mensaje: "Cliente modificado", cambios });
+                throw txError;
             }
+
+            const clienteActualizado = {
+                id: parseInt(clienteId),
+                numero_predio: numero_predio !== undefined ? safeNumeroPredio : clienteAnterior.numero_predio,
+                nombre: nombre || clienteAnterior.nombre,
+                direccion: direccion || clienteAnterior.direccion,
+                telefono: telefono || clienteAnterior.telefono,
+                ciudad: ciudad || clienteAnterior.ciudad,
+                correo: correo || clienteAnterior.correo,
+                estado_cliente: estado_cliente || clienteAnterior.estado_cliente,
+                tarifa_id: tarifa_id !== undefined ? tarifa_id : clienteAnterior.tarifa_id,
+                cambios: cambios,
+                fecha_modificacion: new Date().toISOString(),
+                modificado_por: modificado_por
+            };
+
+            if (notificationManager) {
+                try {
+                    notificationManager.alertaSistema(
+                        `Cliente "${clienteActualizado.nombre}" ha sido modificado`,
+                        'info',
+                        {
+                            cliente: clienteActualizado,
+                            cambios_realizados: Object.keys(cambios).length,
+                            accion: 'cliente_actualizado'
+                        }
+                    );
+                } catch (sseError) {
+                    console.warn('Error enviando notificación SSE:', sseError);
+                }
+            }
+
+            res.json({ mensaje: "Cliente modificado", cambios });
 
         } catch (err) {
             console.error('Error modificando cliente v2:', err);

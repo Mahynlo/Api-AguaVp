@@ -172,7 +172,7 @@ CREATE TABLE IF NOT EXISTS facturas (
     fecha_vencimiento DATE NOT NULL,
     total NUMERIC NOT NULL,
     saldo_pendiente NUMERIC NOT NULL DEFAULT 0,
-    estado TEXT NOT NULL CHECK (estado IN ('Pagado', 'Pendiente', 'Vencida')),
+    estado TEXT NOT NULL CHECK (estado IN ('Pagado', 'Pendiente', 'Parcial', 'Vencida', 'En Convenio')),
     modificado_por INTEGER REFERENCES usuarios(id),
     fecha_creacion DATETIME DEFAULT (datetime('now'))
 );

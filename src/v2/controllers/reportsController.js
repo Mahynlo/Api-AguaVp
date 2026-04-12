@@ -11,6 +11,7 @@
 import dbTurso from "../../database/db-sqlite.js";
 import { startOfMonth, endOfMonth, subMonths, format, parseISO } from 'date-fns';
 import { es } from 'date-fns/locale';
+import { nowDate } from '../../utils/timezone.js';
 
 // Helpers internos
 const formatearMoneda = (valor) => Number(valor).toFixed(2);
@@ -42,6 +43,7 @@ const ReportsController = {
                 SELECT 
                     f.id as folio_factura,
                     f.fecha_emision,
+                    f.fecha_creacion as fecha_generacion,
                     f.fecha_vencimiento,
                     f.total as total_mes,
                     f.estado as estado_factura,
@@ -204,6 +206,8 @@ const ReportsController = {
                     },
                     detalle_facturacion: {
                         mes_facturado: obtenerNombreMes(f.mes_facturado + '-01'),
+                        fecha_emision: f.fecha_emision,
+                        fecha_generacion: f.fecha_generacion,
                         fecha_lectura: f.fecha_lectura,
                         fecha_vencimiento: f.fecha_vencimiento,
                         total_mes: Number(f.total_mes),
@@ -310,6 +314,7 @@ const ReportsController = {
 
             const [
                 facturacionRes,
+                recaudacionFacturasRes,
                 pagosResumenRes,
                 metodosRes,
                 estadosRes,
@@ -326,6 +331,16 @@ const ReportsController = {
                             COALESCE(SUM(f.saldo_pendiente), 0) AS deuda_total_rango,
                             COALESCE(SUM(CASE WHEN f.estado = 'Pagado' THEN 1 ELSE 0 END), 0) AS facturas_pagadas,
                             COALESCE(SUM(CASE WHEN f.estado = 'Vencida' THEN 1 ELSE 0 END), 0) AS facturas_vencidas
+                        FROM facturas f
+                        JOIN lecturas l ON l.id = f.lectura_id
+                        WHERE ${whereFacturas}
+                    `,
+                    args: argsFacturas
+                }),
+                dbTurso.execute({
+                    sql: `
+                        SELECT
+                            COALESCE(SUM(COALESCE(f.total, 0) - COALESCE(f.saldo_pendiente, 0)), 0) AS total_recaudado_facturas
                         FROM facturas f
                         JOIN lecturas l ON l.id = f.lectura_id
                         WHERE ${whereFacturas}
@@ -392,16 +407,15 @@ const ReportsController = {
                 dbTurso.execute({
                     sql: `
                         SELECT
-                            ${usarPeriodoFacturado ? 'l.periodo' : "strftime('%Y-%m', p.fecha_pago)"} AS periodo,
-                            COALESCE(SUM(p.monto), 0) AS recaudado
-                        FROM pagos p
-                        JOIN facturas f ON f.id = p.factura_id
+                            ${usarPeriodoFacturado ? 'l.periodo' : "strftime('%Y-%m', f.fecha_emision)"} AS periodo,
+                            COALESCE(SUM(COALESCE(f.total, 0) - COALESCE(f.saldo_pendiente, 0)), 0) AS recaudado
+                        FROM facturas f
                         JOIN lecturas l ON l.id = f.lectura_id
-                        WHERE ${wherePagos}
+                        WHERE ${whereFacturas}
                         GROUP BY 1
                         ORDER BY 1
                     `,
-                    args: argsPagos
+                    args: argsFacturas
                 }),
                 dbTurso.execute({
                     sql: `
@@ -419,7 +433,6 @@ const ReportsController = {
                           AND f.saldo_pendiente > 0
                         GROUP BY c.id
                         ORDER BY deuda_total DESC
-                        LIMIT 50
                     `,
                     args: argsFacturas
                 }),
@@ -444,17 +457,17 @@ const ReportsController = {
                         WHERE ${wherePagos}
                         GROUP BY c.id
                         ORDER BY total_pagado DESC
-                        LIMIT 50
                     `,
                     args: argsPagos
                 })
             ]);
 
             const facturacion = facturacionRes.rows[0] || {};
+            const recaudacionFacturas = recaudacionFacturasRes.rows[0] || {};
             const pagosResumen = pagosResumenRes.rows[0] || {};
 
             const totalEsperado = Number(facturacion.total_esperado || 0);
-            const totalRecaudado = Number(pagosResumen.total_recaudado || 0);
+            const totalRecaudado = Number(recaudacionFacturas.total_recaudado_facturas || 0);
             const deudaTotalRango = Number(facturacion.deuda_total_rango || 0);
             const porCobrarEstimado = Math.max(totalEsperado - totalRecaudado, 0);
             const eficiencia = totalEsperado > 0 ? Number(((totalRecaudado / totalEsperado) * 100).toFixed(2)) : 0;
@@ -572,6 +585,7 @@ const ReportsController = {
      */
     getReporteDeudores: async (req, res) => {
         try {
+            const hoyLocal = nowDate();
             // 1. Resumen General
             const resumenQuery = `
                 SELECT 
@@ -610,9 +624,9 @@ const ReportsController = {
             const antiguedadQuery = `
                 SELECT 
                     CASE 
-                        WHEN julianday('now') - julianday(fecha_vencimiento) <= 30 THEN '0-30 días'
-                        WHEN julianday('now') - julianday(fecha_vencimiento) <= 60 THEN '31-60 días'
-                        WHEN julianday('now') - julianday(fecha_vencimiento) <= 90 THEN '61-90 días'
+                        WHEN julianday(?) - julianday(fecha_vencimiento) <= 30 THEN '0-30 días'
+                        WHEN julianday(?) - julianday(fecha_vencimiento) <= 60 THEN '31-60 días'
+                        WHEN julianday(?) - julianday(fecha_vencimiento) <= 90 THEN '61-90 días'
                         ELSE '+90 días'
                     END as rango,
                     SUM(saldo_pendiente) as total
@@ -620,7 +634,7 @@ const ReportsController = {
                 WHERE saldo_pendiente > 0 AND estado = 'Vencida'
                 GROUP BY 1
             `;
-            const antiguedadRes = await dbTurso.execute({ sql: antiguedadQuery, args: [] });
+            const antiguedadRes = await dbTurso.execute({ sql: antiguedadQuery, args: [hoyLocal, hoyLocal, hoyLocal] });
 
             // 4. Operatividad (Cortes/Reconexiones del mes actual)
             const inicioMes = new Date().toISOString().slice(0, 7) + '-01';

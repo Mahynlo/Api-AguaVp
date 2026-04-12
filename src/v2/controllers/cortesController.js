@@ -193,9 +193,16 @@ const cortesController = {
             const { medidor_id, observaciones } = req.body;
             const reconectado_por = req.usuario?.id;
 
+            if (!medidor_id) {
+                return res.status(400).json({ error: "Falta medidor_id" });
+            }
+
             // 1. Validar Estado Actual
             const checkQuery = `SELECT * FROM medidores WHERE id = ?`;
             const checkRes = await dbTurso.execute({ sql: checkQuery, args: [medidor_id] });
+            if (checkRes.rows.length === 0) {
+                return res.status(404).json({ error: "Medidor no encontrado" });
+            }
             const medidor = checkRes.rows[0];
 
             if (medidor.estado_servicio !== 'Cortado') {
@@ -206,11 +213,13 @@ const cortesController = {
             // Se asume deuda del *cliente* asociada a este medidor.
             // Para ser estrictos con la propuesta: Valida SI saldo = 0 O hay convenio activo.
             const deudaQuery = `
-                SELECT SUM(saldo_pendiente) as total_deuda 
-                FROM facturas 
-                WHERE cliente_id = ? AND estado != 'Pagado'
+                SELECT SUM(f.saldo_pendiente) as total_deuda
+                FROM facturas f
+                JOIN lecturas l ON l.id = f.lectura_id
+                WHERE l.medidor_id = ?
+                  AND f.estado != 'Pagado'
             `;
-            const deudaRes = await dbTurso.execute({ sql: deudaQuery, args: [medidor.cliente_id] });
+            const deudaRes = await dbTurso.execute({ sql: deudaQuery, args: [medidor_id] });
             const deudaTotal = Number(deudaRes.rows[0]?.total_deuda || 0);
 
             // 3. Verificar Convenio Activo

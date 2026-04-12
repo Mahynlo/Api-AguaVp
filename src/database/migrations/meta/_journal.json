@@ -127,6 +127,13 @@
       "when": 1772788475032,
       "tag": "0017_add_saldo_anterior",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1775356800000,
+      "tag": "0018_fix_parcialidad_validation",
+      "breakpoints": true
     }
   ]
 }
