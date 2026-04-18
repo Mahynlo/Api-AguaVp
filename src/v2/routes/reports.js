@@ -117,4 +117,13 @@ router.get("/deudores", appKeyMiddleware, authMiddleware, reportsController.getR
  */
 router.get("/lecturas", appKeyMiddleware, authMiddleware, reportsController.getReporteLecturas);
 
+/**
+ * @swagger
+ * /api/v2/reports/consumo-agua:
+ *   get:
+ *     summary: Reporte de consumo de agua por periodo
+ *     description: Retorna metricas de consumo por cliente, recibos y distribucion por ruta.
+ */
+router.get("/consumo-agua", appKeyMiddleware, authMiddleware, reportsController.getReporteConsumoAgua);
+
 export default router;

@@ -253,13 +253,13 @@ const pagosController = {
                 return res.status(400).json({ error: 'La cantidad entregada debe ser mayor a cero' });
             }
 
-            const resultadoDistribucion = sqlite.transaction(() => {
+            const ejecutarDistribucion = sqlite.transaction(() => {
                 const facturasPendientes = sqlite.prepare(`
                     SELECT
                         f.id,
                         f.saldo_pendiente,
                         f.fecha_emision,
-                        f.created_at,
+                        f.fecha_creacion,
                         f.convenio_id,
                         l.periodo
                     FROM facturas f
@@ -269,7 +269,7 @@ const pagosController = {
                         AND f.estado != 'Pagado'
                         AND f.convenio_id IS NULL
                     ORDER BY
-                        COALESCE(f.fecha_emision, f.created_at) ASC,
+                        COALESCE(f.fecha_emision, f.fecha_creacion) ASC,
                         f.id ASC
                 `).all(cliente_id);
 
@@ -306,7 +306,33 @@ const pagosController = {
                     );
 
                     const saldoAntes = saldoFactura;
-                    const saldoDespues = toDecimal(Math.max(0, saldoAntes - montoAplicado));
+                    const saldoEsperado = toDecimal(Math.max(0, saldoAntes - montoAplicado));
+
+                    // Compatibilidad: si el trigger de actualización de saldo no existe
+                    // o no se ejecuta, aplicamos el saldo manualmente para evitar éxito falso.
+                    const saldoDespuesInsert = sqlite.prepare(`
+                        SELECT saldo_pendiente
+                        FROM facturas
+                        WHERE id = ?
+                    `).get(factura.id);
+
+                    const saldoActualBD = toDecimal(saldoDespuesInsert?.saldo_pendiente);
+                    if (Math.abs(saldoActualBD - saldoAntes) < 0.01) {
+                        sqlite.prepare(`
+                            UPDATE facturas
+                            SET saldo_pendiente = ?,
+                                estado = CASE WHEN ? <= 0 THEN 'Pagado' ELSE estado END,
+                                modificado_por = ?
+                            WHERE id = ?
+                        `).run(saldoEsperado, saldoEsperado, modificado_por, factura.id);
+                    }
+
+                    const saldoFinalRes = sqlite.prepare(`
+                        SELECT saldo_pendiente
+                        FROM facturas
+                        WHERE id = ?
+                    `).get(factura.id);
+                    const saldoDespues = toDecimal(saldoFinalRes?.saldo_pendiente);
 
                     aplicaciones.push({
                         factura_id: factura.id,
@@ -335,6 +361,8 @@ const pagosController = {
                     facturasAfectadas: aplicaciones.length
                 };
             });
+
+            const resultadoDistribucion = ejecutarDistribucion();
 
             const response = {
                 mensaje: 'Pago distribuido registrado exitosamente',

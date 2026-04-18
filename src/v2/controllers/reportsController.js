@@ -134,39 +134,42 @@ const ReportsController = {
             // Consultaremos el consumo del mes anterior para calcular variación y el historial completo
             const startHistoryDate = format(subMonths(parseISO(mes + '-01'), 12), 'yyyy-MM');
 
-            // Obtener IDs de medidores únicos
-            const medidoresIds = facturas.map(f => f.medidor_id).filter((v, i, a) => a.indexOf(v) === i);
-            let historialMap = {}; // medidor_id -> [{ periodo, consumo }]
+            let historialPorCliente = {}; // cliente_id -> [{ mes, consumo }]
 
-            if (medidoresIds.length > 0) {
-                // Fetch historial en lote
-                // NOTA: Si son muchos medidores (>500), se debería chunkear. Asumimos <500 por lote de impresión típico.
-                const medidoresPlaceholders = medidoresIds.map(() => '?').join(',');
+            if (clientesIds.length > 0) {
+                const clientesPlaceholders = clientesIds.map(() => '?').join(',');
 
-                const historyQuery = `
-                    SELECT 
-                        medidor_id, periodo, consumo_m3
-                    FROM lecturas
-                    WHERE medidor_id IN (${medidoresPlaceholders})
-                    AND periodo >= ?
-                    ORDER BY periodo ASC
-                 `;
+                // Historial por cliente basado en facturacion real (facturas + lecturas),
+                // para mantener continuidad aunque cambie el medidor.
+                const historyByClienteQuery = `
+                    SELECT
+                        f.cliente_id,
+                        l.periodo,
+                        SUM(COALESCE(l.consumo_m3, 0)) AS consumo_total
+                    FROM facturas f
+                    JOIN lecturas l ON f.lectura_id = l.id
+                    WHERE f.cliente_id IN (${clientesPlaceholders})
+                      AND l.periodo >= ?
+                      AND l.periodo <= ?
+                    GROUP BY f.cliente_id, l.periodo
+                    ORDER BY l.periodo ASC
+                `;
 
                 try {
                     const historyResult = await dbTurso.execute({
-                        sql: historyQuery,
-                        args: [...medidoresIds, startHistoryDate]
+                        sql: historyByClienteQuery,
+                        args: [...clientesIds, startHistoryDate, mes]
                     });
 
                     historyResult.rows.forEach(row => {
-                        if (!historialMap[row.medidor_id]) historialMap[row.medidor_id] = [];
-                        historialMap[row.medidor_id].push({
-                            mes: row.periodo, // YYYY-MM
-                            consumo: Number(row.consumo_m3)
+                        if (!historialPorCliente[row.cliente_id]) historialPorCliente[row.cliente_id] = [];
+                        historialPorCliente[row.cliente_id].push({
+                            mes: row.periodo,
+                            consumo: Number(row.consumo_total || 0)
                         });
                     });
                 } catch (err) {
-                    console.error("Error fetching history:", err);
+                    console.error("Error fetching history by client:", err);
                 }
             }
 
@@ -177,9 +180,12 @@ const ReportsController = {
 
             // 4. Mapear Respuesta Final
             const recibos = facturas.map(f => {
-                // Calcular consumo anterior desde el historial o map
-                const hist = historialMap[f.medidor_id] || [];
-                const consumoActual = Number(f.consumo_mes);
+                // Consumo consistente: actual/anterior/variacion salen del mismo historial facturado por cliente.
+                const hist = historialPorCliente[f.cliente_id] || [];
+                const consumoActualHist = hist.find(h => h.mes === mes);
+                const consumoActual = consumoActualHist
+                    ? Number(consumoActualHist.consumo)
+                    : Number(f.consumo_mes);
 
                 // Buscar mes anterior exacto
                 const mesAntPeriodo = format(subMonths(parseISO(mes + '-01'), 1), 'yyyy-MM');
@@ -220,7 +226,7 @@ const ReportsController = {
                         consumo_anterior: consumoAnt,
                         variacion_porcentaje: Number(variacion.toFixed(1)),
                         // Historial simplificado para el demo
-                        historial_ano_actual: historialMap[f.medidor_id] || []
+                        historial_ano_actual: hist
                     }
                 };
             });
@@ -665,6 +671,212 @@ const ReportsController = {
         } catch (error) {
             console.error("Error generando reporte de deudores:", error);
             res.status(500).json({ error: "Error interno generando reporte de deudores" });
+        }
+    },
+
+    /**
+     * Reporte de consumo de agua potable
+     * Endpoint: GET /api/v2/reports/consumo-agua
+     * Query:
+     * - tipo: periodo | ultimos_meses
+     * - periodo: YYYY-MM (cuando tipo=periodo)
+     * - meses: 3 | 6 | 12 (cuando tipo=ultimos_meses)
+     */
+    getReporteConsumoAgua: async (req, res) => {
+        try {
+            const { tipo = 'ultimos_meses', periodo, meses } = req.query;
+
+            let inicioPeriodo = '';
+            let finPeriodo = '';
+            let etiqueta = '';
+
+            if (tipo === 'periodo') {
+                if (!periodo || !/^\d{4}-\d{2}$/.test(periodo)) {
+                    return res.status(400).json({ error: "Para tipo=periodo, el parámetro 'periodo' (YYYY-MM) es obligatorio" });
+                }
+                inicioPeriodo = periodo;
+                finPeriodo = periodo;
+                etiqueta = `Periodo ${periodo}`;
+            } else if (tipo === 'ultimos_meses') {
+                const mesesNum = Number(meses || 3);
+                if (![3, 6, 12].includes(mesesNum)) {
+                    return res.status(400).json({ error: "Para tipo=ultimos_meses, 'meses' debe ser 3, 6 o 12" });
+                }
+
+                const ahora = new Date();
+                const periodoActual = format(ahora, 'yyyy-MM');
+                const periodoInicio = format(subMonths(ahora, mesesNum - 1), 'yyyy-MM');
+
+                inicioPeriodo = periodoInicio;
+                finPeriodo = periodoActual;
+                etiqueta = `Últimos ${mesesNum} meses`;
+            } else {
+                return res.status(400).json({ error: "Tipo de filtro inválido. Use: periodo o ultimos_meses" });
+            }
+
+            const [
+                resumenRes,
+                serieConsumoRes,
+                topConsumidoresRes,
+                menorConsumoRes,
+                consumoPorRutaRes,
+                clientesUnicosRes
+            ] = await Promise.all([
+                dbTurso.execute({
+                    sql: `
+                        SELECT
+                            COUNT(f.id) AS total_recibos,
+                            COALESCE(SUM(l.consumo_m3), 0) AS consumo_total_m3,
+                            COALESCE(AVG(l.consumo_m3), 0) AS consumo_promedio_m3
+                        FROM facturas f
+                        JOIN lecturas l ON l.id = f.lectura_id
+                        WHERE l.periodo BETWEEN ? AND ?
+                    `,
+                    args: [inicioPeriodo, finPeriodo]
+                }),
+                dbTurso.execute({
+                    sql: `
+                        SELECT
+                            l.periodo,
+                            COUNT(f.id) AS recibos,
+                            COALESCE(SUM(l.consumo_m3), 0) AS consumo_total_m3,
+                            COALESCE(AVG(l.consumo_m3), 0) AS consumo_promedio_m3
+                        FROM facturas f
+                        JOIN lecturas l ON l.id = f.lectura_id
+                        WHERE l.periodo BETWEEN ? AND ?
+                        GROUP BY l.periodo
+                        ORDER BY l.periodo
+                    `,
+                    args: [inicioPeriodo, finPeriodo]
+                }),
+                dbTurso.execute({
+                    sql: `
+                        SELECT
+                            c.id AS cliente_id,
+                            c.nombre AS cliente_nombre,
+                            c.ciudad AS localidad,
+                            COUNT(f.id) AS recibos,
+                            COALESCE(SUM(l.consumo_m3), 0) AS consumo_total_m3,
+                            COALESCE(AVG(l.consumo_m3), 0) AS consumo_promedio_m3
+                        FROM facturas f
+                        JOIN lecturas l ON l.id = f.lectura_id
+                        JOIN clientes c ON c.id = f.cliente_id
+                        WHERE l.periodo BETWEEN ? AND ?
+                        GROUP BY c.id
+                        ORDER BY consumo_total_m3 DESC
+                        LIMIT 10
+                    `,
+                    args: [inicioPeriodo, finPeriodo]
+                }),
+                dbTurso.execute({
+                    sql: `
+                        SELECT
+                            c.id AS cliente_id,
+                            c.nombre AS cliente_nombre,
+                            c.ciudad AS localidad,
+                            COUNT(f.id) AS recibos,
+                            COALESCE(SUM(l.consumo_m3), 0) AS consumo_total_m3,
+                            COALESCE(AVG(l.consumo_m3), 0) AS consumo_promedio_m3
+                        FROM facturas f
+                        JOIN lecturas l ON l.id = f.lectura_id
+                        JOIN clientes c ON c.id = f.cliente_id
+                        WHERE l.periodo BETWEEN ? AND ?
+                        GROUP BY c.id
+                        HAVING COALESCE(SUM(l.consumo_m3), 0) > 0
+                        ORDER BY consumo_total_m3 ASC
+                        LIMIT 10
+                    `,
+                    args: [inicioPeriodo, finPeriodo]
+                }),
+                dbTurso.execute({
+                    sql: `
+                        SELECT
+                            COALESCE(r.id, 0) AS ruta_id,
+                            COALESCE(r.nombre, 'Sin Ruta') AS ruta_nombre,
+                            COUNT(f.id) AS recibos,
+                            COALESCE(SUM(l.consumo_m3), 0) AS consumo_total_m3,
+                            COALESCE(AVG(l.consumo_m3), 0) AS consumo_promedio_m3
+                        FROM facturas f
+                        JOIN lecturas l ON l.id = f.lectura_id
+                        LEFT JOIN rutas r ON r.id = l.ruta_id
+                        WHERE l.periodo BETWEEN ? AND ?
+                        GROUP BY COALESCE(r.id, 0), COALESCE(r.nombre, 'Sin Ruta')
+                        ORDER BY consumo_total_m3 DESC
+                    `,
+                    args: [inicioPeriodo, finPeriodo]
+                }),
+                dbTurso.execute({
+                    sql: `
+                        SELECT COUNT(DISTINCT f.cliente_id) AS total_clientes
+                        FROM facturas f
+                        JOIN lecturas l ON l.id = f.lectura_id
+                        WHERE l.periodo BETWEEN ? AND ?
+                    `,
+                    args: [inicioPeriodo, finPeriodo]
+                })
+            ]);
+
+            const resumen = resumenRes.rows[0] || {};
+            const totalRecibos = Number(resumen.total_recibos || 0);
+            const consumoTotalM3 = Number(resumen.consumo_total_m3 || 0);
+            const consumoPromedioM3 = Number(resumen.consumo_promedio_m3 || 0);
+            const totalClientes = Number(clientesUnicosRes.rows[0]?.total_clientes || 0);
+            const promedioPorCliente = totalClientes > 0 ? consumoTotalM3 / totalClientes : 0;
+
+            res.json({
+                filtro_aplicado: {
+                    tipo,
+                    periodo: tipo === 'periodo' ? periodo : null,
+                    meses: tipo === 'ultimos_meses' ? Number(meses || 3) : null,
+                    inicio_periodo: inicioPeriodo,
+                    fin_periodo: finPeriodo,
+                    etiqueta
+                },
+                resumen: {
+                    total_recibos: totalRecibos,
+                    consumo_total_m3: Number(consumoTotalM3.toFixed(2)),
+                    consumo_promedio_m3: Number(consumoPromedioM3.toFixed(2)),
+                    total_clientes: totalClientes,
+                    promedio_consumo_por_cliente_m3: Number(promedioPorCliente.toFixed(2))
+                },
+                series: {
+                    consumo_mensual: serieConsumoRes.rows.map(row => ({
+                        periodo: row.periodo,
+                        recibos: Number(row.recibos || 0),
+                        consumo_total_m3: Number(row.consumo_total_m3 || 0),
+                        consumo_promedio_m3: Number(row.consumo_promedio_m3 || 0)
+                    }))
+                },
+                listados: {
+                    top_consumidores: topConsumidoresRes.rows.map(row => ({
+                        cliente_id: row.cliente_id,
+                        cliente_nombre: row.cliente_nombre,
+                        localidad: row.localidad,
+                        recibos: Number(row.recibos || 0),
+                        consumo_total_m3: Number(row.consumo_total_m3 || 0),
+                        consumo_promedio_m3: Number(row.consumo_promedio_m3 || 0)
+                    })),
+                    menor_consumo: menorConsumoRes.rows.map(row => ({
+                        cliente_id: row.cliente_id,
+                        cliente_nombre: row.cliente_nombre,
+                        localidad: row.localidad,
+                        recibos: Number(row.recibos || 0),
+                        consumo_total_m3: Number(row.consumo_total_m3 || 0),
+                        consumo_promedio_m3: Number(row.consumo_promedio_m3 || 0)
+                    }))
+                },
+                distribucion_rutas: consumoPorRutaRes.rows.map(row => ({
+                    ruta_id: Number(row.ruta_id || 0),
+                    ruta_nombre: row.ruta_nombre,
+                    recibos: Number(row.recibos || 0),
+                    consumo_total_m3: Number(row.consumo_total_m3 || 0),
+                    consumo_promedio_m3: Number(row.consumo_promedio_m3 || 0)
+                })),
+                generated_at: new Date().toISOString()
+            });
+        } catch (error) {
+            console.error("Error generando reporte de consumo de agua:", error);
+            res.status(500).json({ error: "Error interno generando reporte de consumo" });
         }
     },
 
