@@ -60,7 +60,7 @@
  */
 
 import express from 'express';
-import authMiddleware from '../middlewares/authMiddleware.js';
+import authMiddleware, { requirePermission } from '../middlewares/authMiddleware.js';
 import appKeyMiddleware from '../middlewares/appKeyMiddleware.js';
 import lecturasController, { setSSEManagers } from '../controllers/lecturasController.js';
 import { 
@@ -445,7 +445,7 @@ const configureSSE = (req, res, next) => {
  *         description: Error interno del servidor
  */
 // Rutas adaptadas de V1 con los mismos endpoints exactos
-router.post("/registrar", appKeyMiddleware, authMiddleware, validate(registrarLecturaSchema), configureSSE, lecturasController.registrarLectura);
+router.post("/registrar", appKeyMiddleware, authMiddleware, requirePermission('lecturas.tomar'), validate(registrarLecturaSchema), configureSSE, lecturasController.registrarLectura);
 
 /**
  * @swagger
@@ -620,7 +620,7 @@ router.get("/listar/:id", appKeyMiddleware, authMiddleware, validate(lecturaIdPa
  *       500:
  *         description: Error interno del servidor
  */
-router.put("/modificar/:id", appKeyMiddleware, authMiddleware, validate(lecturaIdParamSchema, 'params'), validate(actualizarLecturaSchema), configureSSE, lecturasController.modificarLectura);
+router.put("/modificar/:id", appKeyMiddleware, authMiddleware, requirePermission('lecturas.modificar'), validate(lecturaIdParamSchema, 'params'), validate(actualizarLecturaSchema), configureSSE, lecturasController.modificarLectura);
 
 /**
  * @swagger
@@ -846,7 +846,7 @@ router.get("/por-ruta", appKeyMiddleware, authMiddleware, configureSSE, lecturas
  *         description: Error interno durante el procesamiento masivo
  */
 // 🧾 Generar facturas para lecturas sin factura (procesamiento masivo)
-router.post("/generar-facturas-masivo", appKeyMiddleware, authMiddleware, configureSSE, lecturasController.generarFacturasParaLecturasSinFactura);
+router.post("/generar-facturas-masivo", appKeyMiddleware, authMiddleware, requirePermission('lecturas.recalcular'), configureSSE, lecturasController.generarFacturasParaLecturasSinFactura);
 
 /**
  * @swagger

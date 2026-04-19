@@ -1,8 +1,103 @@
 import dbTurso from "../../database/db-sqlite.js";
 import bcrypt from "bcryptjs";
 import { validatePassword, formatValidationErrors } from "../../utils/passwordValidator.js";
+import {
+    buildUserPermissionsSnapshot,
+    getPermissionCatalog,
+    setUserPermissionOverrides
+} from '../services/permissionsService.js';
 
 const userController = {
+    obtenerCatalogoPermisos: async (_req, res) => {
+        try {
+            const catalog = await getPermissionCatalog();
+            res.json({ success: true, data: catalog });
+        } catch (error) {
+            console.error('Error al obtener catálogo de permisos:', error);
+            res.status(500).json({ error: 'Error al obtener catálogo de permisos' });
+        }
+    },
+
+    obtenerMisPermisos: async (req, res) => {
+        try {
+            const actorId = Number(req.usuario?.id);
+            const actorRole = req.usuario?.rol;
+
+            if (!actorId || !actorRole) {
+                return res.status(401).json({ error: 'Usuario no autenticado' });
+            }
+
+            const permisos = await buildUserPermissionsSnapshot(actorId, actorRole);
+            res.json({ success: true, user_id: actorId, role: actorRole, permissions: permisos });
+        } catch (error) {
+            console.error('Error al obtener permisos del usuario actual:', error);
+            res.status(500).json({ error: 'Error al obtener permisos' });
+        }
+    },
+
+    obtenerPermisosUsuario: async (req, res) => {
+        try {
+            const targetUserId = Number(req.params.id);
+
+            const userResult = await dbTurso.execute({
+                sql: 'SELECT id, rol FROM usuarios WHERE id = ?',
+                args: [targetUserId]
+            });
+
+            if (userResult.rows.length === 0) {
+                return res.status(404).json({ error: 'Usuario no encontrado' });
+            }
+
+            const targetUser = userResult.rows[0];
+            const permissions = await buildUserPermissionsSnapshot(targetUserId, targetUser.rol);
+
+            res.json({
+                success: true,
+                user_id: targetUserId,
+                role: targetUser.rol,
+                permissions
+            });
+        } catch (error) {
+            console.error('Error al obtener permisos del usuario:', error);
+            res.status(500).json({ error: 'Error al obtener permisos del usuario' });
+        }
+    },
+
+    actualizarPermisosUsuario: async (req, res) => {
+        try {
+            const targetUserId = Number(req.params.id);
+            const actorId = Number(req.usuario?.id);
+            const { overrides = [] } = req.body;
+
+            const userResult = await dbTurso.execute({
+                sql: 'SELECT id, rol FROM usuarios WHERE id = ?',
+                args: [targetUserId]
+            });
+
+            if (userResult.rows.length === 0) {
+                return res.status(404).json({ error: 'Usuario no encontrado' });
+            }
+
+            await setUserPermissionOverrides({
+                userId: targetUserId,
+                updatedBy: actorId,
+                overrides
+            });
+
+            const updatedPermissions = await buildUserPermissionsSnapshot(targetUserId, userResult.rows[0].rol);
+
+            res.json({
+                success: true,
+                message: 'Permisos actualizados correctamente',
+                user_id: targetUserId,
+                permissions: updatedPermissions
+            });
+        } catch (error) {
+            console.error('Error al actualizar permisos del usuario:', error);
+            res.status(500).json({ error: 'Error al actualizar permisos del usuario' });
+        }
+    },
+
     // Obtener lista de usuarios con filtros
     obtenerUsuarios: async (req, res) => {
         try {

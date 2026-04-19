@@ -55,7 +55,7 @@
  */
 
 import express from 'express';
-import authMiddleware from '../middlewares/authMiddleware.js';
+import authMiddleware, { requirePermission } from '../middlewares/authMiddleware.js';
 import appKeyMiddleware from '../middlewares/appKeyMiddleware.js';
 import medidorController, { setSSEManagers } from '../controllers/medidorController.js';
 import { 
@@ -540,7 +540,7 @@ const configureSSE = (req, res, next) => {
  *                   example: "Error de conexión con la base de datos Turso"
  */
 // Rutas adaptadas de V1 con los mismos endpoints exactos
-router.post("/registrar", appKeyMiddleware, authMiddleware, validate(crearMedidorSchema), configureSSE, medidorController.registrarMedidor);
+router.post("/registrar", appKeyMiddleware, authMiddleware, requirePermission('medidores.crear'), validate(crearMedidorSchema), configureSSE, medidorController.registrarMedidor);
 
 /**
  * @swagger
@@ -818,7 +818,7 @@ router.get("/listar", appKeyMiddleware, authMiddleware, configureSSE, medidorCon
  *                   type: string
  *                   example: "Error en transacción de base de datos"
  */
-router.put("/modificar/:id", appKeyMiddleware, authMiddleware, validate(medidorIdParamSchema, 'params'), validate(actualizarMedidorSchema), configureSSE, medidorController.modificarMedidor);
+router.put("/modificar/:id", appKeyMiddleware, authMiddleware, requirePermission('medidores.modificar'), validate(medidorIdParamSchema, 'params'), validate(actualizarMedidorSchema), configureSSE, medidorController.modificarMedidor);
 
 // ===================================================================
 // EXPORT MODULE

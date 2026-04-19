@@ -134,6 +134,13 @@
       "when": 1775356800000,
       "tag": "0018_fix_parcialidad_validation",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1776556800000,
+      "tag": "0019_permissions_rbac",
+      "breakpoints": true
     }
   ]
 }

@@ -1,15 +1,35 @@
 import { Router } from 'express';
 import userController from '../controllers/userController.js';
-import authMiddleware, { authorize } from '../middlewares/authMiddleware.js';
+import authMiddleware, { authorize, requirePermission } from '../middlewares/authMiddleware.js';
+import { validate, updateUserPermissionsSchema } from '../validators/index.js';
 
 const router = Router();
 
-// Todas las rutas requieren autenticación y rol de administrador o superadmin
+// Todas las rutas requieren autenticación
 router.use(authMiddleware);
+
+// Snapshot de permisos del usuario autenticado (acceso para cualquier usuario logueado)
+router.get('/me/permissions', userController.obtenerMisPermisos);
+
+// Rutas administrativas
 router.use(authorize(['administrador', 'superadmin']));
 
 // Listar usuarios
 router.get('/', userController.obtenerUsuarios);
+
+// Catálogo base de permisos
+router.get('/permissions/catalog', userController.obtenerCatalogoPermisos);
+
+// Snapshot de permisos de un usuario objetivo
+router.get('/:id/permissions', userController.obtenerPermisosUsuario);
+
+// Actualizar overrides de permisos para un usuario
+router.put(
+	'/:id/permissions',
+	requirePermission('usuarios.gestionar_permisos'),
+	validate(updateUserPermissionsSchema),
+	userController.actualizarPermisosUsuario
+);
 
 // Obtener un usuario específico
 router.get('/:id', userController.obtenerUsuarioPorId);

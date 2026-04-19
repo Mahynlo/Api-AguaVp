@@ -14,4 +14,5 @@ export * from './facturaValidator.js';
 export * from './pagoValidator.js';
 export * from './tarifaValidator.js';
 export * from './lecturaValidator.js';
+export * from './userPermissionsValidator.js';
 export * from './validationMiddleware.js';

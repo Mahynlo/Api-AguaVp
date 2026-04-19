@@ -56,7 +56,7 @@
  */
 
 import express from 'express';
-import authMiddleware from '../middlewares/authMiddleware.js';
+import authMiddleware, { requirePermission } from '../middlewares/authMiddleware.js';
 import appKeyMiddleware from '../middlewares/appKeyMiddleware.js';
 import rutasController, { setSSEManagers } from '../controllers/rutasController.js';
 
@@ -943,7 +943,7 @@ const configureSSE = (req, res, next) => {
 // pero con arquitectura V2 mejorada (Turso + SSE)
 
 // Rutas V1 compatibles
-router.post("/crear", appKeyMiddleware, configureSSE, authMiddleware, rutasController.crearRuta);
+router.post("/crear", appKeyMiddleware, configureSSE, authMiddleware, requirePermission('rutas.crear'), rutasController.crearRuta);
 router.post("/agregar-medidor", appKeyMiddleware, configureSSE, authMiddleware, rutasController.agregarMedidorARuta);
 router.get("/:ruta_id/medidores", appKeyMiddleware, configureSSE, authMiddleware, rutasController.obtenerRutaConMedidores);
 router.get("/listar/", appKeyMiddleware, configureSSE, authMiddleware, rutasController.listarRutas);
@@ -952,13 +952,13 @@ router.get("/listar/", appKeyMiddleware, configureSSE, authMiddleware, rutasCont
 // Operaciones adicionales para gestión avanzada de rutas
 
 // Modificar información de una ruta
-router.put("/:ruta_id", appKeyMiddleware, configureSSE, authMiddleware, rutasController.modificarRuta);
+router.put("/:ruta_id", appKeyMiddleware, configureSSE, authMiddleware, requirePermission('rutas.modificar'), rutasController.modificarRuta);
 
 // Eliminar medidor de una ruta (con reordenamiento automático)
-router.delete("/:ruta_id/medidores/:medidor_id", appKeyMiddleware, configureSSE, authMiddleware, rutasController.eliminarMedidorDeRuta);
+router.delete("/:ruta_id/medidores/:medidor_id", appKeyMiddleware, configureSSE, authMiddleware, requirePermission('rutas.modificar'), rutasController.eliminarMedidorDeRuta);
 
 // Reordenar medidores en una ruta
-router.put("/:ruta_id/reordenar", appKeyMiddleware, configureSSE, authMiddleware, rutasController.reordenarMedidores);
+router.put("/:ruta_id/reordenar", appKeyMiddleware, configureSSE, authMiddleware, requirePermission('rutas.modificar'), rutasController.reordenarMedidores);
 
 // Obtener progreso de captura/estadísticas de una ruta
 router.get("/:ruta_id/progreso", appKeyMiddleware, configureSSE, authMiddleware, rutasController.obtenerProgresoCapturaRuta);

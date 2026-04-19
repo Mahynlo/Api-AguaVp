@@ -21,6 +21,7 @@
 
 import jwt from 'jsonwebtoken';
 import dbTurso from "../../database/db-sqlite.js";
+import { userHasPermission } from '../services/permissionsService.js';
 
 async function authMiddleware(req, res, next) {
     const authHeader = req.headers.authorization; // Obtiene el encabezado de autorización
@@ -170,6 +171,38 @@ export const authorize = (roles = []) => {
         }
 
         next();
+    };
+};
+
+/**
+ * Middleware para autorización basada en permisos granulares (RBAC + overrides).
+ * Uso: router.post('/ruta', authMiddleware, requirePermission('clientes.crear'), controller)
+ */
+export const requirePermission = (permissionKey) => {
+    return async (req, res, next) => {
+        if (!req.usuario || !req.usuario.id || !req.usuario.rol) {
+            return res.status(403).json({
+                error: 'Acceso denegado: usuario no identificado'
+            });
+        }
+
+        try {
+            const allowed = await userHasPermission(req.usuario.id, req.usuario.rol, permissionKey);
+
+            if (!allowed) {
+                return res.status(403).json({
+                    error: 'Permiso insuficiente para esta operación',
+                    required_permission: permissionKey
+                });
+            }
+
+            next();
+        } catch (error) {
+            console.error('Error validando permisos:', error);
+            return res.status(500).json({
+                error: 'Error interno al validar permisos'
+            });
+        }
     };
 };
 

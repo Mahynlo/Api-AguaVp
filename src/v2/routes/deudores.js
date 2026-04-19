@@ -5,7 +5,7 @@
  */
 
 import express from 'express';
-import authMiddleware from '../middlewares/authMiddleware.js';
+import authMiddleware, { requirePermission } from '../middlewares/authMiddleware.js';
 import appKeyMiddleware from '../middlewares/appKeyMiddleware.js';
 import configuracionController from '../controllers/configuracionController.js';
 import cortesController from '../controllers/cortesController.js';
@@ -25,7 +25,7 @@ const router = express.Router();
 // ===================================
 router.get("/configuracion", appKeyMiddleware, authMiddleware, configuracionController.getConfiguracion);
 router.post("/configuracion", appKeyMiddleware, authMiddleware, configuracionController.updateConfiguracion);
-router.post("/configuracion/recalcular-vencimientos", appKeyMiddleware, authMiddleware, configuracionController.recalcularVencimientosPorPeriodo);
+router.post("/configuracion/recalcular-vencimientos", appKeyMiddleware, authMiddleware, requirePermission('lecturas.recalcular'), configuracionController.recalcularVencimientosPorPeriodo);
 
 // ===================================
 // CORTES DE SERVICIO

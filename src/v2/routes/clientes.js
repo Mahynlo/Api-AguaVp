@@ -35,7 +35,7 @@
  */
 
 import express from 'express';
-import authMiddleware from '../middlewares/authMiddleware.js';
+import authMiddleware, { requirePermission } from '../middlewares/authMiddleware.js';
 import clientesController, { setSSEManagers } from '../controllers/clientesController.js';
 import { 
   validate,
@@ -190,7 +190,7 @@ const configureSSE = (req, res, next) => {
  */
 
 // Rutas adaptadas de V1 con los mismos endpoints exactos
-router.post("/registrar", configureSSE, authMiddleware, validate(crearClienteSchema), clientesController.registrarCliente);
+router.post("/registrar", configureSSE, authMiddleware, requirePermission('clientes.crear'), validate(crearClienteSchema), clientesController.registrarCliente);
 
 /**
  * @swagger
@@ -341,7 +341,7 @@ router.get("/listar", configureSSE, authMiddleware, clientesController.obtenerCl
  *       500:
  *         description: Error interno del servidor
  */
-router.put("/modificar/:id", configureSSE, authMiddleware, validate(clienteIdParamSchema, 'params'), validate(actualizarClienteSchema), clientesController.modificarCliente);
+router.put("/modificar/:id", configureSSE, authMiddleware, requirePermission('clientes.modificar'), validate(clienteIdParamSchema, 'params'), validate(actualizarClienteSchema), clientesController.modificarCliente);
 
 /**
  * @swagger
@@ -416,7 +416,7 @@ router.put("/modificar/:id", configureSSE, authMiddleware, validate(clienteIdPar
  *       500:
  *         description: Error interno del servidor
  */
-router.put("/:id/asignar-tarifa", configureSSE, authMiddleware, clientesController.asignarTarifa);
+router.put("/:id/asignar-tarifa", configureSSE, authMiddleware, requirePermission('clientes.modificar'), clientesController.asignarTarifa);
 
 /**
  * @swagger
