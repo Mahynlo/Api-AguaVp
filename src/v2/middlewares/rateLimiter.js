@@ -112,6 +112,52 @@ export const registroUsuarioLimiter = rateLimit({
 });
 
 /**
+ * Rate limiter para solicitar recuperación de contraseña
+ * 5 intentos cada 1 hora
+ */
+export const solicitarRecuperacionPasswordLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    max: 5,
+    message: {
+        error: 'Demasiadas solicitudes de recuperación de contraseña. Por favor, intenta de nuevo en 1 hora.'
+    },
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: { trustProxy: false },
+    handler: (req, res) => {
+        console.warn(`[RATE LIMIT] Solicitud recuperación password excedida - IP: ${req.ip}`);
+        res.status(429).json({
+            error: 'Demasiadas solicitudes de recuperación',
+            mensaje: 'Has excedido el límite de solicitudes de recuperación de contraseña. Intenta de nuevo en 1 hora.',
+            retry_after: '1 hora'
+        });
+    }
+});
+
+/**
+ * Rate limiter para restablecer contraseña con token
+ * 10 intentos cada 1 hora
+ */
+export const recuperarContrasenaLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    max: 10,
+    message: {
+        error: 'Demasiados intentos de restablecimiento de contraseña. Por favor, intenta de nuevo en 1 hora.'
+    },
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: { trustProxy: false },
+    handler: (req, res) => {
+        console.warn(`[RATE LIMIT] Restablecimiento password excedido - IP: ${req.ip}`);
+        res.status(429).json({
+            error: 'Demasiados intentos de restablecimiento',
+            mensaje: 'Has excedido el límite de intentos de restablecimiento de contraseña. Intenta de nuevo en 1 hora.',
+            retry_after: '1 hora'
+        });
+    }
+});
+
+/**
  * Rate limiter general para endpoints no críticos
  * 100 requests por 15 minutos
  */
@@ -139,5 +185,7 @@ export default {
     registroAppLimiter,
     recuperarTokenLimiter,
     registroUsuarioLimiter,
+    solicitarRecuperacionPasswordLimiter,
+    recuperarContrasenaLimiter,
     generalLimiter
 };

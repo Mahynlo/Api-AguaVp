@@ -30,12 +30,19 @@ import express from 'express';
 import authController from '../controllers/authController.js';
 import appKeyMiddleware from '../middlewares/appKeyMiddleware.js';
 import authMiddleware from '../middlewares/authMiddleware.js';
-import { loginLimiter, registroUsuarioLimiter } from '../middlewares/rateLimiter.js';
+import {
+  loginLimiter,
+  registroUsuarioLimiter,
+  solicitarRecuperacionPasswordLimiter,
+  recuperarContrasenaLimiter
+} from '../middlewares/rateLimiter.js';
 import {
   validate,
   loginSchema,
   registrarUsuarioSchema,
   cambiarContraseñaSchema,
+  solicitarRecuperacionSchema,
+  recuperarContraseñaSchema,
   refreshTokenSchema,
   actualizarPerfilSchema,
   usuarioIdParamSchema
@@ -201,6 +208,43 @@ router.post('/login', loginLimiter, appKeyMiddleware, validate(loginSchema), aut
  *         description: Error al registrar usuario
  */
 router.post('/register', registroUsuarioLimiter, appKeyMiddleware, validate(registrarUsuarioSchema), authController.registrar);
+
+/**
+ * @swagger
+ * /api/v2/auth/solicitar-recuperacion:
+ *   post:
+ *     summary: Solicitar recuperación de contraseña
+ *     tags: [Auth V2]
+ *     security:
+ *       - AppKeyAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - correo
+ *             properties:
+ *               correo:
+ *                 type: string
+ *                 format: email
+ *     responses:
+ *       200:
+ *         description: Solicitud aceptada sin revelar si el correo existe
+ */
+router.post('/solicitar-recuperacion', solicitarRecuperacionPasswordLimiter, appKeyMiddleware, validate(solicitarRecuperacionSchema), authController.solicitarRecuperacion);
+
+/**
+ * @swagger
+ * /api/v2/auth/recuperar-contrasena:
+ *   post:
+ *     summary: Restablecer contraseña con token
+ *     tags: [Auth V2]
+ *     security:
+ *       - AppKeyAuth: []
+ */
+router.post('/recuperar-contrasena', recuperarContrasenaLimiter, appKeyMiddleware, validate(recuperarContraseñaSchema), authController.recuperarContraseña);
 
 /**
  * @swagger

@@ -16,9 +16,11 @@
  */
 
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import dbTurso from "../../database/db-sqlite.js";
 import { generateTokenPair, generateAccessToken } from "../../utils/generateToken.js";
 import { validatePassword, formatValidationErrors } from "../../utils/passwordValidator.js";
+import { sendPasswordRecoveryEmail, sendPasswordChangedEmail } from "../services/emailService.js";
 
 // Helper para obtener los managers SSE
 let sseManager = null;
@@ -79,6 +81,72 @@ function resolverInfoDispositivo(dispositivo, dispositivoInfo, userAgent) {
         plataforma: 'electron',
         electron_version: '', app_version: '', pantalla: ''
     };
+}
+
+function generarTokenRecuperacion() {
+    return crypto.randomBytes(32).toString('hex');
+}
+
+function hashTokenRecuperacion(token) {
+    return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+async function registrarHistorialPassword(db, usuarioId, passwordHash) {
+    try {
+        await db.execute({
+            sql: `INSERT INTO historial_passwords (usuario_id, password_hash) VALUES (?, ?)`,
+            args: [usuarioId, passwordHash]
+        });
+    } catch (err) {
+        console.warn('[password] No se pudo guardar historial_passwords:', err.message);
+    }
+}
+
+async function revocarCredencialesPassword(db, usuarioId, { tokenActual = null, cerrarTodasSesiones = false, razonRevocacion = 'password_changed' } = {}) {
+    if (cerrarTodasSesiones) {
+        await db.execute({
+            sql: `UPDATE sesiones
+                  SET activo = 0, fecha_fin = datetime('now')
+                  WHERE usuario_id = ? AND activo = 1`,
+            args: [usuarioId]
+        });
+    } else if (tokenActual) {
+        await db.execute({
+            sql: `UPDATE sesiones
+                  SET activo = 0, fecha_fin = datetime('now')
+                  WHERE usuario_id = ? AND activo = 1 AND token != ?`,
+            args: [usuarioId, tokenActual]
+        });
+    }
+
+    await db.execute({
+        sql: `UPDATE refresh_tokens
+              SET revocado = 1, revocado_en = datetime('now'), razon_revocacion = ?
+              WHERE usuario_id = ? AND revocado = 0`,
+        args: [razonRevocacion, usuarioId]
+    });
+}
+
+async function aplicarCambioPassword(db, usuarioId, nuevaContrasena, options = {}) {
+    const {
+        tokenActual = null,
+        cerrarTodasSesiones = false,
+        razonRevocacion = 'password_changed'
+    } = options;
+
+    const nuevoHash = await bcrypt.hash(nuevaContrasena, 12);
+
+    await db.execute({
+        sql: `UPDATE usuarios
+              SET contraseña = ?, ultimo_cambio_password = datetime('now'), requiere_cambio_password = 0
+              WHERE id = ?`,
+        args: [nuevoHash, usuarioId]
+    });
+
+    await registrarHistorialPassword(db, usuarioId, nuevoHash);
+    await revocarCredencialesPassword(db, usuarioId, { tokenActual, cerrarTodasSesiones, razonRevocacion });
+
+    return nuevoHash;
 }
 
 const authController = {
@@ -904,49 +972,30 @@ const authController = {
                 return res.status(401).json({ error: "Contraseña actual incorrecta" });
             }
 
-            // ── 3. Hash de la nueva contraseña ─────────────────────────────────────
-            const nuevoHash = await bcrypt.hash(contraseña_nueva, 12);
-
-            // ── 4. Actualizar contraseña y timestamps ──────────────────────────────
-            await dbTurso.execute({
-                sql: `UPDATE usuarios
-                      SET contraseña = ?, ultimo_cambio_password = datetime('now'), requiere_cambio_password = 0
-                      WHERE id = ?`,
-                args: [nuevoHash, usuarioId]
-            });
-
-            // ── 5. Guardar en historial de contraseñas ─────────────────────────────
-            try {
-                await dbTurso.execute({
-                    sql: `INSERT INTO historial_passwords (usuario_id, password_hash) VALUES (?, ?)`,
-                    args: [usuarioId, nuevoHash]
-                });
-            } catch (e) {
-                console.warn('[cambiarContraseña] historial_passwords insert failed:', e.message);
-            }
-
-            // ── 6. Cerrar todas las demás sesiones activas (excepto la actual) ──────
+            // ── 3. Cambiar contraseña y revocar credenciales derivadas ─────────────
             const tokenActual = req.usuario.token;
-            await dbTurso.execute({
-                sql: `UPDATE sesiones SET activo = 0, fecha_fin = datetime('now')
-                      WHERE usuario_id = ? AND activo = 1 AND token != ?`,
-                args: [usuarioId, tokenActual]
+            await aplicarCambioPassword(dbTurso, usuarioId, contraseña_nueva, {
+                tokenActual,
+                cerrarTodasSesiones: false,
+                razonRevocacion: 'password_changed'
             });
 
-            // ── 7. Revocar todos los refresh tokens ────────────────────────────────
-            await dbTurso.execute({
-                sql: `UPDATE refresh_tokens
-                      SET revocado = 1, revocado_en = datetime('now'), razon_revocacion = 'password_changed'
-                      WHERE usuario_id = ? AND revocado = 0`,
-                args: [usuarioId]
-            });
-
-            // ── 8. Auditoría ───────────────────────────────────────────────────────
+            // ── 4. Auditoría ───────────────────────────────────────────────────────
             await registrarAuditoria(dbTurso, {
                 evento: 'password_cambiado', usuario_id: usuarioId, ip,
                 user_agent: userAgent, exitoso: 1, severidad: 'warning',
                 detalles: { sesiones_invalidadas: 'todas_excepto_actual' }
             });
+
+            try {
+                await sendPasswordChangedEmail({
+                    to: user.correo,
+                    name: user.nombre || user.username || 'usuario',
+                    context: 'cambio de contraseña autenticado'
+                });
+            } catch (mailError) {
+                console.warn('[cambiarContraseña] No se pudo enviar correo de confirmación:', mailError.message);
+            }
 
             res.json({
                 success: true,
@@ -957,6 +1006,168 @@ const authController = {
         } catch (error) {
             console.error('Error al cambiar contraseña:', error);
             res.status(500).json({ error: "Error al cambiar contraseña" });
+        }
+    },
+
+    solicitarRecuperacion: async (req, res) => {
+        try {
+            const { correo } = req.body;
+            const ip = req.ip || req.connection?.remoteAddress || '';
+            const userAgent = req.headers['user-agent'] || '';
+
+            const normalizedCorreo = String(correo || '').trim().toLowerCase();
+            const userResult = await dbTurso.execute({
+                sql: `SELECT id, correo, nombre, username, estado_usuario FROM usuarios WHERE correo = ? LIMIT 1`,
+                args: [normalizedCorreo]
+            });
+
+            const user = userResult.rows[0] || null;
+
+            if (user && (!user.estado_usuario || user.estado_usuario === 'Activo')) {
+                const rawToken = generarTokenRecuperacion();
+                const tokenHash = hashTokenRecuperacion(rawToken);
+
+                await dbTurso.execute({
+                    sql: `UPDATE password_recovery_tokens
+                          SET usado_en = datetime('now')
+                          WHERE usuario_id = ? AND usado_en IS NULL`,
+                    args: [user.id]
+                });
+
+                await dbTurso.execute({
+                    sql: `INSERT INTO password_recovery_tokens
+                          (usuario_id, token_hash, expira_en, requested_ip, user_agent)
+                          VALUES (?, ?, datetime('now', '+15 minutes'), ?, ?)`,
+                    args: [user.id, tokenHash, ip, userAgent]
+                });
+
+                try {
+                    await sendPasswordRecoveryEmail({
+                        to: user.correo,
+                        name: user.nombre || user.username || 'usuario',
+                        resetToken: rawToken
+                    });
+                } catch (mailError) {
+                    console.warn('[solicitarRecuperacion] No se pudo enviar correo:', mailError.message);
+                }
+
+                await registrarAuditoria(dbTurso, {
+                    evento: 'solicitud_recuperacion_password',
+                    usuario_id: user.id,
+                    ip,
+                    user_agent: userAgent,
+                    exitoso: 1,
+                    severidad: 'info',
+                    detalles: { metodo: 'email' }
+                });
+            } else {
+                await registrarAuditoria(dbTurso, {
+                    evento: 'solicitud_recuperacion_password',
+                    usuario_id: null,
+                    ip,
+                    user_agent: userAgent,
+                    exitoso: 0,
+                    severidad: 'info',
+                    detalles: { metodo: 'email', razon: 'correo_no_encontrado_o_inactivo' }
+                });
+            }
+
+            return res.json({
+                success: true,
+                mensaje: 'Si el correo existe, recibirás instrucciones para restablecer tu contraseña.'
+            });
+        } catch (error) {
+            console.error('Error en solicitud de recuperación de contraseña:', error);
+            return res.json({
+                success: true,
+                mensaje: 'Si el correo existe, recibirás instrucciones para restablecer tu contraseña.'
+            });
+        }
+    },
+
+    recuperarContraseña: async (req, res) => {
+        try {
+            const { token, contraseña_nueva } = req.body;
+            const ip = req.ip || req.connection?.remoteAddress || '';
+            const userAgent = req.headers['user-agent'] || '';
+            const tokenHash = hashTokenRecuperacion(token);
+
+            const tokenResult = await dbTurso.execute({
+                sql: `SELECT prt.id AS token_id, prt.usuario_id, u.correo, u.nombre, u.username
+                      FROM password_recovery_tokens prt
+                      INNER JOIN usuarios u ON u.id = prt.usuario_id
+                      WHERE prt.token_hash = ?
+                        AND prt.usado_en IS NULL
+                        AND datetime(prt.expira_en) > datetime('now')
+                      LIMIT 1`,
+                args: [tokenHash]
+            });
+
+            const tokenRow = tokenResult.rows[0];
+            if (!tokenRow) {
+                await registrarAuditoria(dbTurso, {
+                    evento: 'recuperacion_password_fallida',
+                    usuario_id: null,
+                    ip,
+                    user_agent: userAgent,
+                    exitoso: 0,
+                    severidad: 'warning',
+                    detalles: { razon: 'token_invalido_o_expirado' }
+                });
+
+                return res.status(400).json({
+                    error: 'Token de recuperación inválido o expirado',
+                    message: 'Token de recuperación inválido o expirado'
+                });
+            }
+
+            const updateTokenResult = await dbTurso.execute({
+                sql: `UPDATE password_recovery_tokens
+                      SET usado_en = datetime('now')
+                      WHERE id = ? AND usado_en IS NULL`,
+                args: [tokenRow.token_id]
+            });
+
+            if (!updateTokenResult.rowsAffected) {
+                return res.status(400).json({
+                    error: 'Token de recuperación inválido o expirado',
+                    message: 'Token de recuperación inválido o expirado'
+                });
+            }
+
+            await aplicarCambioPassword(dbTurso, tokenRow.usuario_id, contraseña_nueva, {
+                cerrarTodasSesiones: true,
+                razonRevocacion: 'password_reset'
+            });
+
+            await registrarAuditoria(dbTurso, {
+                evento: 'recuperacion_password_exitosa',
+                usuario_id: tokenRow.usuario_id,
+                ip,
+                user_agent: userAgent,
+                exitoso: 1,
+                severidad: 'warning',
+                detalles: { metodo: 'token_email' }
+            });
+
+            try {
+                await sendPasswordChangedEmail({
+                    to: tokenRow.correo,
+                    name: tokenRow.nombre || tokenRow.username || 'usuario',
+                    context: 'recuperación por correo'
+                });
+            } catch (mailError) {
+                console.warn('[recuperarContraseña] No se pudo enviar correo de confirmación:', mailError.message);
+            }
+
+            return res.json({
+                success: true,
+                mensaje: 'Contraseña restablecida correctamente. Se cerraron las demás sesiones.',
+                requiere_relogin: true
+            });
+        } catch (error) {
+            console.error('Error al recuperar contraseña:', error);
+            return res.status(500).json({ error: 'Error al recuperar contraseña' });
         }
     },
 
