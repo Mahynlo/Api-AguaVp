@@ -11,6 +11,13 @@
 
 import rateLimit from 'express-rate-limit';
 
+const isDevelopment = process.env.NODE_ENV !== 'production';
+const DEFAULT_REGISTRO_APP_MAX = isDevelopment ? 60 : 8;
+const registroAppMaxFromEnv = Number.parseInt(process.env.RATE_LIMIT_REGISTRO_APP_MAX ?? '', 10);
+const REGISTRO_APP_MAX = Number.isFinite(registroAppMaxFromEnv) && registroAppMaxFromEnv > 0
+    ? registroAppMaxFromEnv
+    : DEFAULT_REGISTRO_APP_MAX;
+
 /**
  * Rate limiter para login de usuarios
  * 8 intentos cada 15 minutos
@@ -37,11 +44,11 @@ export const loginLimiter = rateLimit({
 
 /**
  * Rate limiter para registro de aplicaciones
- * 8 intentos cada 1 hora
+ * 8 intentos cada 1 hora (60 en desarrollo)
  */
 export const registroAppLimiter = rateLimit({
     windowMs: 60 * 60 * 1000, // 1 hora
-    max: 8, // 8 intentos
+    max: REGISTRO_APP_MAX,
     message: {
         error: 'Demasiados intentos de registro de aplicación. Por favor, intenta de nuevo en 1 hora.'
     },
