@@ -168,7 +168,7 @@ const clientesController = {
     // Obtener todos los clientes (con paginación y búsqueda)
     obtenerClientes: async (req, res) => {
         try {
-            const { page, limit, search, ciudad, estado, numero_predio } = req.query;
+            const { page, limit, search, ciudad, estado, estado_cliente, numero_predio, orderBy } = req.query;
 
             // Si se envían parámetros
             if (page || limit || search || ciudad || estado || numero_predio) {
@@ -198,9 +198,10 @@ const clientesController = {
                     whereArgs.push(ciudad);
                 }
 
-                if (estado && estado !== 'All') {
+                const estadoFiltro = estado || estado_cliente;
+                if (estadoFiltro && estadoFiltro !== 'All') {
                     conditions.push(`c.estado_cliente = ?`);
-                    whereArgs.push(estado);
+                    whereArgs.push(estadoFiltro);
                 }
 
                 const whereClause = conditions.length > 0 ? ' WHERE ' + conditions.join(' AND ') : '';
@@ -213,7 +214,12 @@ const clientesController = {
                 const total = Number(countResult.rows[0].total);
 
                 // 2. Obtener datos
-                dataQuery += whereClause + ` ORDER BY c.nombre ASC LIMIT ? OFFSET ?`;
+                let orderClause = `c.nombre ASC`;
+                if (orderBy === 'numero_predio') {
+                    orderClause = `CASE WHEN c.numero_predio IS NULL OR c.numero_predio = '' THEN 1 ELSE 0 END, LENGTH(c.numero_predio) ASC, c.numero_predio ASC, c.nombre ASC`;
+                }
+
+                dataQuery += whereClause + ` ORDER BY ${orderClause} LIMIT ? OFFSET ?`;
                 const dataArgs = [...whereArgs, limitNum, offset];
 
                 const result = await dbTurso.execute({
@@ -251,7 +257,11 @@ const clientesController = {
 
             // Comportamiento Legacy (sin paginación, descarga todo)
             // Útil si hay otros consumidores del API que no esperan paginación
-            const query = `SELECT c.*, t.nombre as tarifa_nombre FROM clientes c LEFT JOIN tarifas t ON c.tarifa_id = t.id ORDER BY c.nombre ASC`;
+            const orderClauseLegacy = orderBy === 'numero_predio'
+                ? `CASE WHEN c.numero_predio IS NULL OR c.numero_predio = '' THEN 1 ELSE 0 END, LENGTH(c.numero_predio) ASC, c.numero_predio ASC, c.nombre ASC`
+                : `c.nombre ASC`;
+
+            const query = `SELECT c.*, t.nombre as tarifa_nombre FROM clientes c LEFT JOIN tarifas t ON c.tarifa_id = t.id ORDER BY ${orderClauseLegacy}`;
             const result = await dbTurso.execute({ sql: query });
 
             // Convertir BigInt a Number para compatibilidad JSON

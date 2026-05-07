@@ -107,10 +107,13 @@ export const clienteIdParamSchema = z.object({
 
 // Esquema para búsqueda de clientes
 export const buscarClienteSchema = z.object({
+  search: z.string().optional(),
   ciudad: z.string().optional(),
+  estado: z.enum(['Activo', 'Inactivo', 'Suspendido', 'Eliminado']).optional(),
   estado_cliente: z.enum(['Activo', 'Inactivo', 'Suspendido', 'Eliminado']).optional(),
   nombre: z.string().optional(),
   numero_predio: z.string().optional(),
+  orderBy: z.enum(['nombre', 'numero_predio']).optional(),
   page: z.string().regex(/^\d+$/).transform(Number).optional(),
   limit: z.string().regex(/^\d+$/).transform(Number).optional()
 });
