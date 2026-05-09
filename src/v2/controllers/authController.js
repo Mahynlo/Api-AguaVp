@@ -330,11 +330,16 @@ const authController = {
                 return res.status(400).json({ error: "Todos los campos son obligatorios" });
             }
 
-            // Validar que el rol sea uno de los permitidos (case-insensitive)
-            const rolesPermitidos = ['superadmin', 'administrador', 'operador'];
-            const rolNormalizado = rol.toLowerCase().trim();
+            // ── Validar permisos del usuario autenticado ──────────────────────────
+            // req.usuario viene del middleware de autenticación
+            if (!req.usuario) {
+                return res.status(401).json({ error: "No autenticado. Debes iniciar sesión para registrar usuarios." });
+            }
 
-            if (!rolesPermitidos.includes(rolNormalizado)) {
+            const rolNuevoNormalizado = rol.toLowerCase().trim();
+            const rolesPermitidos = ['superadmin', 'administrador', 'operador'];
+
+            if (!rolesPermitidos.includes(rolNuevoNormalizado)) {
                 return res.status(400).json({
                     error: "Rol no válido",
                     rolesPermitidos: rolesPermitidos,
@@ -342,7 +347,24 @@ const authController = {
                 });
             }
 
-            // Validar fortaleza de la contraseña
+            // Validar qué roles puede crear el usuario actual
+            const rolesQueCanCrear = {
+                superadmin: ['superadmin', 'administrador', 'operador'],
+                administrador: ['administrador', 'operador'],
+                operador: [] // Operadores no pueden crear ningún usuario
+            };
+
+            const rolesPermitidosAlUsuario = rolesQueCanCrear[req.usuario.rol] || [];
+
+            if (!rolesPermitidosAlUsuario.includes(rolNuevoNormalizado)) {
+                return res.status(403).json({
+                    error: "Permisos insuficientes",
+                    mensaje: `Tu rol (${req.usuario.rol}) no tiene permisos para registrar un usuario con rol ${rolNuevoNormalizado}.`,
+                    rolesQueCanCrear: rolesPermitidosAlUsuario
+                });
+            }
+
+            // ── Validar fortaleza de la contraseña ──────────────────────────────
             const validation = validatePassword(contrasena);
             if (!validation.valid) {
                 return res.status(400).json({
@@ -374,7 +396,7 @@ const authController = {
 
             const insertResult = await dbTurso.execute({
                 sql: insertQuery,
-                args: [correo, nombre, hashedPassword, username, rolNormalizado]
+                args: [correo, nombre, hashedPassword, username, rolNuevoNormalizado]
             });
 
             const nuevoUsuarioId = Number(insertResult.lastInsertRowid); // Convertir BigInt a Number
@@ -385,19 +407,35 @@ const authController = {
                 correo,
                 nombre,
                 username,
-                rol: rolNormalizado,
+                rol: rolNuevoNormalizado,
                 fecha_creacion: new Date().toISOString()
             };
+
+            // Registrar auditoría
+            await registrarAuditoria(dbTurso, {
+                evento: 'usuario_creado',
+                usuario_id: req.usuario.id,
+                ip: req.ip || req.connection?.remoteAddress || '',
+                user_agent: req.headers['user-agent'] || '',
+                exitoso: 1,
+                severidad: 'info',
+                detalles: {
+                    nuevo_usuario_id: nuevoUsuarioId,
+                    nuevo_rol: rolNuevoNormalizado,
+                    creador_rol: req.usuario.rol
+                }
+            });
 
             // Enviar notificación SSE
             if (notificationManager) {
                 try {
                     notificationManager.alertaSistema(
-                        `Nuevo usuario registrado: ${nombre} (${username})`,
+                        `Nuevo usuario registrado: ${nombre} (${username}) - Rol: ${rolNuevoNormalizado}`,
                         'success',
                         {
                             usuario: usuarioCreado,
-                            accion: 'registro'
+                            accion: 'registro',
+                            creado_por: req.usuario.id
                         }
                     );
                 } catch (sseError) {
