@@ -678,13 +678,14 @@ const ReportsController = {
      * Reporte de consumo de agua potable
      * Endpoint: GET /api/v2/reports/consumo-agua
      * Query:
-     * - tipo: periodo | ultimos_meses
+     * - tipo: periodo | ultimos_meses | anio
      * - periodo: YYYY-MM (cuando tipo=periodo)
      * - meses: 3 | 6 | 12 (cuando tipo=ultimos_meses)
+     * - anio: YYYY (cuando tipo=anio)
      */
     getReporteConsumoAgua: async (req, res) => {
         try {
-            const { tipo = 'ultimos_meses', periodo, meses } = req.query;
+            const { tipo = 'ultimos_meses', periodo, meses, anio } = req.query;
 
             let inicioPeriodo = '';
             let finPeriodo = '';
@@ -710,8 +711,15 @@ const ReportsController = {
                 inicioPeriodo = periodoInicio;
                 finPeriodo = periodoActual;
                 etiqueta = `Últimos ${mesesNum} meses`;
+            } else if (tipo === 'anio') {
+                if (!anio || !/^\d{4}$/.test(String(anio))) {
+                    return res.status(400).json({ error: "Para tipo=anio, el parámetro 'anio' (YYYY) es obligatorio" });
+                }
+                inicioPeriodo = `${anio}-01`;
+                finPeriodo = `${anio}-12`;
+                etiqueta = `Año ${anio}`;
             } else {
-                return res.status(400).json({ error: "Tipo de filtro inválido. Use: periodo o ultimos_meses" });
+                return res.status(400).json({ error: "Tipo de filtro inválido. Use: periodo, ultimos_meses o anio" });
             }
 
             const [
@@ -828,6 +836,7 @@ const ReportsController = {
                     tipo,
                     periodo: tipo === 'periodo' ? periodo : null,
                     meses: tipo === 'ultimos_meses' ? Number(meses || 3) : null,
+                    anio: tipo === 'anio' ? String(anio) : null,
                     inicio_periodo: inicioPeriodo,
                     fin_periodo: finPeriodo,
                     etiqueta
