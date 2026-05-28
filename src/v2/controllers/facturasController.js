@@ -1,28 +1,5 @@
-/**
- * Controlador de Facturas - V2
- * 
- * File: src/v2/controllers/facturasController.js
- * 
- * Descripción: Controlador para manejar operaciones CRUD de facturas.
- * 
- * Cambios en V2:
- * - Migración de SQLite3 a dbTurso para base de datos
- * - Reemplazo de WebSockets con Server-Sent Events (SSE)
- * - Mantiene solo las funcionalidades de V1
- * - Respeta completamente el esquema de base de datos
- * - BigInt conversion implementada
- * 
- * Funciones de V1 implementadas:
- * - generarFactura: Lógica completa de cálculo por rangos de tarifas
- * - obtenerFacturas: Con consultas optimizadas y JOINs
- * - modificarFactura: Actualización de facturas existentes
- */
+import { generarFactura, obtenerFacturas, modificarFactura } from '../services/facturasService.js';
 
-import dbTurso from '../../database/db-sqlite.js';
-import { calcularTarifaDesdeDB } from '../../utils/tarifaUtils.js';
-import { nowDate, calcularVencimiento } from '../../utils/timezone.js';
-
-// Managers SSE - Configurados dinámicamente
 let sseManager = null;
 let notificationManager = null;
 
@@ -32,577 +9,80 @@ export const setSSEManagers = (sseManagerInstance, notificationManagerInstance) 
 };
 
 const facturasController = {
-    /**
-     * Generar factura (lógica principal de V1)
-     */
+
     async generarFactura(req, res) {
-        console.log('Generar factura v2:', req.body);
+        const { lectura_id, cliente_id, tarifa_id, consumo_m3 } = req.body;
+        const fecha_emision = req.body.fecha_emision || null;
+
+        if (!lectura_id || !cliente_id || !tarifa_id || consumo_m3 == null) {
+            return res.status(400).json({ error: 'Faltan campos requeridos' });
+        }
+        if (fecha_emision && !/^\d{4}-\d{2}-\d{2}$/.test(fecha_emision)) {
+            return res.status(400).json({ error: 'El formato de fecha_emision debe ser YYYY-MM-DD' });
+        }
         try {
-            const { lectura_id, cliente_id, tarifa_id, consumo_m3 } = req.body;
-            // Si el frontend no manda fecha_emision (o manda null), usamos el día actual en Hermosillo
-            let fecha_emision = req.body.fecha_emision || nowDate();
-            const modificado_por = req.usuario.id; // Siempre desde el token JWT
+            const { factura_id, total, facturaCompleta } = await generarFactura(req.body, req.usuario.id);
 
-            if (!lectura_id || !cliente_id || !tarifa_id || consumo_m3 == null || !modificado_por) {
-                return res.status(400).json({ error: 'Faltan campos requeridos' });
-            }
-
-            // Validar que la fecha sea YYYY-MM-DD
-            if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha_emision)) {
-                return res.status(400).json({ error: 'El formato de fecha_emision debe ser YYYY-MM-DD' });
-            }
-
-            // Verificar si ya existe una factura para esta lectura
-            const facturaExistenteQuery = `SELECT id FROM facturas WHERE lectura_id = ?`;
-            const facturaExistente = await dbTurso.execute({
-                sql: facturaExistenteQuery,
-                args: [lectura_id]
-            });
-
-            if (facturaExistente.rows.length > 0) {
-                return res.status(409).json({ error: 'Ya existe una factura para este cliente en ese periodo.' });
-            }
-
-            // Verificar existencia de tarifa
-            const tarifaExisteQuery = `SELECT id FROM tarifas WHERE id = ?`;
-            const tarifaResult = await dbTurso.execute({
-                sql: tarifaExisteQuery,
-                args: [tarifa_id]
-            });
-            if (tarifaResult.rows.length === 0) {
-                return res.status(404).json({ error: 'La tarifa no existe' });
-            }
-
-            // Verificar existencia de cliente
-            const clienteExisteQuery = `SELECT id FROM clientes WHERE id = ?`;
-            const clienteResult = await dbTurso.execute({
-                sql: clienteExisteQuery,
-                args: [cliente_id]
-            });
-            if (clienteResult.rows.length === 0) {
-                return res.status(404).json({ error: 'El cliente no existe' });
-            }
-
-            // Verificar existencia de lectura
-            const lecturaExisteQuery = `SELECT id FROM lecturas WHERE id = ?`;
-            const lecturaResult = await dbTurso.execute({
-                sql: lecturaExisteQuery,
-                args: [lectura_id]
-            });
-            if (lecturaResult.rows.length === 0) {
-                return res.status(404).json({ error: 'La lectura no existe' });
-            }
-
-            // Calcular total usando la lógica de tarifas escalonadas (fuente de verdad única)
-            let total;
-            try {
-                const resultado = await calcularTarifaDesdeDB(consumo_m3, tarifa_id, dbTurso);
-                total = resultado.total;
-            } catch (tarifaError) {
-                return res.status(400).json({ error: tarifaError.message });
-            }
-
-            const estado = 'Pendiente';
-
-            // Obtener días de vencimiento desde configuración (default 30)
-            const configResult = await dbTurso.execute({
-                sql: `SELECT dias_vencimiento_factura FROM configuracion_servicio WHERE activo = 1 ORDER BY id DESC LIMIT 1`,
-                args: []
-            });
-            const diasVencimiento = configResult.rows.length > 0
-                ? (Number(configResult.rows[0].dias_vencimiento_factura) || 15)
-                : 15;
-
-            // Vencimiento = fecha_emision + N días calendario (sin ajuste por día hábil).
-            const fecha_vencimiento_str = calcularVencimiento(diasVencimiento, fecha_emision);
-
-            // Insertar factura
-            const insertQuery = `
-                INSERT INTO facturas 
-                (lectura_id, cliente_id, tarifa_id, fecha_emision, fecha_vencimiento, estado, total, saldo_pendiente, modificado_por)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `;
-
-            const insertResult = await dbTurso.execute({
-                sql: insertQuery,
-                args: [lectura_id, cliente_id, tarifa_id, fecha_emision, fecha_vencimiento_str, estado, total, total, modificado_por]
-            });
-
-            const factura_id = Number(insertResult.lastInsertRowid);
-
-            // Obtener datos completos de la factura para notificaciones
-            const facturaCompletaQuery = `
-                SELECT 
-                    f.*,
-                    c.nombre as cliente_nombre,
-                    c.correo as cliente_correo,
-                    t.nombre as tarifa_nombre,
-                    l.consumo_m3,
-                    l.periodo,
-                    m.numero_serie as medidor_numero
-                FROM facturas f
-                JOIN clientes c ON f.cliente_id = c.id
-                JOIN tarifas t ON f.tarifa_id = t.id
-                JOIN lecturas l ON f.lectura_id = l.id
-                JOIN medidores m ON l.medidor_id = m.id
-                WHERE f.id = ?
-            `;
-
-            const facturaCompletaResult = await dbTurso.execute({
-                sql: facturaCompletaQuery,
-                args: [factura_id]
-            });
-
-            const facturaCompleta = facturaCompletaResult.rows[0];
-
-            // Enviar notificaciones SSE
             if (notificationManager && facturaCompleta) {
                 try {
-                    // Notificar generación de factura
-                    notificationManager.alertaSistema(
-                        `Factura generada por $${total}`,
-                        'success',
-                        {
-                            factura_id,
-                            cliente_nombre: facturaCompleta.cliente_nombre,
-                            total,
-                            fecha_vencimiento: fecha_vencimiento_str,
-                            periodo: facturaCompleta.periodo,
-                            consumo_m3: Number(facturaCompleta.consumo_m3),
-                            accion: 'factura_generada'
-                        }
-                    );
-                } catch (sseError) {
-                    console.warn('Error enviando notificaciones SSE:', sseError);
-                }
+                    notificationManager.alertaSistema(`Factura generada por $${total}`, 'success', {
+                        factura_id, cliente_nombre: facturaCompleta.cliente_nombre, total,
+                        fecha_vencimiento: facturaCompleta.fecha_vencimiento,
+                        periodo: facturaCompleta.periodo, consumo_m3: Number(facturaCompleta.consumo_m3),
+                        accion: 'factura_generada'
+                    });
+                } catch (sseError) { console.warn('Error enviando notificaciones SSE:', sseError); }
             }
 
             res.status(201).json({
-                mensaje: 'Factura generada exitosamente',
-                factura_id,
-                total_calculado: total,
+                mensaje: 'Factura generada exitosamente', factura_id, total_calculado: total,
                 detalles: {
-                    id: Number(facturaCompleta.id),
-                    cliente_nombre: facturaCompleta.cliente_nombre,
-                    tarifa_nombre: facturaCompleta.tarifa_nombre,
-                    consumo_m3: Number(facturaCompleta.consumo_m3),
-                    periodo: facturaCompleta.periodo,
-                    medidor_numero: facturaCompleta.medidor_numero,
-                    total: Number(facturaCompleta.total),
-                    fecha_emision: facturaCompleta.fecha_emision,
+                    id: Number(facturaCompleta.id), cliente_nombre: facturaCompleta.cliente_nombre,
+                    tarifa_nombre: facturaCompleta.tarifa_nombre, consumo_m3: Number(facturaCompleta.consumo_m3),
+                    periodo: facturaCompleta.periodo, medidor_numero: facturaCompleta.medidor_numero,
+                    total: Number(facturaCompleta.total), fecha_emision: facturaCompleta.fecha_emision,
                     fecha_vencimiento: facturaCompleta.fecha_vencimiento
                 }
             });
-
-        } catch (error) {
-            console.error('Error al generar factura v2:', error);
-            res.status(500).json({
-                error: 'Error interno del servidor',
-                details: error.message
-            });
+        } catch (err) {
+            console.error('Error al generar factura v2:', err);
+            res.status(err.status || 500).json({ error: err.message || 'Error interno del servidor' });
         }
     },
 
-    /**
-     * Obtener facturas - Adaptado de V1 (consulta optimizada)
-     */
     async obtenerFacturas(req, res) {
         try {
-            const { id } = req.params;
-            const { periodo, page, limit, search, estado } = req.query;
-
-            // Defaults para paginación
-            const pageNum = parseInt(page) || 1;
-            const limitNum = parseInt(limit) || 60;
-            const offset = (pageNum - 1) * limitNum;
-            const searchTerm = search ? `%${search.toLowerCase()}%` : null;
-
-            // Consulta optimizada con CTEs y JOINs eficientes adaptada para Turso
-            const baseQuery = `
-                WITH 
-                -- CTE para calcular periodo anterior de forma eficiente
-                periodos_calculados AS (
-                    SELECT 
-                        l.id as lectura_id,
-                        l.periodo,
-                        CASE 
-                            WHEN l.periodo LIKE '____-__' THEN
-                                CASE 
-                                    WHEN SUBSTR(l.periodo, 6, 2) = '01' THEN 
-                                        (CAST(SUBSTR(l.periodo, 1, 4) AS INTEGER) - 1) || '-12'
-                                    ELSE 
-                                        SUBSTR(l.periodo, 1, 4) || '-' || 
-                                        PRINTF('%02d', CAST(SUBSTR(l.periodo, 6, 2) AS INTEGER) - 1)
-                                END
-                            ELSE NULL
-                        END AS periodo_anterior
-                    FROM lecturas l
-                ),
-                -- CTE para datos del mes anterior
-                consumos_anteriores AS (
-                    SELECT 
-                        l.medidor_id,
-                        l.periodo,
-                        l.consumo_m3,
-                        l.fecha_lectura,
-                        pc.periodo_anterior
-                    FROM lecturas l
-                    JOIN periodos_calculados pc ON l.id = pc.lectura_id
-                ),
-                -- CTE para adeudos anteriores
-                adeudos_anteriores AS (
-                    SELECT 
-                        f.cliente_id,
-                        f.fecha_emision,
-                        f.id as factura_id,
-                        COALESCE(SUM(f2.saldo_pendiente), 0) AS total_adeudo
-                    FROM facturas f
-                    LEFT JOIN facturas f2 ON f2.cliente_id = f.cliente_id 
-                                          AND f2.id != f.id 
-                                          AND f2.fecha_emision < f.fecha_emision 
-                                          AND f2.saldo_pendiente > 0
-                    GROUP BY f.cliente_id, f.fecha_emision, f.id
-                )
-                SELECT 
-                    f.id,
-                    f.cliente_id,
-                    f.lectura_id,
-                    f.tarifa_id,
-                    f.fecha_emision,
-                    f.fecha_vencimiento,
-                    f.total,
-                    f.saldo_pendiente,
-                    f.estado,
-                    f.modificado_por,
-                    f.fecha_creacion,
-                    
-                    -- Información del cliente
-                    c.nombre AS cliente_nombre,
-                    c.numero_predio AS cliente_numero_predio,
-                    c.direccion AS direccion_cliente,
-                    c.telefono AS telefono_cliente,
-                    c.correo AS correo_cliente,
-                    
-                    -- Información de la tarifa
-                    t.nombre AS tarifa_nombre,
-                    
-                    -- Información del usuario
-                    u.username AS modificado_por_nombre,
-                    
-                    -- Información de la lectura actual
-                    l.consumo_m3,
-                    l.periodo,
-                    l.fecha_lectura,
-                    
-                    -- Mes facturado optimizado
-                    CASE 
-                        WHEN l.periodo LIKE '____-__' THEN 
-                            CASE SUBSTR(l.periodo, 6, 2)
-                                WHEN '01' THEN 'Enero'   WHEN '02' THEN 'Febrero'
-                                WHEN '03' THEN 'Marzo'   WHEN '04' THEN 'Abril'
-                                WHEN '05' THEN 'Mayo'    WHEN '06' THEN 'Junio'
-                                WHEN '07' THEN 'Julio'   WHEN '08' THEN 'Agosto'
-                                WHEN '09' THEN 'Septiembre' WHEN '10' THEN 'Octubre'
-                                WHEN '11' THEN 'Noviembre'  WHEN '12' THEN 'Diciembre'
-                                ELSE l.periodo
-                            END || ' ' || SUBSTR(l.periodo, 1, 4)
-                        ELSE l.periodo
-                    END AS mes_facturado,
-                    
-                    -- Información del medidor
-                    m.id AS medidor_id,
-                    m.numero_serie AS medidor_numero_serie,
-                    m.ubicacion AS medidor_ubicacion,
-                    
-                    -- Información de la ruta
-                    r.id AS ruta_id,
-                    r.nombre AS ruta_nombre,
-                    
-                    -- Costo por m3 desde la tarifa activa
-                    rt.precio_por_m3 AS costo_por_m3,
-                    
-                    -- Adeudo anterior desde CTE
-                    aa.total_adeudo AS adeudo_anterior,
-                    
-                    -- Información del consumo anterior desde CTE
-                    ca_anterior.consumo_m3 AS consumo_mes_anterior,
-                    pc.periodo_anterior AS periodo_mes_anterior,
-                    ca_anterior.fecha_lectura AS fecha_lectura_mes_anterior
-                    
-                FROM facturas f
-                JOIN clientes c ON f.cliente_id = c.id
-                JOIN tarifas t ON f.tarifa_id = t.id
-                JOIN usuarios u ON f.modificado_por = u.id
-                JOIN lecturas l ON f.lectura_id = l.id
-                JOIN medidores m ON l.medidor_id = m.id
-                LEFT JOIN rutas r ON l.ruta_id = r.id
-                LEFT JOIN periodos_calculados pc ON l.id = pc.lectura_id
-                LEFT JOIN consumos_anteriores ca_anterior ON ca_anterior.medidor_id = m.id 
-                                                          AND ca_anterior.periodo = pc.periodo_anterior
-                LEFT JOIN adeudos_anteriores aa ON aa.factura_id = f.id
-                LEFT JOIN rangos_tarifas rt ON rt.tarifa_id = f.tarifa_id 
-                                            AND CAST(l.consumo_m3 AS INTEGER) >= rt.consumo_min 
-                                            AND (rt.consumo_max IS NULL OR CAST(l.consumo_m3 AS INTEGER) <= rt.consumo_max)
-            `;
-
-            // Construir WHERE clauses dinámicamente
-            let whereConditions = [];
-            let queryParams = [];
-            let countParams = [];
-
-            if (id) {
-                whereConditions.push('f.id = ?');
-                queryParams.push(id);
-            } else {
-                // Filtros generales
-                if (periodo) {
-                    whereConditions.push('l.periodo = ?');
-                    queryParams.push(periodo);
-                    countParams.push(periodo);
-                }
-
-                if (estado && estado.trim() !== '') {
-                    whereConditions.push('f.estado = ?');
-                    queryParams.push(estado);
-                    countParams.push(estado);
-                }
-
-                if (searchTerm) {
-                    whereConditions.push('(LOWER(c.nombre) LIKE ? OR LOWER(c.direccion) LIKE ? OR LOWER(COALESCE(c.telefono, \'\')) LIKE ? OR LOWER(COALESCE(c.correo, \'\')) LIKE ? OR CAST(f.id AS TEXT) LIKE ? OR LOWER(m.numero_serie) LIKE ? OR LOWER(COALESCE(m.ubicacion, \'\')) LIKE ? OR CAST(COALESCE(c.numero_predio, \'\') AS TEXT) LIKE ?)');
-                    queryParams.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
-                    countParams.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
-                }
-            }
-
-            const whereClause = whereConditions.length > 0 ? 'WHERE ' + whereConditions.join(' AND ') : '';
-
-            // 1. Si NO es petición por ID, obtener el TOTAL de registros para paginación
-            let totalItems = 0;
-            if (!id) {
-                const countQuery = `
-                    SELECT COUNT(*) as total 
-                    FROM facturas f
-                    JOIN clientes c ON f.cliente_id = c.id
-                    JOIN lecturas l ON f.lectura_id = l.id
-                    LEFT JOIN medidores m ON l.medidor_id = m.id
-                    ${whereClause}
-                `;
-
-                const countResult = await dbTurso.execute({
-                    sql: countQuery,
-                    args: countParams
-                });
-                totalItems = Number(countResult.rows[0].total);
-            }
-
-            // Usar ORDER BY solo cuando sea necesario
-            const orderClause = id ? '' : 'ORDER BY f.fecha_emision DESC';
-
-            // Agregar LIMIT y OFFSET para paginación
-            const limitClause = id ? '' : 'LIMIT ? OFFSET ?';
-            if (!id) {
-                queryParams.push(limitNum, offset);
-            }
-
-            const query = `${baseQuery} ${whereClause} ${orderClause} ${limitClause}`;
-
-            console.log('🚀 Consulta optimizada:', {
-                id,
-                periodo,
-                hasLimit: !id && !periodo,
-                queryLength: query.length
-            });
-
-            const startTime = Date.now();
-            const result = await dbTurso.execute({ sql: query, args: queryParams });
-            const executionTime = Date.now() - startTime;
-
-            console.log(`⚡ Consulta ejecutada en ${executionTime}ms - ${result.rows.length} registros`);
-
-            if (id && result.rows.length === 0) {
-                return res.status(404).json({ error: 'Factura no encontrada' });
-            }
-
-            if (periodo && !id && result.rows.length === 0) {
+            const result = await obtenerFacturas({ id: req.params.id, ...req.query });
+            if (result.tipo === 'unica') return res.json(result.factura);
+            if (req.query.periodo && !req.params.id && result.facturas.length === 0) {
                 return res.status(200).json([]);
             }
-
-            // Formateo optimizado con destructuring
-            const formatearFactura = (factura) => {
-                const {
-                    id, cliente_id, cliente_nombre, cliente_numero_predio, direccion_cliente, telefono_cliente,
-                    correo_cliente,
-                    lectura_id, consumo_m3, costo_por_m3, total, saldo_pendiente, estado,
-                    fecha_emision, fecha_vencimiento, modificado_por, modificado_por_nombre,
-                    fecha_creacion, tarifa_id, tarifa_nombre, periodo, mes_facturado,
-                    fecha_lectura, medidor_id, medidor_numero_serie, medidor_ubicacion,
-                    ruta_id, ruta_nombre, adeudo_anterior, consumo_mes_anterior,
-                    periodo_mes_anterior, fecha_lectura_mes_anterior
-                } = factura;
-
-                return {
-                    id: Number(id),
-                    cliente_id: Number(cliente_id),
-                    cliente_nombre,
-                    cliente_numero_predio,
-                    direccion_cliente,
-                    telefono_cliente,
-                    correo_cliente,
-                    lectura_id: Number(lectura_id),
-                    consumo_m3: Number(consumo_m3),
-                    costo_por_m3: costo_por_m3 ? Number(costo_por_m3) : 0,
-                    total: Number(total),
-                    saldo_pendiente: Number(saldo_pendiente),
-                    estado,
-                    fecha_emision,
-                    fecha_vencimiento,
-                    modificado_por: Number(modificado_por),
-                    modificado_por_nombre,
-                    fecha_creacion,
-                    tarifa_id: Number(tarifa_id),
-                    tarifa_nombre,
-                    periodo,
-                    mes_facturado,
-                    fecha_lectura,
-                    medidor: {
-                        id: medidor_id ? Number(medidor_id) : null,
-                        numero_serie: medidor_numero_serie,
-                        ubicacion: medidor_ubicacion
-                    },
-                    ruta: ruta_id ? { id: Number(ruta_id), nombre: ruta_nombre } : null,
-                    adeudo_anterior: adeudo_anterior ? Number(adeudo_anterior) : 0,
-                    consumo_mes_anterior: {
-                        consumo_m3: consumo_mes_anterior ? Number(consumo_mes_anterior) : null,
-                        periodo: periodo_mes_anterior || null,
-                        fecha_lectura: fecha_lectura_mes_anterior || null,
-                        diferencia_consumo: consumo_mes_anterior ?
-                            (Number(consumo_m3) - Number(consumo_mes_anterior)) : null
-                    }
-                };
-            };
-
-            if (id) {
-                // Respuesta para una sola factura
-                return res.status(200).json(formatearFactura(result.rows[0]));
-            } else {
-                // Procesamiento optimizado para múltiples facturas
-                const facturasFormateadas = result.rows.map(formatearFactura);
-
-                const response = {
-                    facturas: facturasFormateadas,
-                    pagination: {
-                        total: totalItems,
-                        page: pageNum,
-                        limit: limitNum,
-                        totalPages: Math.ceil(totalItems / limitNum)
-                    },
-                    metadata: {
-                        timestamp: new Date().toISOString(),
-                        version: 'v2.1-paginated'
-                    }
-                };
-
-                if (periodo) {
-                    response.filtros = { periodo };
-                }
-
-                // Calcular estadísticas globales (no solo de la página actual)
-                // Usamos los mismos filtros que la query principal
-                const statsQuery = `
-                    SELECT 
-                        SUM(f.total) as monto_total,
-                        SUM(f.saldo_pendiente) as total_pendiente,
-                        COUNT(CASE WHEN f.estado = 'Pendiente' THEN 1 END) as cantidad_pendientes,
-                        COUNT(CASE WHEN f.estado IN ('Pagada', 'Pagado') THEN 1 END) as cantidad_pagadas,
-                        COUNT(CASE WHEN f.estado IN ('Vencida', 'Vencido') THEN 1 END) as cantidad_vencidas
-                    FROM facturas f
-                    JOIN clientes c ON f.cliente_id = c.id
-                    JOIN lecturas l ON f.lectura_id = l.id
-                    LEFT JOIN medidores m ON l.medidor_id = m.id
-                    ${whereClause}
-                `;
-
-                // Ejecutar query de estadísticas (usando los mismos parámetros de filtro que el countQuery)
-                // Ojo: countParams tiene los params necesarios para el WHERE
-                const statsResult = await dbTurso.execute({
-                    sql: statsQuery,
-                    args: countParams
-                });
-
-                const stats = statsResult.rows[0];
-
-                response.estadisticas = {
-                    monto_total: stats.monto_total || 0,
-                    total_pendiente: stats.total_pendiente || 0,
-                    cantidad_pendientes: stats.cantidad_pendientes || 0,
-                    cantidad_pagadas: stats.cantidad_pagadas || 0,
-                    cantidad_vencidas: stats.cantidad_vencidas || 0
-                };
-
-                return res.status(200).json(response);
-            }
-
-        } catch (error) {
-            console.error('Error al obtener factura(s) v2:', error);
-            return res.status(500).json({ error: 'Error interno del servidor' });
+            const response = { facturas: result.facturas, pagination: result.pagination, estadisticas: result.estadisticas, metadata: { timestamp: new Date().toISOString(), version: 'v2.1-paginated' } };
+            if (result.filtros) response.filtros = result.filtros;
+            res.json(response);
+        } catch (err) {
+            console.error('Error al obtener factura(s) v2:', err);
+            res.status(err.status || 500).json({ error: err.message || 'Error interno del servidor' });
         }
     },
 
-    /**
-     * Modificar factura - Adaptado de V1
-     */
     async modificarFactura(req, res) {
+        const { estado } = req.body;
+        if (!estado) return res.status(400).json({ error: 'Faltan campos requeridos' });
         try {
-            const { id } = req.params;
-            const { estado, total } = req.body;
-            const modificado_por = req.usuario.id; // Siempre desde el token JWT
-
-            if (!estado || !modificado_por) {
-                return res.status(400).json({ error: 'Faltan campos requeridos' });
-            }
-
-            // Verificar que la factura existe
-            const verificarQuery = `SELECT * FROM facturas WHERE id = ?`;
-            const verificarResult = await dbTurso.execute({ sql: verificarQuery, args: [id] });
-
-            if (verificarResult.rows.length === 0) {
-                return res.status(404).json({ error: 'Factura no encontrada' });
-            }
-
-            const query = `
-                UPDATE facturas
-                SET estado = ?, total = ?, modificado_por = ?
-                WHERE id = ?
-            `;
-
-            await dbTurso.execute({
-                sql: query,
-                args: [estado, total || 0, modificado_por, id]
-            });
-
-            // Enviar notificación SSE
+            await modificarFactura(req.params.id, req.body, req.usuario.id);
             if (notificationManager) {
                 try {
-                    notificationManager.alertaSistema(
-                        `Factura ID ${id} modificada`,
-                        'info',
-                        {
-                            factura_id: Number(id),
-                            nuevo_estado: estado,
-                            nuevo_total: total ? Number(total) : 0,
-                            accion: 'factura_modificada'
-                        }
-                    );
-                } catch (sseError) {
-                    console.warn('Error enviando notificación SSE:', sseError);
-                }
+                    notificationManager.alertaSistema(`Factura ID ${req.params.id} modificada`, 'info', {
+                        factura_id: Number(req.params.id), nuevo_estado: estado,
+                        nuevo_total: req.body.total ? Number(req.body.total) : 0, accion: 'factura_modificada'
+                    });
+                } catch (sseError) { console.warn('Error enviando notificación SSE:', sseError); }
             }
-
-            res.status(200).json({ mensaje: 'Factura modificada exitosamente' });
-
-        } catch (error) {
-            console.error('Error al modificar factura v2:', error);
-            res.status(500).json({ error: 'Error interno del servidor' });
+            res.json({ mensaje: 'Factura modificada exitosamente' });
+        } catch (err) {
+            console.error('Error al modificar factura v2:', err);
+            res.status(err.status || 500).json({ error: err.message || 'Error interno del servidor' });
         }
     }
 };
