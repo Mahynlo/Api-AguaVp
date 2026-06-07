@@ -306,6 +306,14 @@ const ReportsController = {
             const inicioPeriodo = format(inicioDate, 'yyyy-MM');
             const finPeriodo = format(finDate, 'yyyy-MM');
 
+            // La recaudación por mes de pago (caja) siempre cubre el/los AÑO(S) completos
+            // del rango, no solo el mes filtrado: por el desfase entre el periodo de la
+            // deuda y la fecha real de pago, conviene ver el flujo de caja de todo el año.
+            const cajaInicioDate = new Date(inicioDate.getFullYear(), 0, 1);
+            const cajaFinDate = new Date(finDate.getFullYear(), 11, 31);
+            const cajaInicioStr = format(cajaInicioDate, formatoDia);
+            const cajaFinStr = format(cajaFinDate, formatoDia);
+
             // Para vistas por periodo/ultimos_meses/anio, el filtro debe respetar el periodo facturado
             // (lecturas.periodo), no la fecha de emisión/pago, para evitar desfase de mes.
             const usarPeriodoFacturado = tipo === 'periodo' || tipo === 'ultimos_meses' || tipo === 'anio';
@@ -327,7 +335,8 @@ const ReportsController = {
                 facturasMesRes,
                 pagosMesRes,
                 deudoresRes,
-                pagadoresRes
+                pagadoresRes,
+                recaudacionCajaRes
             ] = await Promise.all([
                 dbTurso.execute({
                     sql: `
@@ -465,6 +474,22 @@ const ReportsController = {
                         ORDER BY total_pagado DESC
                     `,
                     args: argsPagos
+                }),
+                // Recaudación REAL por mes de pago (flujo de caja): agrupa por la fecha
+                // en que entró el dinero (p.fecha_pago), independiente del periodo de la
+                // deuda. Incluye TODOS los pagos (también parcialidades de convenio).
+                dbTurso.execute({
+                    sql: `
+                        SELECT
+                            strftime('%Y-%m', p.fecha_pago) AS mes_pago,
+                            COALESCE(SUM(p.monto), 0) AS recaudado,
+                            COUNT(p.id) AS transacciones
+                        FROM pagos p
+                        WHERE p.fecha_pago BETWEEN ? AND ?
+                        GROUP BY 1
+                        ORDER BY 1
+                    `,
+                    args: [cajaInicioStr, cajaFinStr]
                 })
             ]);
 
@@ -511,6 +536,28 @@ const ReportsController = {
 
                 cursor = startOfMonth(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1));
             }
+
+            // Serie de recaudación por mes de pago (caja real), completa en el rango.
+            const cajaMap = new Map(
+                recaudacionCajaRes.rows.map(row => [row.mes_pago, {
+                    recaudado: Number(row.recaudado || 0),
+                    transacciones: Number(row.transacciones || 0)
+                }])
+            );
+            const serieCaja = [];
+            let cursorCaja = startOfMonth(cajaInicioDate);
+            const finMesCaja = startOfMonth(cajaFinDate);
+            while (cursorCaja <= finMesCaja) {
+                const mesCaja = format(cursorCaja, 'yyyy-MM');
+                const datosCaja = cajaMap.get(mesCaja) || { recaudado: 0, transacciones: 0 };
+                serieCaja.push({
+                    periodo: mesCaja,
+                    recaudado: datosCaja.recaudado,
+                    transacciones: datosCaja.transacciones
+                });
+                cursorCaja = startOfMonth(new Date(cursorCaja.getFullYear(), cursorCaja.getMonth() + 1, 1));
+            }
+            const totalRecaudadoCaja = serieCaja.reduce((s, m) => s + m.recaudado, 0);
 
             const metodosPago = metodosRes.rows.map(row => ({
                 metodo: row.metodo_pago,
@@ -565,10 +612,14 @@ const ReportsController = {
                     facturas_pagadas: Number(facturacion.facturas_pagadas || 0),
                     facturas_vencidas: Number(facturacion.facturas_vencidas || 0),
                     total_pagos: Number(pagosResumen.total_pagos || 0),
-                    ticket_promedio_pago: Number(pagosResumen.ticket_promedio_pago || 0)
+                    ticket_promedio_pago: Number(pagosResumen.ticket_promedio_pago || 0),
+                    // Dinero que realmente entró en el rango, por fecha de pago (caja).
+                    total_recaudado_caja: totalRecaudadoCaja
                 },
                 series: {
                     recaudacion_mensual: serieMensual,
+                    // Recaudación por mes de pago (flujo de caja real, independiente del periodo).
+                    recaudacion_por_mes_pago: serieCaja,
                     metodos_pago: metodosPago,
                     estado_facturas: estadoFacturas
                 },
