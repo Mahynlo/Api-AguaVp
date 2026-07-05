@@ -7,7 +7,7 @@ function serviceError(message, status) {
 }
 
 function mapCliente(c) {
-    return { id: Number(c.id), numero_predio: c.numero_predio || null, nombre: c.nombre, direccion: c.direccion, telefono: c.telefono, ciudad: c.ciudad, correo: c.correo, estado_cliente: c.estado_cliente, tarifa_id: c.tarifa_id ? Number(c.tarifa_id) : null, tarifa_nombre: c.tarifa_nombre || null, modificado_por: c.modificado_por ? Number(c.modificado_por) : null, fecha_creacion: c.fecha_creacion };
+    return { id: Number(c.id), numero_predio: c.numero_predio || null, nombre: c.nombre, direccion: c.direccion, telefono: c.telefono, ciudad: c.ciudad, correo: c.correo, estado_cliente: c.estado_cliente, tarifa_id: c.tarifa_id ? Number(c.tarifa_id) : null, tarifa_nombre: c.tarifa_nombre || null, modificado_por: c.modificado_por ? Number(c.modificado_por) : null, fecha_creacion: c.fecha_creacion, fecha_eliminacion: c.fecha_eliminacion || null, razon_eliminacion: c.razon_eliminacion || null };
 }
 
 async function insertarHistorial(tabla, operacion, registroId, modificadoPor, cambios) {
@@ -49,12 +49,15 @@ const ORDER_CLAUSES = {
 };
 
 export async function obtenerClientes({ page, limit, search, ciudad, estado, estado_cliente, numero_predio, orderBy } = {}) {
-    const hayFiltros = page || limit || search || ciudad || estado || numero_predio;
+    const estadoFiltro = estado || estado_cliente;
+    const incluirEliminados = estadoFiltro === 'All' || estadoFiltro === 'Eliminado';
+    const hayPaginacion = page || limit || search || ciudad || numero_predio;
     const orderClause = ORDER_CLAUSES[orderBy] || ORDER_CLAUSES.default;
     const baseData = `SELECT c.*, t.nombre as tarifa_nombre FROM clientes c LEFT JOIN tarifas t ON c.tarifa_id = t.id`;
 
-    if (!hayFiltros) {
-        const result = await dbTurso.execute({ sql: `${baseData} ORDER BY ${orderClause}` });
+    if (!hayPaginacion) {
+        const sqlQuery = `${baseData} ${incluirEliminados ? "" : "WHERE c.estado_cliente != 'Eliminado'"} ORDER BY ${orderClause}`;
+        const result = await dbTurso.execute({ sql: sqlQuery });
         return result.rows.map(mapCliente);
     }
 
@@ -71,8 +74,12 @@ export async function obtenerClientes({ page, limit, search, ciudad, estado, est
     }
     if (numero_predio) { conditions.push(`c.numero_predio = ?`); args.push(numero_predio.toString().toUpperCase()); }
     if (ciudad && ciudad !== 'All') { conditions.push(`c.ciudad = ?`); args.push(ciudad); }
-    const estadoFiltro = estado || estado_cliente;
-    if (estadoFiltro && estadoFiltro !== 'All') { conditions.push(`c.estado_cliente = ?`); args.push(estadoFiltro); }
+    if (estadoFiltro && estadoFiltro !== 'All') {
+        conditions.push(`c.estado_cliente = ?`);
+        args.push(estadoFiltro);
+    } else if (!incluirEliminados) {
+        conditions.push(`c.estado_cliente != 'Eliminado'`);
+    }
 
     const where = conditions.length ? ' WHERE ' + conditions.join(' AND ') : '';
     const [countResult, dataResult] = await Promise.all([
@@ -231,6 +238,9 @@ export async function eliminarCliente(id, eliminadoPor, razon) {
     const facturas = await dbTurso.execute({ sql: `SELECT COUNT(*) as total FROM facturas WHERE cliente_id = ? AND estado IN ('Pendiente', 'Parcial')`, args: [id] });
     if (Number(facturas.rows[0].total) > 0) throw Object.assign(serviceError('No se puede eliminar el cliente porque tiene facturas pendientes', 400), { facturas_pendientes: Number(facturas.rows[0].total) });
 
+    const medidores = await dbTurso.execute({ sql: `SELECT COUNT(*) as total FROM medidores WHERE cliente_id = ? AND fecha_eliminacion IS NULL`, args: [id] });
+    if (Number(medidores.rows[0].total) > 0) throw serviceError('No se puede desactivar/eliminar el cliente porque tiene un medidor activo asignado. Desvincúlelo primero.', 400);
+
     await dbTurso.execute({ sql: `UPDATE clientes SET estado_cliente = 'Eliminado', fecha_eliminacion = datetime('now'), eliminado_por = ?, razon_eliminacion = ? WHERE id = ?`, args: [eliminadoPor, razon || 'Sin razón especificada', id] });
     await insertarHistorial('clientes', 'SOFT_DELETE', id, eliminadoPor, { estado_anterior: cliente.estado_cliente, estado_nuevo: 'Eliminado', razon: razon || 'Sin razón especificada' });
 
@@ -252,7 +262,33 @@ export async function restaurarCliente(id, usuarioId) {
 
 export async function obtenerClientesEliminados() {
     const result = await dbTurso.execute({
-        sql: `SELECT c.id, c.numero_predio, c.nombre, c.direccion, c.telefono, c.ciudad, c.correo, c.fecha_eliminacion, c.razon_eliminacion, u.username as eliminado_por_nombre, (SELECT COUNT(*) FROM facturas f WHERE f.cliente_id = c.id) as total_facturas, (SELECT COUNT(*) FROM medidores m WHERE m.cliente_id = c.id) as total_medidores FROM clientes c LEFT JOIN usuarios u ON c.eliminado_por = u.id WHERE c.estado_cliente = 'Eliminado' ORDER BY c.fecha_eliminacion DESC`
+        sql: `SELECT c.id, c.numero_predio, c.nombre, c.direccion, c.telefono, c.ciudad, c.correo, c.estado_cliente, c.fecha_eliminacion, c.razon_eliminacion, u.username as eliminado_por_nombre, (SELECT COUNT(*) FROM facturas f WHERE f.cliente_id = c.id) as total_facturas, (SELECT COUNT(*) FROM medidores m WHERE m.cliente_id = c.id) as total_medidores FROM clientes c LEFT JOIN usuarios u ON c.eliminado_por = u.id WHERE c.estado_cliente = 'Eliminado' ORDER BY c.fecha_eliminacion DESC`
     });
     return { total: result.rows.length, clientes_eliminados: result.rows };
+}
+
+export async function purgarCliente(id) {
+    const clienteResult = await dbTurso.execute({ sql: `SELECT * FROM clientes WHERE id = ?`, args: [id] });
+    if (!clienteResult.rows.length) throw serviceError('Cliente no encontrado', 404);
+    const cliente = clienteResult.rows[0];
+
+    if (cliente.estado_cliente !== 'Eliminado') throw serviceError('El cliente debe estar desactivado/en la papelera para poder eliminarlo definitivamente', 400);
+
+    // 1. Verificar facturas
+    const facturas = await dbTurso.execute({ sql: `SELECT COUNT(*) as total FROM facturas WHERE cliente_id = ?`, args: [id] });
+    if (Number(facturas.rows[0].total) > 0) {
+        throw serviceError('No se puede eliminar definitivamente el cliente porque tiene historial de facturación en el sistema', 400);
+    }
+
+    // 2. Verificar historial de medidores
+    const historialMedidores = await dbTurso.execute({ sql: `SELECT COUNT(*) as total FROM cliente_medidor_historial WHERE cliente_id = ?`, args: [id] });
+    if (Number(historialMedidores.rows[0].total) > 0) {
+        throw serviceError('No se puede eliminar definitivamente el cliente porque tiene historial de asignación de medidores', 400);
+    }
+
+    // 3. Ejecutar DELETE físico
+    await dbTurso.execute({ sql: `DELETE FROM clientes WHERE id = ?`, args: [id] });
+    await insertarHistorial('clientes', 'HARD_DELETE', id, null, { nombre: cliente.nombre, direccion: cliente.direccion });
+
+    return { nombre: cliente.nombre };
 }

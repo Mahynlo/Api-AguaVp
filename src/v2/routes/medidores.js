@@ -64,7 +64,8 @@ import {
   actualizarMedidorSchema,
   medidorIdParamSchema,
   cambiarEstadoMedidorSchema,
-  cambiarEstadoServicioSchema
+  cambiarEstadoServicioSchema,
+  eliminarMedidorSchema
 } from '../validators/index.js';
 
 const router = express.Router();
@@ -819,6 +820,11 @@ router.get("/listar", appKeyMiddleware, authMiddleware, configureSSE, medidorCon
  *                   example: "Error en transacción de base de datos"
  */
 router.put("/modificar/:id", appKeyMiddleware, authMiddleware, requirePermission('medidores.modificar'), validate(medidorIdParamSchema, 'params'), validate(actualizarMedidorSchema), configureSSE, medidorController.modificarMedidor);
+
+router.delete("/:id/eliminar", appKeyMiddleware, authMiddleware, requirePermission('medidores.modificar'), validate(medidorIdParamSchema, 'params'), validate(eliminarMedidorSchema), configureSSE, medidorController.eliminarMedidor);
+router.put("/:id/restaurar", appKeyMiddleware, authMiddleware, requirePermission('medidores.modificar'), validate(medidorIdParamSchema, 'params'), configureSSE, medidorController.restaurarMedidor);
+router.delete("/:id/purgar", appKeyMiddleware, authMiddleware, requirePermission('medidores.modificar'), validate(medidorIdParamSchema, 'params'), configureSSE, medidorController.purgarMedidor);
+router.get("/eliminados", appKeyMiddleware, authMiddleware, requirePermission('medidores.listar'), configureSSE, medidorController.obtenerMedidoresEliminados);
 
 // ===================================================================
 // EXPORT MODULE

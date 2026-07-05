@@ -194,3 +194,10 @@ export const reasignarMedidorSchema = z.object({
     .min(10, 'El motivo debe tener al menos 10 caracteres')
     .max(300, 'El motivo no puede exceder 300 caracteres')
 });
+
+export const eliminarMedidorSchema = z.object({
+  razon: z.string()
+    .min(10, 'La razón de eliminación debe tener al menos 10 caracteres')
+    .max(500, 'La razón no puede exceder 500 caracteres')
+    .optional()
+}).strict();

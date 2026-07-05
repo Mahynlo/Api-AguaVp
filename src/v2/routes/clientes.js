@@ -727,6 +727,7 @@ router.put("/:id/restaurar", configureSSE, authMiddleware, validate(clienteIdPar
  *         description: Error interno del servidor
  */
 router.get("/eliminados", configureSSE, authMiddleware, clientesController.obtenerClientesEliminados);
+router.delete("/:id/purgar", configureSSE, authMiddleware, validate(clienteIdParamSchema, 'params'), clientesController.purgarCliente);
 
 // ===================================================================
 // EXPORT MODULE

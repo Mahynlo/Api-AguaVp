@@ -45,6 +45,9 @@ export const medidores = sqliteTable('medidores', {
   lectura_base: numeric('lectura_base'),       // lectura al instalar / inicio del sistema
   capacidad_maxima: numeric('capacidad_maxima'), // límite del totalizador antes del rollover (default runtime: 99999.99)
   fecha_creacion: text('fecha_creacion').default(sql`(datetime('now'))`),
+  fecha_eliminacion: text('fecha_eliminacion'),
+  eliminado_por: integer('eliminado_por').references(() => usuarios.id),
+  razon_eliminacion: text('razon_eliminacion'),
 });
 
 export const cliente_medidor_historial = sqliteTable('cliente_medidor_historial', {

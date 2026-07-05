@@ -1,4 +1,4 @@
-import { registrarCliente, obtenerClientes, modificarCliente, asignarTarifa, estadisticasClientes, eliminarCliente, restaurarCliente, obtenerClientesEliminados } from '../services/clientesService.js';
+import { registrarCliente, obtenerClientes, modificarCliente, asignarTarifa, estadisticasClientes, eliminarCliente, restaurarCliente, obtenerClientesEliminados, purgarCliente } from '../services/clientesService.js';
 
 let sseManager = null;
 let notificationManager = null;
@@ -105,6 +105,17 @@ const clientesController = {
             const body = { error: err.message || 'Error al restaurar cliente' };
             if (err.estado_actual !== undefined) body.estado_actual = err.estado_actual;
             res.status(err.status || 500).json(body);
+        }
+    },
+
+    purgarCliente: async (req, res) => {
+        try {
+            const { nombre } = await purgarCliente(req.params.id);
+            notify(`Cliente "${nombre}" purgado/eliminado definitivamente`, 'warning', { cliente_id: Number(req.params.id), nombre, accion: 'cliente_purgado' });
+            res.json({ message: 'Cliente eliminado definitivamente', cliente_id: req.params.id });
+        } catch (err) {
+            console.error('Error purgando cliente:', err);
+            res.status(err.status || 500).json({ error: err.message || 'Error al eliminar definitivamente el cliente' });
         }
     },
 
