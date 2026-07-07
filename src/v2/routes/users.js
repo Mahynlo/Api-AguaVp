@@ -43,6 +43,9 @@ router.put('/:id', userController.actualizarUsuario);
 // Eliminar usuario (Soft Delete)
 router.delete('/:id', userController.eliminarUsuario);
 
+// Eliminar usuario definitivamente (Hard Delete / Purge)
+router.delete('/:id/purgar', userController.purgarUsuario);
+
 // Reactivar usuario
 router.patch('/:id/activar', userController.activarUsuario);
 

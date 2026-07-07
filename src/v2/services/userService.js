@@ -7,20 +7,28 @@ function serviceError(message, status) {
     return err;
 }
 
-const SELECT_CAMPOS = `id, nombre, correo, username, rol, estado_usuario, fecha_creacion, ultimo_acceso`;
+const SELECT_CAMPOS = `id, nombre, correo, username, rol, estado_usuario, fecha_creacion, ultimo_acceso, fecha_eliminacion, eliminado_por, razon_eliminacion`;
 
-export async function obtenerUsuarios({ estado, rol, busqueda } = {}) {
-    let query = `SELECT ${SELECT_CAMPOS} FROM usuarios WHERE 1=1`;
+export async function obtenerUsuarios({ estado, rol, busqueda, actorRole } = {}) {
+    let query = `SELECT u.id, u.nombre, u.correo, u.username, u.rol, u.estado_usuario, u.fecha_creacion, u.ultimo_acceso, u.fecha_eliminacion, u.eliminado_por, u.razon_eliminacion, el.username AS eliminador_username 
+                 FROM usuarios u 
+                 LEFT JOIN usuarios el ON u.eliminado_por = el.id 
+                 WHERE 1=1`;
     const args = [];
 
-    if (estado && estado !== 'todos') { query += ` AND estado_usuario = ?`; args.push(estado); }
-    if (rol && rol !== 'todos') { query += ` AND rol = ?`; args.push(rol); }
+    // Si el actor es un administrador, no puede ver cuentas superadmin
+    if (actorRole === 'administrador') {
+        query += ` AND u.rol != 'superadmin'`;
+    }
+
+    if (estado && estado !== 'todos') { query += ` AND u.estado_usuario = ?`; args.push(estado); }
+    if (rol && rol !== 'todos') { query += ` AND u.rol = ?`; args.push(rol); }
     if (busqueda) {
-        query += ` AND (nombre LIKE ? OR correo LIKE ? OR username LIKE ?)`;
+        query += ` AND (u.nombre LIKE ? OR u.correo LIKE ? OR u.username LIKE ?)`;
         const t = `%${busqueda}%`;
         args.push(t, t, t);
     }
-    query += ` ORDER BY fecha_creacion DESC`;
+    query += ` ORDER BY u.fecha_creacion DESC`;
 
     const result = await dbTurso.execute({ sql: query, args });
     return result.rows.map(u => ({ ...u, id: Number(u.id) }));
@@ -83,4 +91,23 @@ export async function activarUsuario(id) {
         sql: `UPDATE usuarios SET estado_usuario = 'Activo', fecha_eliminacion = NULL, eliminado_por = NULL, razon_eliminacion = NULL, intentos_fallidos = 0, bloqueado_hasta = NULL WHERE id = ?`,
         args: [id]
     });
+}
+
+export async function purgarUsuario(id) {
+    try {
+        await Promise.all([
+            dbTurso.execute({ sql: `DELETE FROM sesiones WHERE usuario_id = ?`, args: [id] }),
+            dbTurso.execute({ sql: `DELETE FROM refresh_tokens WHERE usuario_id = ?`, args: [id] }),
+            dbTurso.execute({ sql: `DELETE FROM tokens_revocados WHERE usuario_id = ?`, args: [id] }),
+            dbTurso.execute({ sql: `DELETE FROM user_permission_overrides WHERE user_id = ?`, args: [id] }),
+            dbTurso.execute({ sql: `DELETE FROM historial_passwords WHERE usuario_id = ?`, args: [id] }),
+        ]);
+
+        await dbTurso.execute({ sql: `DELETE FROM usuarios WHERE id = ?`, args: [id] });
+    } catch (error) {
+        if (error.message && (error.message.includes('FOREIGN KEY') || error.code === 'SQLITE_CONSTRAINT_FOREIGNKEY')) {
+            throw serviceError("No se puede eliminar definitivamente este usuario porque tiene historial o registros de auditoría asociados en el sistema (por ejemplo, facturas creadas, lecturas registradas, etc.). Se recomienda mantenerlo desactivado en la papelera.", 409);
+        }
+        throw error;
+    }
 }

@@ -96,6 +96,7 @@ export async function obtenerPagos({ id, periodo, page, limit, search, metodo_pa
     const limitNum = parseInt(limit) || 60;
     const offset = (pageNum - 1) * limitNum;
     const searchTerm = search ? `%${search.toLowerCase()}%` : null;
+    const normalizedSearch = search ? `%${search.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()}%` : null;
 
     const conditions = [];
     const queryParams = [];
@@ -108,9 +109,9 @@ export async function obtenerPagos({ id, periodo, page, limit, search, metodo_pa
         if (periodo) { conditions.push('l.periodo = ?'); queryParams.push(periodo); countParams.push(periodo); }
         if (metodo_pago?.trim()) { conditions.push('p.metodo_pago = ?'); queryParams.push(metodo_pago); countParams.push(metodo_pago); }
         if (searchTerm) {
-            conditions.push('(LOWER(c.nombre) LIKE ? OR CAST(p.id AS TEXT) LIKE ? OR CAST(f.id AS TEXT) LIKE ? OR LOWER(p.metodo_pago) LIKE ?)');
-            queryParams.push(searchTerm, searchTerm, searchTerm, searchTerm);
-            countParams.push(searchTerm, searchTerm, searchTerm, searchTerm);
+            conditions.push('(unaccent(c.nombre) LIKE ? OR CAST(p.id AS TEXT) LIKE ? OR CAST(f.id AS TEXT) LIKE ? OR unaccent(p.metodo_pago) LIKE ?)');
+            queryParams.push(normalizedSearch, searchTerm, searchTerm, normalizedSearch);
+            countParams.push(normalizedSearch, searchTerm, searchTerm, normalizedSearch);
         }
     }
 

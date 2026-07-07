@@ -68,8 +68,8 @@ export async function obtenerClientes({ page, limit, search, ciudad, estado, est
     const args = [];
 
     if (search) {
-        const t = `%${search}%`;
-        conditions.push(`(c.nombre LIKE ? OR c.telefono LIKE ? OR c.correo LIKE ? OR c.ciudad LIKE ? OR c.numero_predio LIKE ? OR c.direccion LIKE ?)`);
+        const t = `%${search.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()}%`;
+        conditions.push(`(unaccent(c.nombre) LIKE ? OR unaccent(c.telefono) LIKE ? OR unaccent(c.correo) LIKE ? OR unaccent(c.ciudad) LIKE ? OR unaccent(c.numero_predio) LIKE ? OR unaccent(c.direccion) LIKE ?)`);
         args.push(t, t, t, t, t, t);
     }
     if (numero_predio) { conditions.push(`c.numero_predio = ?`); args.push(numero_predio.toString().toUpperCase()); }

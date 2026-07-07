@@ -125,6 +125,7 @@ export async function obtenerFacturas({ id, periodo, page, limit, search, estado
     const limitNum = parseInt(limit) || 60;
     const offset = (pageNum - 1) * limitNum;
     const searchTerm = search ? `%${search.toLowerCase()}%` : null;
+    const normalizedSearch = search ? `%${search.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()}%` : null;
 
     const conditions = [];
     const queryParams = [];
@@ -137,9 +138,9 @@ export async function obtenerFacturas({ id, periodo, page, limit, search, estado
         if (periodo) { conditions.push('l.periodo = ?'); queryParams.push(periodo); countParams.push(periodo); }
         if (estado?.trim()) { conditions.push('f.estado = ?'); queryParams.push(estado); countParams.push(estado); }
         if (searchTerm) {
-            conditions.push(`(LOWER(c.nombre) LIKE ? OR LOWER(c.direccion) LIKE ? OR LOWER(COALESCE(c.telefono,'')) LIKE ? OR LOWER(COALESCE(c.correo,'')) LIKE ? OR CAST(f.id AS TEXT) LIKE ? OR LOWER(m.numero_serie) LIKE ? OR LOWER(COALESCE(m.ubicacion,'')) LIKE ? OR CAST(COALESCE(c.numero_predio,'') AS TEXT) LIKE ?)`);
-            queryParams.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
-            countParams.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+            conditions.push(`(unaccent(c.nombre) LIKE ? OR unaccent(c.direccion) LIKE ? OR unaccent(COALESCE(c.telefono,'')) LIKE ? OR unaccent(COALESCE(c.correo,'')) LIKE ? OR CAST(f.id AS TEXT) LIKE ? OR unaccent(m.numero_serie) LIKE ? OR unaccent(COALESCE(m.ubicacion,'')) LIKE ? OR CAST(COALESCE(c.numero_predio,'') AS TEXT) LIKE ?)`);
+            queryParams.push(normalizedSearch, normalizedSearch, normalizedSearch, normalizedSearch, searchTerm, normalizedSearch, normalizedSearch, searchTerm);
+            countParams.push(normalizedSearch, normalizedSearch, normalizedSearch, normalizedSearch, searchTerm, normalizedSearch, normalizedSearch, searchTerm);
         }
     }
 

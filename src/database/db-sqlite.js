@@ -19,6 +19,12 @@ console.log(`📦 Conectando a SQLite en: ${dbPath}`);
 // Crear conexión SQLite
 const sqlite = new Database(dbPath);
 
+// Registrar la función unaccent para búsquedas case-insensitive e ignore accents
+sqlite.function('unaccent', (str) => {
+    if (typeof str !== 'string') return str;
+    return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+});
+
 // Habilitar foreign keys (importante para integridad referencial)
 sqlite.pragma('foreign_keys = ON');
 

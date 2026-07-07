@@ -74,8 +74,8 @@ export async function obtenerMedidores(query = {}) {
     }
 
     if (search) {
-        const t = `%${search}%`;
-        conditions.push(`(m.numero_serie LIKE ? OR m.marca LIKE ? OR m.modelo LIKE ? OR m.ubicacion LIKE ? OR c.nombre LIKE ? OR c.numero_predio LIKE ?)`);
+        const t = `%${search.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()}%`;
+        conditions.push(`(unaccent(m.numero_serie) LIKE ? OR unaccent(m.marca) LIKE ? OR unaccent(m.modelo) LIKE ? OR unaccent(m.ubicacion) LIKE ? OR unaccent(c.nombre) LIKE ? OR unaccent(c.numero_predio) LIKE ?)`);
         args.push(t, t, t, t, t, t);
     }
     if (estado && estado !== 'All') {
