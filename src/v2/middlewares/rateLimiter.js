@@ -12,7 +12,7 @@
 import rateLimit from 'express-rate-limit';
 
 const isDevelopment = process.env.NODE_ENV !== 'production';
-const DEFAULT_REGISTRO_APP_MAX = isDevelopment ? 60 : 8;
+const DEFAULT_REGISTRO_APP_MAX = 30; // Modificado a 30 por hora
 const registroAppMaxFromEnv = Number.parseInt(process.env.RATE_LIMIT_REGISTRO_APP_MAX ?? '', 10);
 const REGISTRO_APP_MAX = Number.isFinite(registroAppMaxFromEnv) && registroAppMaxFromEnv > 0
     ? registroAppMaxFromEnv
@@ -24,7 +24,7 @@ const REGISTRO_APP_MAX = Number.isFinite(registroAppMaxFromEnv) && registroAppMa
  */
 export const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutos
-    max: 8, // 8 intentos
+    max: 10, // 10 intentos
     message: {
         error: 'Demasiados intentos de inicio de sesión. Por favor, intenta de nuevo en 15 minutos.'
     },
@@ -35,8 +35,8 @@ export const loginLimiter = rateLimit({
     handler: (req, res) => {
         console.warn(`[RATE LIMIT] Login excedido - IP: ${req.ip}`);
         res.status(429).json({
-            error: 'Demasiados intentos de inicio de sesión',
-            mensaje: 'Has excedido el límite de intentos. Intenta de nuevo en 15 minutos.',
+            error: 'Límite de intentos superado',
+            mensaje: 'Has superado el límite de 10 intentos de inicio de sesión. Por favor, inténtalo de nuevo en 15 minutos.',
             retry_after: '15 minutos'
         });
     }
@@ -58,8 +58,8 @@ export const registroAppLimiter = rateLimit({
     handler: (req, res) => {
         console.warn(`[RATE LIMIT] Registro de app excedido - IP: ${req.ip}`);
         res.status(429).json({
-            error: 'Demasiados intentos de registro',
-            mensaje: 'Has excedido el límite de registros de aplicación. Intenta de nuevo en 1 hora.',
+            error: 'Límite de registros superado',
+            mensaje: `Has superado el límite de ${REGISTRO_APP_MAX} registros de aplicación. Por favor, inténtalo de nuevo en 1 hora.`,
             retry_after: '1 hora'
         });
     }
@@ -71,7 +71,7 @@ export const registroAppLimiter = rateLimit({
  */
 export const recuperarTokenLimiter = rateLimit({
     windowMs: 60 * 60 * 1000, // 1 hora
-    max: 4, // 4 intentos
+    max: 8, // 8 intentos
     message: {
         error: 'Demasiados intentos de recuperación de token. Por favor, intenta de nuevo en 1 hora.'
     },
@@ -81,8 +81,8 @@ export const recuperarTokenLimiter = rateLimit({
     handler: (req, res) => {
         console.warn(`[RATE LIMIT] Recuperación de token excedido - IP: ${req.ip}`);
         res.status(429).json({
-            error: 'Demasiados intentos de recuperación',
-            mensaje: 'Has excedido el límite de recuperaciones de token. Intenta de nuevo en 1 hora.',
+            error: 'Límite de recuperación superado',
+            mensaje: 'Has superado el límite de 8 recuperaciones de token. Por favor, inténtalo de nuevo en 1 hora.',
             retry_after: '1 hora'
         });
     }
@@ -94,7 +94,7 @@ export const recuperarTokenLimiter = rateLimit({
  */
 export const registroUsuarioLimiter = rateLimit({
     windowMs: 60 * 60 * 1000, // 1 hora
-    max: 10, // 10 intentos
+    max: 30, // 30 intentos
     message: {
         error: 'Demasiados intentos de registro de usuario. Por favor, intenta de nuevo en 1 hora.'
     },
@@ -104,8 +104,8 @@ export const registroUsuarioLimiter = rateLimit({
     handler: (req, res) => {
         console.warn(`[RATE LIMIT] Registro de usuario excedido - IP: ${req.ip}`);
         res.status(429).json({
-            error: 'Demasiados intentos de registro',
-            mensaje: 'Has excedido el límite de registros de usuario. Intenta de nuevo en 1 hora.',
+            error: 'Límite de registros superado',
+            mensaje: 'Has superado el límite de 30 registros de usuario. Por favor, inténtalo de nuevo en 1 hora.',
             retry_after: '1 hora'
         });
     }
@@ -117,7 +117,7 @@ export const registroUsuarioLimiter = rateLimit({
  */
 export const solicitarRecuperacionPasswordLimiter = rateLimit({
     windowMs: 60 * 60 * 1000,
-    max: 5,
+    max: 10,
     message: {
         error: 'Demasiadas solicitudes de recuperación de contraseña. Por favor, intenta de nuevo en 1 hora.'
     },
@@ -127,8 +127,8 @@ export const solicitarRecuperacionPasswordLimiter = rateLimit({
     handler: (req, res) => {
         console.warn(`[RATE LIMIT] Solicitud recuperación password excedida - IP: ${req.ip}`);
         res.status(429).json({
-            error: 'Demasiadas solicitudes de recuperación',
-            mensaje: 'Has excedido el límite de solicitudes de recuperación de contraseña. Intenta de nuevo en 1 hora.',
+            error: 'Límite de solicitudes superado',
+            mensaje: 'Has superado el límite de 10 solicitudes de recuperación de contraseña. Por favor, inténtalo de nuevo en 1 hora.',
             retry_after: '1 hora'
         });
     }
@@ -140,7 +140,7 @@ export const solicitarRecuperacionPasswordLimiter = rateLimit({
  */
 export const recuperarContrasenaLimiter = rateLimit({
     windowMs: 60 * 60 * 1000,
-    max: 10,
+    max: 15,
     message: {
         error: 'Demasiados intentos de restablecimiento de contraseña. Por favor, intenta de nuevo en 1 hora.'
     },
@@ -150,8 +150,8 @@ export const recuperarContrasenaLimiter = rateLimit({
     handler: (req, res) => {
         console.warn(`[RATE LIMIT] Restablecimiento password excedido - IP: ${req.ip}`);
         res.status(429).json({
-            error: 'Demasiados intentos de restablecimiento',
-            mensaje: 'Has excedido el límite de intentos de restablecimiento de contraseña. Intenta de nuevo en 1 hora.',
+            error: 'Límite de restablecimientos superado',
+            mensaje: 'Has superado el límite de 15 intentos de restablecimiento de contraseña. Por favor, inténtalo de nuevo en 1 hora.',
             retry_after: '1 hora'
         });
     }
@@ -163,7 +163,7 @@ export const recuperarContrasenaLimiter = rateLimit({
  */
 export const generalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutos
-    max: 100, // 100 requests
+    max: 600, // 600 requests
     message: {
         error: 'Demasiadas solicitudes. Por favor, intenta de nuevo más tarde.'
     },
@@ -173,8 +173,8 @@ export const generalLimiter = rateLimit({
     handler: (req, res) => {
         console.warn(`[RATE LIMIT] Rate limit general excedido - IP: ${req.ip} - Ruta: ${req.path}`);
         res.status(429).json({
-            error: 'Demasiadas solicitudes',
-            mensaje: 'Has excedido el límite de solicitudes. Intenta de nuevo en unos minutos.',
+            error: 'Límite de solicitudes superado',
+            mensaje: 'Has superado el límite de 600 solicitudes generales. Por favor, inténtalo de nuevo en 15 minutos.',
             retry_after: '15 minutos'
         });
     }

@@ -91,7 +91,7 @@ const COUNT_JOIN = `FROM pagos p JOIN facturas f ON p.factura_id = f.id JOIN cli
 
 const mapPago = r => ({ ...r, id: Number(r.id), factura_id: Number(r.factura_id), modificado_por: Number(r.modificado_por) });
 
-export async function obtenerPagos({ id, periodo, page, limit, search, metodo_pago }) {
+export async function obtenerPagos({ id, periodo, page, limit, search, metodo_pago, ciudad }) {
     const pageNum = parseInt(page) || 1;
     const limitNum = parseInt(limit) || 60;
     const offset = (pageNum - 1) * limitNum;
@@ -108,6 +108,7 @@ export async function obtenerPagos({ id, periodo, page, limit, search, metodo_pa
     } else {
         if (periodo) { conditions.push('l.periodo = ?'); queryParams.push(periodo); countParams.push(periodo); }
         if (metodo_pago?.trim()) { conditions.push('p.metodo_pago = ?'); queryParams.push(metodo_pago); countParams.push(metodo_pago); }
+        if (ciudad?.trim() && ciudad !== 'All') { conditions.push('c.ciudad = ?'); queryParams.push(ciudad); countParams.push(ciudad); }
         if (searchTerm) {
             conditions.push('(unaccent(c.nombre) LIKE ? OR CAST(p.id AS TEXT) LIKE ? OR CAST(f.id AS TEXT) LIKE ? OR unaccent(p.metodo_pago) LIKE ?)');
             queryParams.push(normalizedSearch, searchTerm, searchTerm, normalizedSearch);

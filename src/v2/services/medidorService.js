@@ -36,9 +36,9 @@ export async function registrarMedidor(datos, usuarioId) {
 }
 
 export async function obtenerMedidores(query = {}) {
-    const { page, limit, search, estado, ubicacion, cliente_id, cliente_nombre, numero_predio, asignacion, incluirEliminados } = query;
+    const { page, limit, search, estado, ubicacion, cliente_id, cliente_nombre, numero_predio, asignacion, incluirEliminados, ciudad } = query;
     const incluirEliminadosBool = incluirEliminados === 'true' || incluirEliminados === true;
-    const hayPaginacion = page || limit || search || estado || ubicacion || cliente_id || cliente_nombre || numero_predio || asignacion;
+    const hayPaginacion = page || limit || search || estado || ubicacion || cliente_id || cliente_nombre || numero_predio || asignacion || ciudad;
 
     const baseSelect = `SELECT m.*, c.nombre AS cliente_nombre, c.numero_predio, rp.ruta_id, r.nombre AS ruta_nombre
                         FROM medidores m
@@ -87,6 +87,7 @@ export async function obtenerMedidores(query = {}) {
     if (cliente_id && cliente_id !== 'All') { conditions.push(`m.cliente_id = ?`); args.push(cliente_id); }
     if (cliente_nombre) { conditions.push(`c.nombre LIKE ?`); args.push(`%${cliente_nombre}%`); }
     if (numero_predio) { conditions.push(`c.numero_predio LIKE ?`); args.push(`%${numero_predio}%`); }
+    if (ciudad && ciudad !== 'All') { conditions.push(`c.ciudad = ?`); args.push(ciudad); }
     if (asignacion && asignacion !== 'All') {
         if (asignacion === 'asignados') conditions.push(`m.cliente_id IS NOT NULL`);
         else if (asignacion === 'sin_asignar' || asignacion === 'no_asignados') conditions.push(`m.cliente_id IS NULL`);

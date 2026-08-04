@@ -120,7 +120,7 @@ const BASE_QUERY = `
     LEFT JOIN rangos_tarifas rt ON rt.tarifa_id = f.tarifa_id AND CAST(l.consumo_m3 AS INTEGER) >= rt.consumo_min AND (rt.consumo_max IS NULL OR CAST(l.consumo_m3 AS INTEGER) <= rt.consumo_max)
 `;
 
-export async function obtenerFacturas({ id, periodo, page, limit, search, estado }) {
+export async function obtenerFacturas({ id, periodo, page, limit, search, estado, ciudad }) {
     const pageNum = parseInt(page) || 1;
     const limitNum = parseInt(limit) || 60;
     const offset = (pageNum - 1) * limitNum;
@@ -137,6 +137,7 @@ export async function obtenerFacturas({ id, periodo, page, limit, search, estado
     } else {
         if (periodo) { conditions.push('l.periodo = ?'); queryParams.push(periodo); countParams.push(periodo); }
         if (estado?.trim()) { conditions.push('f.estado = ?'); queryParams.push(estado); countParams.push(estado); }
+        if (ciudad?.trim() && ciudad !== 'All') { conditions.push('c.ciudad = ?'); queryParams.push(ciudad); countParams.push(ciudad); }
         if (searchTerm) {
             conditions.push(`(unaccent(c.nombre) LIKE ? OR unaccent(c.direccion) LIKE ? OR unaccent(COALESCE(c.telefono,'')) LIKE ? OR unaccent(COALESCE(c.correo,'')) LIKE ? OR CAST(f.id AS TEXT) LIKE ? OR unaccent(m.numero_serie) LIKE ? OR unaccent(COALESCE(m.ubicacion,'')) LIKE ? OR CAST(COALESCE(c.numero_predio,'') AS TEXT) LIKE ?)`);
             queryParams.push(normalizedSearch, normalizedSearch, normalizedSearch, normalizedSearch, searchTerm, normalizedSearch, normalizedSearch, searchTerm);
