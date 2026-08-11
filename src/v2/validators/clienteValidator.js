@@ -13,8 +13,13 @@ const clienteBaseSchema = {
   numero_predio: z.string()
     .min(1, 'El número de predio no puede estar vacío')
     .max(50, 'El número de predio no puede exceder 50 caracteres')
-    .regex(/^[a-zA-Z0-9\-\/]+$/, 'El número de predio solo puede contener letras, números, guiones y diagonales')
-    .transform(val => val.trim().toUpperCase())
+    .regex(/^(NG|MP|AD)-\d+$/i, 'El número de predio debe tener el formato PREFIJO-NUMERO (ej. NG-123). Prefijos válidos: NG, MP, AD')
+    .transform(val => {
+      let v = val.trim().toUpperCase();
+      const m = v.match(/^(NG|MP|AD)-0*(\d+)$/);
+      if (m) v = `${m[1]}-${m[2]}`;
+      return v;
+    })
     .nullable()
     .optional(),
 

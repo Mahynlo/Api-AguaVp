@@ -19,8 +19,21 @@ export async function registrarCliente(datos, usuarioId) {
     const safeNumeroPredio = numero_predio ? numero_predio.toString().trim().toUpperCase() : null;
 
     if (safeNumeroPredio) {
-        const dupe = await dbTurso.execute({ sql: `SELECT id FROM clientes WHERE numero_predio = ?`, args: [safeNumeroPredio] });
-        if (dupe.rows.length > 0) throw serviceError(`Ya existe un cliente registrado con el número de predio "${safeNumeroPredio}"`, 409);
+        const match = safeNumeroPredio.match(/^(NG|MP|AD)-(\d+)$/);
+        if (match) {
+            const prefix = match[1];
+            const rows = await dbTurso.execute({ sql: `SELECT id, numero_predio FROM clientes WHERE numero_predio LIKE ?`, args: [`${prefix}-%`] });
+            const dupe = rows.rows.find(r => {
+                if (!r.numero_predio) return false;
+                const m = r.numero_predio.toUpperCase().replace(/\s/g, '').match(/^(NG|MP|AD)-0*(\d+)$/);
+                if (m) return `${m[1]}-${m[2]}` === safeNumeroPredio;
+                return r.numero_predio.toUpperCase() === safeNumeroPredio;
+            });
+            if (dupe) throw serviceError(`Ya existe un cliente registrado con el número de predio "${safeNumeroPredio}"`, 409);
+        } else {
+            const dupe = await dbTurso.execute({ sql: `SELECT id FROM clientes WHERE numero_predio = ?`, args: [safeNumeroPredio] });
+            if (dupe.rows.length > 0) throw serviceError(`Ya existe un cliente registrado con el número de predio "${safeNumeroPredio}"`, 409);
+        }
     }
 
     const dupeName = await dbTurso.execute({ sql: `SELECT id FROM clientes WHERE nombre = ? AND telefono = ?`, args: [nombre, telefono] });
@@ -103,8 +116,21 @@ export async function modificarCliente(clienteId, datos, usuarioId) {
     const safeModificadoPor = Number(usuarioId);
 
     if (safeNumeroPredio && safeNumeroPredio !== prev.numero_predio) {
-        const dupe = await dbTurso.execute({ sql: `SELECT id FROM clientes WHERE numero_predio = ? AND id != ?`, args: [safeNumeroPredio, safeClienteId] });
-        if (dupe.rows.length > 0) throw serviceError(`El número de predio "${safeNumeroPredio}" ya está asignado a otro cliente`, 409);
+        const match = safeNumeroPredio.match(/^(NG|MP|AD)-(\d+)$/);
+        if (match) {
+            const prefix = match[1];
+            const rows = await dbTurso.execute({ sql: `SELECT id, numero_predio FROM clientes WHERE numero_predio LIKE ? AND id != ?`, args: [`${prefix}-%`, safeClienteId] });
+            const dupe = rows.rows.find(r => {
+                if (!r.numero_predio) return false;
+                const m = r.numero_predio.toUpperCase().replace(/\s/g, '').match(/^(NG|MP|AD)-0*(\d+)$/);
+                if (m) return `${m[1]}-${m[2]}` === safeNumeroPredio;
+                return r.numero_predio.toUpperCase() === safeNumeroPredio;
+            });
+            if (dupe) throw serviceError(`El número de predio "${safeNumeroPredio}" ya está asignado a otro cliente`, 409);
+        } else {
+            const dupe = await dbTurso.execute({ sql: `SELECT id FROM clientes WHERE numero_predio = ? AND id != ?`, args: [safeNumeroPredio, safeClienteId] });
+            if (dupe.rows.length > 0) throw serviceError(`El número de predio "${safeNumeroPredio}" ya está asignado a otro cliente`, 409);
+        }
     }
     if (safeTarifaId) {
         const tarifa = await dbTurso.execute({ sql: `SELECT * FROM tarifas WHERE id = ?`, args: [safeTarifaId] });
