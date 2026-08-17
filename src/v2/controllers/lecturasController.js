@@ -1,4 +1,4 @@
-import { registrarLectura, obtenerLecturas, modificarLectura, obtenerLecturasPorRutaYPeriodo, generarFacturasParaLecturasSinFactura, obtenerLecturasPorMedidor, obtenerLecturasPorCliente, estadisticasLecturas } from '../services/lecturasService.js';
+import { registrarLectura, obtenerLecturas, modificarLectura, obtenerLecturasPorRutaYPeriodo, generarFacturasParaLecturasSinFactura, obtenerLecturasPorMedidor, obtenerLecturasPorCliente, estadisticasLecturas, validarCobranzaPeriodoAnterior } from '../services/lecturasService.js';
 
 let sseManager = null;
 let notificationManager = null;
@@ -176,6 +176,18 @@ const lecturasController = {
         } catch (err) {
             console.error('Error obteniendo estadísticas de lecturas:', err);
             res.status(500).json({ error: 'Error al obtener estadísticas' });
+        }
+    },
+
+    validarCobranzaPeriodoAnterior: async (req, res) => {
+        const { ruta_id, periodo } = req.query;
+        if (!ruta_id || !periodo) return res.status(400).json({ error: 'Faltan parámetros: ruta_id y periodo son requeridos' });
+        try {
+            const result = await validarCobranzaPeriodoAnterior(ruta_id, periodo);
+            return res.status(200).json(result);
+        } catch (err) {
+            console.error('Error al validar cobranza del periodo anterior:', err);
+            return res.status(err.status || 500).json({ error: err.message || 'Error interno del servidor' });
         }
     }
 };

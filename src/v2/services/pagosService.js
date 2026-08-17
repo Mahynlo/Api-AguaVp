@@ -42,14 +42,23 @@ export async function getPagoCompleto(pagoId) {
     return result.rows[0] || null;
 }
 
-export function registrarPagoDistribuido({ cliente_id, fecha_pago, cantidad_entregada, metodo_pago, comentario }, usuarioId) {
+export function registrarPagoDistribuido({ cliente_id, fecha_pago, cantidad_entregada, metodo_pago, comentario, excluir_periodo }, usuarioId) {
     const ejecutarDistribucion = sqlite.transaction(() => {
-        const facturasPendientes = sqlite.prepare(`
+        let sqlQuery = `
             SELECT f.id, f.saldo_pendiente, f.fecha_emision, f.fecha_creacion, f.convenio_id, l.periodo
             FROM facturas f LEFT JOIN lecturas l ON f.lectura_id = l.id
             WHERE f.cliente_id = ? AND f.saldo_pendiente > 0 AND f.estado != 'Pagado' AND f.convenio_id IS NULL
-            ORDER BY COALESCE(f.fecha_emision, f.fecha_creacion) ASC, f.id ASC
-        `).all(cliente_id);
+        `;
+        let params = [cliente_id];
+
+        if (excluir_periodo) {
+            sqlQuery += ` AND (l.periodo IS NULL OR l.periodo != ?)`;
+            params.push(excluir_periodo);
+        }
+
+        sqlQuery += ` ORDER BY COALESCE(f.fecha_emision, f.fecha_creacion) ASC, f.id ASC`;
+
+        const facturasPendientes = sqlite.prepare(sqlQuery).all(...params);
 
         if (!facturasPendientes?.length) throw { statusCode: 404, error: 'El cliente no tiene facturas pendientes para aplicar pago' };
 

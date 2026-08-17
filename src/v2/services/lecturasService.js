@@ -364,3 +364,47 @@ export async function estadisticasLecturas() {
         fecha_generacion: new Date().toISOString()
     };
 }
+
+export async function validarCobranzaPeriodoAnterior(ruta_id, periodo) {
+    if (!periodo) throw serviceError('Periodo requerido', 400);
+
+    // Buscar cuál fue realmente el último periodo facturado para esta ruta antes del periodo actual
+    const resultUltimoPeriodo = await dbTurso.execute({
+        sql: `SELECT MAX(l.periodo) as last_period FROM facturas f JOIN lecturas l ON f.lectura_id = l.id WHERE l.ruta_id = ? AND l.periodo < ?`,
+        args: [ruta_id, periodo]
+    });
+    
+    const periodoAnterior = resultUltimoPeriodo.rows[0].last_period;
+    
+    // Si no hay periodo anterior (es la primera vez que se usa el sistema o la ruta), no hay alerta
+    if (!periodoAnterior) {
+        return {
+            periodoAnterior: null,
+            totalPendientes: 0,
+            totalFacturas: 0,
+            porcentajePendiente: 0,
+            alerta: false
+        };
+    }
+
+    const resultPendientes = await dbTurso.execute({
+        sql: `SELECT COUNT(*) as total_pendientes FROM facturas f JOIN lecturas l ON f.lectura_id = l.id WHERE l.ruta_id = ? AND l.periodo = ? AND f.estado != 'Pagado' AND f.estado != 'Cancelado'`,
+        args: [ruta_id, periodoAnterior]
+    });
+    const resultTotal = await dbTurso.execute({
+        sql: `SELECT COUNT(*) as total_facturas FROM facturas f JOIN lecturas l ON f.lectura_id = l.id WHERE l.ruta_id = ? AND l.periodo = ?`,
+        args: [ruta_id, periodoAnterior]
+    });
+
+    const totalPendientes = Number(resultPendientes.rows[0].total_pendientes);
+    const totalFacturas = Number(resultTotal.rows[0].total_facturas);
+    const porcentajePendiente = totalFacturas > 0 ? (totalPendientes / totalFacturas) * 100 : 0;
+
+    return {
+        periodoAnterior,
+        totalPendientes,
+        totalFacturas,
+        porcentajePendiente,
+        alerta: porcentajePendiente > 30 // Alerta si > 30% no ha pagado
+    };
+}

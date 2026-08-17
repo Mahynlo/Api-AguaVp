@@ -1181,6 +1181,8 @@ router.get("/cliente/:id", appKeyMiddleware, authMiddleware, configureSSE, lectu
  */
 router.get("/estadisticas", appKeyMiddleware, authMiddleware, configureSSE, lecturasController.estadisticas);
 
+router.get("/validar-cobranza", appKeyMiddleware, authMiddleware, configureSSE, lecturasController.validarCobranzaPeriodoAnterior);
+
 // ===================================================================
 // EXPORT MODULE
 // ===================================================================
