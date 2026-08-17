@@ -79,7 +79,13 @@ export const registrarPagoDistribuidoSchema = z.object({
     .int('El ID del usuario debe ser un número entero')
     .positive('El ID del usuario debe ser positivo')
     .or(z.string().regex(/^\d+$/).transform(Number))
+    .optional(),
+
+  excluir_periodo: z.string()
+    .regex(/^\d{4}-\d{2}$/, 'El formato del periodo debe ser YYYY-MM')
+    .nullable()
     .optional()
+    .transform(val => val || undefined)
 });
 
 // Esquema para actualizar un pago (basado en modificarPago - TODOS los campos requeridos)
