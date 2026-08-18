@@ -408,3 +408,166 @@ export async function validarCobranzaPeriodoAnterior(ruta_id, periodo) {
         alerta: porcentajePendiente > 30 // Alerta si > 30% no ha pagado
     };
 }
+
+function sumarMesStr(periodo, n = 1) {
+    if (!periodo || !/^\d{4}-\d{2}$/.test(periodo)) return periodo;
+    const [anioStr, mesStr] = periodo.split('-');
+    let anio = parseInt(anioStr, 10);
+    let mes = parseInt(mesStr, 10) + n;
+    while (mes > 12) {
+        mes -= 12;
+        anio += 1;
+    }
+    while (mes < 1) {
+        mes += 12;
+        anio -= 1;
+    }
+    return `${anio}-${String(mes).padStart(2, '0')}`;
+}
+
+export async function obtenerEstadoPeriodosLecturas() {
+    const hoy = nowDate ? nowDate() : new Date().toISOString().slice(0, 10);
+
+    let totalMedidores = 0;
+    try {
+        const rowMed = await dbTurso.execute({ 
+            sql: `SELECT COUNT(*) as cnt FROM medidores WHERE estado_medidor = 'Activo' AND fecha_eliminacion IS NULL` 
+        });
+        totalMedidores = Number(rowMed.rows?.[0]?.cnt || 0);
+    } catch {
+        try {
+            const rowMed = await dbTurso.execute({ sql: `SELECT COUNT(*) as cnt FROM medidores WHERE fecha_eliminacion IS NULL` });
+            totalMedidores = Number(rowMed.rows?.[0]?.cnt || 0);
+        } catch {
+            totalMedidores = 0;
+        }
+    }
+
+    // 1. Resumen de lecturas por período
+    let lecturasRows = [];
+    try {
+        const res = await dbTurso.execute({
+            sql: `
+                SELECT 
+                    periodo,
+                    COUNT(DISTINCT medidor_id) as total_lecturas,
+                    MAX(fecha_lectura) as ultima_fecha
+                FROM lecturas
+                WHERE periodo IS NOT NULL AND periodo != ''
+                GROUP BY periodo
+                ORDER BY periodo ASC
+            `
+        });
+        lecturasRows = res.rows || [];
+    } catch (e) {
+        console.warn("Consulta a tabla lecturas omitida:", e.message);
+    }
+
+    // 2. Resumen de facturas por período (uniendo con lecturas para obtener el periodo)
+    let facturasRows = [];
+    try {
+        const res = await dbTurso.execute({
+            sql: `
+                SELECT 
+                    l.periodo,
+                    COUNT(f.id) as total_facturas,
+                    SUM(CASE WHEN LOWER(f.estado) = 'pagado' THEN 1 ELSE 0 END) as facturas_pagadas,
+                    SUM(CASE WHEN LOWER(f.estado) != 'pagado' THEN 1 ELSE 0 END) as facturas_pendientes,
+                    MIN(f.fecha_vencimiento) as min_vencimiento,
+                    MAX(f.fecha_vencimiento) as max_vencimiento,
+                    MAX(f.fecha_emision) as ultima_emision
+                FROM facturas f
+                JOIN lecturas l ON f.lectura_id = l.id
+                WHERE l.periodo IS NOT NULL AND l.periodo != ''
+                GROUP BY l.periodo
+                ORDER BY l.periodo ASC
+            `
+        });
+        facturasRows = res.rows || [];
+    } catch (e) {
+        console.warn("Consulta a tabla facturas omitida:", e.message);
+    }
+
+    const periodosInfo = {};
+    const todosPeriodos = new Set();
+
+    for (const r of lecturasRows) {
+        if (r.periodo) todosPeriodos.add(r.periodo);
+    }
+    for (const f of facturasRows) {
+        if (f.periodo) todosPeriodos.add(f.periodo);
+    }
+
+    const lecturasMap = new Map(lecturasRows.map(r => [r.periodo, r]));
+    const facturasMap = new Map(facturasRows.map(f => [f.periodo, f]));
+
+    const periodosOrdenados = Array.from(todosPeriodos).sort();
+
+    let ultimoPeriodoRegistrado = null;
+    let ultimoPeriodoFacturado = null;
+
+    for (const p of periodosOrdenados) {
+        const lRow = lecturasMap.get(p);
+        const fRow = facturasMap.get(p);
+
+        const totalLecturas = Number(lRow?.total_lecturas || 0);
+        const totalFacturas = Number(fRow?.total_facturas || 0);
+        const facturasPagadas = Number(fRow?.facturas_pagadas || 0);
+        const facturasPendientes = Number(fRow?.facturas_pendientes || 0);
+        const fechaVencimiento = fRow?.max_vencimiento || null;
+        const fechaEmision = fRow?.ultima_emision || null;
+
+        const tieneLecturas = totalLecturas > 0;
+        const tieneFacturas = totalFacturas > 0;
+
+        const completado = tieneFacturas || (tieneLecturas && (totalMedidores > 0 ? totalLecturas >= totalMedidores : true));
+        const registrado = tieneLecturas || tieneFacturas;
+
+        let vencida = false;
+        let diasParaVencer = null;
+        if (fechaVencimiento) {
+            const diffTime = new Date(fechaVencimiento).getTime() - new Date(hoy).getTime();
+            diasParaVencer = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+            vencida = diasParaVencer < 0;
+        }
+
+        periodosInfo[p] = {
+            periodo: p,
+            totalLecturas,
+            totalFacturas,
+            facturasPagadas,
+            facturasPendientes,
+            fechaVencimiento,
+            fechaEmision,
+            vencida,
+            diasParaVencer,
+            completado,
+            registrado,
+            tieneFacturas,
+            tieneLecturas,
+            estado: tieneFacturas 
+                ? (vencida ? 'facturado_vencido' : 'facturado_vigente')
+                : (completado ? 'completado' : 'parcial'),
+            ultimaFecha: lRow?.ultima_fecha || fechaEmision
+        };
+
+        if (registrado) {
+            ultimoPeriodoRegistrado = p;
+        }
+        if (tieneFacturas) {
+            ultimoPeriodoFacturado = p;
+        }
+    }
+
+    const ahora = new Date();
+    const periodoActualMes = `${ahora.getFullYear()}-${String(ahora.getMonth() + 1).padStart(2, '0')}`;
+    let siguientePeriodo = ultimoPeriodoRegistrado ? sumarMesStr(ultimoPeriodoRegistrado, 1) : periodoActualMes;
+
+    return {
+        success: true,
+        periodos: periodosInfo,
+        ultimoPeriodoRegistrado,
+        ultimoPeriodoFacturado,
+        siguientePeriodo
+    };
+}

@@ -1,4 +1,4 @@
-import { registrarLectura, obtenerLecturas, modificarLectura, obtenerLecturasPorRutaYPeriodo, generarFacturasParaLecturasSinFactura, obtenerLecturasPorMedidor, obtenerLecturasPorCliente, estadisticasLecturas, validarCobranzaPeriodoAnterior } from '../services/lecturasService.js';
+import { registrarLectura, obtenerLecturas, modificarLectura, obtenerLecturasPorRutaYPeriodo, generarFacturasParaLecturasSinFactura, obtenerLecturasPorMedidor, obtenerLecturasPorCliente, estadisticasLecturas, validarCobranzaPeriodoAnterior, obtenerEstadoPeriodosLecturas } from '../services/lecturasService.js';
 
 let sseManager = null;
 let notificationManager = null;
@@ -187,6 +187,16 @@ const lecturasController = {
             return res.status(200).json(result);
         } catch (err) {
             console.error('Error al validar cobranza del periodo anterior:', err);
+            return res.status(err.status || 500).json({ error: err.message || 'Error interno del servidor' });
+        }
+    },
+
+    obtenerEstadoPeriodos: async (req, res) => {
+        try {
+            const result = await obtenerEstadoPeriodosLecturas();
+            return res.status(200).json(result);
+        } catch (err) {
+            console.error('Error al obtener estado de periodos:', err);
             return res.status(err.status || 500).json({ error: err.message || 'Error interno del servidor' });
         }
     }
