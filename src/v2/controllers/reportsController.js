@@ -49,6 +49,7 @@ const ReportsController = {
                     f.estado as estado_factura,
                     f.saldo_pendiente,
                     c.id as cliente_id,
+                    c.numero_predio,
                     c.nombre as cliente_nombre,
                     c.direccion,
                     c.ciudad as pueblo,
@@ -200,7 +201,8 @@ const ReportsController = {
                     datos_cliente: {
                         nombre: f.cliente_nombre,
                         direccion: f.direccion,
-                        pueblo: f.pueblo
+                        pueblo: f.pueblo,
+                        numero_predio: f.numero_predio || null
                     },
                     informacion_servicio: {
                         numero_medidor: f.medidor_serial,
