@@ -483,11 +483,32 @@ const rutasController = {
     },
 
     /**
-     * Obtener ruta con medidores (V1 compatible)
+     * Obtener ruta con medidores (V1 compatible y V2 enriquecido con período)
      */
     obtenerRutaConMedidores: async (req, res) => {
         try {
             const { ruta_id } = req.params;
+            const periodoParam = req.query.periodo;
+
+            // Determinar período a usar si no se proporcionó
+            let periodo = periodoParam;
+            if (!periodo) {
+                const periodoQuery = `
+                    SELECT COALESCE(?, (
+                        SELECT 
+                            CASE 
+                                WHEN strftime('%Y-%m', 'now') > MAX(periodo) THEN strftime('%Y-%m', 'now')
+                                ELSE MAX(periodo)
+                            END 
+                        FROM lecturas
+                    )) AS periodo_a_usar
+                `;
+                const periodoResult = await dbTurso.execute({
+                    sql: periodoQuery,
+                    args: [null]
+                });
+                periodo = periodoResult.rows[0]?.periodo_a_usar || new Date().toISOString().slice(0, 7);
+            }
 
             const query = `
                 SELECT 
@@ -508,45 +529,65 @@ const rutasController = {
                     c.direccion AS cliente_direccion,
                     c.telefono AS cliente_telefono,
                     c.estado_cliente,
+                    -- Datos de la lectura tomada específicamente en este período:
+                    lp.id AS lectura_id_periodo,
+                    lp.lectura_actual AS lectura_actual_periodo,
+                    lp.lectura_anterior AS lectura_anterior_periodo,
+                    lp.consumo_m3 AS consumo_periodo,
+                    lp.vuelta_cero AS vuelta_cero_periodo,
+                    lp.estado AS estado_lectura_periodo,
+                    lp.fecha_lectura AS fecha_lectura_periodo,
+                    -- Lectura anterior de referencia (la última registrada ANTES de este período):
                     (
-                        SELECT lectura_actual
-                        FROM lecturas
-                        WHERE medidor_id = m.id AND lectura_actual IS NOT NULL
-                        ORDER BY fecha_lectura DESC
+                        SELECT l_ant.lectura_actual
+                        FROM lecturas l_ant
+                        WHERE l_ant.medidor_id = m.id
+                          AND (l_ant.periodo < ? OR (l_ant.periodo IS NULL AND l_ant.fecha_lectura < ?))
+                          AND l_ant.lectura_actual IS NOT NULL
+                        ORDER BY l_ant.periodo DESC, l_ant.fecha_lectura DESC
+                        LIMIT 1
+                    ) AS lectura_anterior_referencia,
+                    -- Última lectura absoluta registrada (fallback para compatibilidad):
+                    (
+                        SELECT l_ult.lectura_actual
+                        FROM lecturas l_ult
+                        WHERE l_ult.medidor_id = m.id AND l_ult.lectura_actual IS NOT NULL
+                        ORDER BY l_ult.fecha_lectura DESC
                         LIMIT 1
                     ) AS ultima_lectura_real,
                     (
-                        SELECT lectura_anterior
-                        FROM lecturas
-                        WHERE medidor_id = m.id AND lectura_actual IS NOT NULL
-                        ORDER BY fecha_lectura DESC
+                        SELECT l_ult.lectura_anterior
+                        FROM lecturas l_ult
+                        WHERE l_ult.medidor_id = m.id AND l_ult.lectura_actual IS NOT NULL
+                        ORDER BY l_ult.fecha_lectura DESC
                         LIMIT 1
                     ) AS ultima_lectura_anterior_real,
                     (
-                        SELECT id
-                        FROM lecturas
-                        WHERE medidor_id = m.id AND lectura_actual IS NOT NULL
-                        ORDER BY fecha_lectura DESC
+                        SELECT l_ult.id
+                        FROM lecturas l_ult
+                        WHERE l_ult.medidor_id = m.id AND l_ult.lectura_actual IS NOT NULL
+                        ORDER BY l_ult.fecha_lectura DESC
                         LIMIT 1
                     ) AS ultima_lectura_id_real
                 FROM rutas r
                 JOIN rutas_puntos rp ON r.id = rp.ruta_id
                 JOIN medidores m ON rp.medidor_id = m.id
                 LEFT JOIN clientes c ON m.cliente_id = c.id
+                LEFT JOIN lecturas lp ON lp.medidor_id = m.id AND lp.periodo = ?
                 WHERE r.id = ?
                 ORDER BY rp.orden ASC
             `;
 
             const result = await dbTurso.execute({
                 sql: query,
-                args: [ruta_id]
+                args: [periodo, `${periodo}-01`, periodo, ruta_id]
             });
 
             if (result.rows.length === 0) {
                 return res.status(404).json({ error: 'Ruta no encontrada o sin medidores' });
             }
 
-            // Convertir BigInt a Number y construir respuesta igual que V1
+            // Convertir BigInt a Number y construir respuesta compatible
             const rows = result.rows.map(row => ({
                 ...row,
                 ruta_id: Number(row.ruta_id),
@@ -558,13 +599,18 @@ const rutasController = {
                 ruta_id: rows[0].ruta_id,
                 nombre: rows[0].ruta_nombre,
                 descripcion: rows[0].ruta_descripcion,
+                periodo: periodo,
                 puntos: rows.map(r => {
-                    // Lectura anterior disponible: última lectura real > lectura_base > null
-                    const lectAnterior = r.ultima_lectura_real !== null && r.ultima_lectura_real !== undefined
-                        ? Number(r.ultima_lectura_real)
-                        : (r.lectura_base !== null && r.lectura_base !== undefined
-                            ? Number(r.lectura_base)
-                            : null);
+                    const tieneLectura = r.lectura_id_periodo !== null && r.lectura_id_periodo !== undefined;
+                    const lectActualNum = r.lectura_actual_periodo !== null && r.lectura_actual_periodo !== undefined ? Number(r.lectura_actual_periodo) : null;
+                    const lectAnteriorRegistrada = r.lectura_anterior_periodo !== null && r.lectura_anterior_periodo !== undefined ? Number(r.lectura_anterior_periodo) : null;
+                    const consumoRegistrado = r.consumo_periodo !== null && r.consumo_periodo !== undefined ? Number(r.consumo_periodo) : null;
+
+                    // Línea base para nueva lectura: anterior histórica a este período > lectura_base > null
+                    const lectAnteriorReferencia = r.lectura_anterior_referencia !== null && r.lectura_anterior_referencia !== undefined
+                        ? Number(r.lectura_anterior_referencia)
+                        : (r.lectura_base !== null && r.lectura_base !== undefined ? Number(r.lectura_base) : null);
+
                     return {
                         orden: r.orden,
                         medidor_id: r.medidor_id,
@@ -575,13 +621,19 @@ const rutasController = {
                         estado_medidor: r.estado_medidor,
                         lectura_base: r.lectura_base !== null && r.lectura_base !== undefined ? Number(r.lectura_base) : null,
                         capacidad_maxima: r.capacidad_maxima !== null && r.capacidad_maxima !== undefined ? Number(r.capacidad_maxima) : null,
-                        lectura_anterior_disponible: lectAnterior,  // null = primera lectura sin referencia
-                        ultima_lectura_anterior: r.ultima_lectura_anterior_real !== null && r.ultima_lectura_anterior_real !== undefined
-                            ? Number(r.ultima_lectura_anterior_real)
-                            : null,
-                        ultima_lectura_id: r.ultima_lectura_id_real !== null && r.ultima_lectura_id_real !== undefined
-                            ? Number(r.ultima_lectura_id_real)
-                            : null,
+                        // Datos específicos del período consultado:
+                        tiene_lectura: tieneLectura ? 1 : 0,
+                        lectura_actual: lectActualNum,
+                        lectura_anterior: lectAnteriorRegistrada,
+                        consumo_m3: consumoRegistrado,
+                        vuelta_cero: r.vuelta_cero_periodo === 1,
+                        lectura_id: r.lectura_id_periodo ? Number(r.lectura_id_periodo) : null,
+                        estado_lectura: r.estado_lectura_periodo || (tieneLectura ? 'pendiente' : null),
+                        periodo_consultado: periodo,
+                        // Campos legacy compatibles:
+                        lectura_anterior_disponible: lectAnteriorReferencia,
+                        ultima_lectura_anterior: lectAnteriorRegistrada !== null ? lectAnteriorRegistrada : lectAnteriorReferencia,
+                        ultima_lectura_id: r.lectura_id_periodo ? Number(r.lectura_id_periodo) : (r.ultima_lectura_id_real ? Number(r.ultima_lectura_id_real) : null),
                         cliente_id: r.cliente_id,
                         cliente_nombre: r.cliente_nombre,
                         cliente_direccion: r.cliente_direccion,

@@ -71,7 +71,11 @@ export async function registrarLectura({ medidor_id, ruta_id, lectura_actual, vu
         const lectActual = parseFloat(lectura_actual);
         if (isNaN(lectActual) || lectActual < 0) throw serviceError('lectura_actual debe ser un número >= 0', 400);
 
-        const prevResult = await dbTurso.execute({ sql: `SELECT lectura_actual FROM lecturas WHERE medidor_id = ? AND lectura_actual IS NOT NULL ORDER BY fecha_lectura DESC LIMIT 1`, args: [medidor_id] });
+        const prevQuery = periodo
+            ? `SELECT lectura_actual FROM lecturas WHERE medidor_id = ? AND (periodo < ? OR (periodo IS NULL AND fecha_lectura < ?)) AND lectura_actual IS NOT NULL ORDER BY periodo DESC, fecha_lectura DESC LIMIT 1`
+            : `SELECT lectura_actual FROM lecturas WHERE medidor_id = ? AND lectura_actual IS NOT NULL ORDER BY fecha_lectura DESC LIMIT 1`;
+        const prevArgs = periodo ? [medidor_id, periodo, `${periodo}-01`] : [medidor_id];
+        const prevResult = await dbTurso.execute({ sql: prevQuery, args: prevArgs });
         let lectAnterior = null;
         if (prevResult.rows.length && prevResult.rows[0].lectura_actual !== null) {
             lectAnterior = parseFloat(prevResult.rows[0].lectura_actual);
@@ -505,6 +509,7 @@ export async function obtenerEstadoPeriodosLecturas() {
 
     let ultimoPeriodoRegistrado = null;
     let ultimoPeriodoFacturado = null;
+    let ultimoPeriodoCompleto = null;
 
     for (const p of periodosOrdenados) {
         const lRow = lecturasMap.get(p);
@@ -557,17 +562,36 @@ export async function obtenerEstadoPeriodosLecturas() {
         if (tieneFacturas) {
             ultimoPeriodoFacturado = p;
         }
+        if (completado || tieneFacturas) {
+            ultimoPeriodoCompleto = p;
+        }
     }
 
     const ahora = new Date();
     const periodoActualMes = `${ahora.getFullYear()}-${String(ahora.getMonth() + 1).padStart(2, '0')}`;
-    let siguientePeriodo = ultimoPeriodoRegistrado ? sumarMesStr(ultimoPeriodoRegistrado, 1) : periodoActualMes;
+    
+    // Determinar siguiente período a capturar:
+    // 1. Si no hay períodos registrados, empezar en el mes actual.
+    // 2. Si el último período registrado está incompleto ('parcial'), ese es el período que aún se debe capturar.
+    // 3. Si el último período registrado ya está completado o facturado, avanzar al mes siguiente.
+    let siguientePeriodo;
+    if (!ultimoPeriodoRegistrado) {
+        siguientePeriodo = periodoActualMes;
+    } else {
+        const infoUltimo = periodosInfo[ultimoPeriodoRegistrado];
+        if (infoUltimo && (infoUltimo.completado || infoUltimo.tieneFacturas)) {
+            siguientePeriodo = sumarMesStr(ultimoPeriodoRegistrado, 1);
+        } else {
+            siguientePeriodo = ultimoPeriodoRegistrado;
+        }
+    }
 
     return {
         success: true,
         periodos: periodosInfo,
         ultimoPeriodoRegistrado,
         ultimoPeriodoFacturado,
+        ultimoPeriodoCompleto,
         siguientePeriodo
     };
 }
