@@ -124,6 +124,9 @@ class AguaVPServer extends EventEmitter {
             // Seed: crear superadmin por defecto si no hay usuarios
             this.seedDefaultUser(sqlite);
 
+            // Auto-reparar trazabilidad de medidores desvinculados previamente
+            this.repararTrazabilidadMedidores(sqlite);
+
             sqlite.pragma('foreign_keys = ON');
             sqlite.close();
 
@@ -185,6 +188,39 @@ class AguaVPServer extends EventEmitter {
             this.emit('error', `Error al crear usuario por defecto: ${error.message}`);
             // No lanzar — el servidor puede funcionar sin seed, el usuario
             // puede crear cuentas manualmente via API si tiene acceso
+        }
+    }
+
+    /**
+     * Repara la trazabilidad de medidores históricos que quedaron con cliente_id = NULL
+     * al haberse desvinculado previamente, restaurando la vinculación con el cliente al que
+     * pertenecieron sus lecturas y facturas.
+     */
+    repararTrazabilidadMedidores(sqlite) {
+        try {
+            const info = sqlite.prepare(`
+                UPDATE medidores 
+                SET cliente_id = (
+                    SELECT f.cliente_id 
+                    FROM lecturas l 
+                    JOIN facturas f ON f.lectura_id = l.id 
+                    WHERE l.medidor_id = medidores.id 
+                    ORDER BY l.fecha_lectura DESC, l.id DESC 
+                    LIMIT 1
+                )
+                WHERE cliente_id IS NULL 
+                  AND id IN (
+                      SELECT DISTINCT l.medidor_id 
+                      FROM lecturas l 
+                      JOIN facturas f ON f.lectura_id = l.id
+                  )
+            `).run();
+
+            if (info && info.changes > 0) {
+                this.emit('log', `🔧 Trazabilidad restaurada para ${info.changes} medidor(es) histórico(s)`);
+            }
+        } catch (e) {
+            this.emit('log', `⚠️ Verificación de trazabilidad de medidores: ${e.message}`);
         }
     }
 

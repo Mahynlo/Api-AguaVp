@@ -35,7 +35,32 @@ const mapLectura = (row) => ({
     ruta_nombre: row.ruta_nombre
 });
 
-const BASE_LECTURAS = `SELECT l.id, l.medidor_id, l.ruta_id, l.consumo_m3, l.fecha_lectura, l.periodo, l.estado, l.modificado_por, l.fecha_creacion, u.username AS modificado_por_nombre, m.numero_serie AS medidor_numero, c.id AS cliente_id, c.nombre AS cliente_nombre, r.nombre AS ruta_nombre FROM lecturas l LEFT JOIN usuarios u ON l.modificado_por = u.id LEFT JOIN medidores m ON l.medidor_id = m.id LEFT JOIN clientes c ON m.cliente_id = c.id LEFT JOIN rutas r ON l.ruta_id = r.id`;
+const BASE_LECTURAS = `SELECT 
+    l.id, 
+    l.medidor_id, 
+    l.ruta_id, 
+    l.consumo_m3, 
+    l.fecha_lectura, 
+    l.periodo, 
+    l.estado, 
+    l.modificado_por, 
+    l.fecha_creacion, 
+    u.username AS modificado_por_nombre, 
+    m.numero_serie AS medidor_numero, 
+    COALESCE(c.id, c_hist.id, c_fac.id) AS cliente_id, 
+    COALESCE(c.nombre, c_hist.nombre, c_fac.nombre) AS cliente_nombre, 
+    r.nombre AS ruta_nombre 
+FROM lecturas l 
+LEFT JOIN usuarios u ON l.modificado_por = u.id 
+LEFT JOIN medidores m ON l.medidor_id = m.id 
+LEFT JOIN clientes c ON m.cliente_id = c.id 
+LEFT JOIN cliente_medidor_historial cmh ON cmh.medidor_id = m.id AND cmh.id = (
+    SELECT id FROM cliente_medidor_historial WHERE medidor_id = m.id ORDER BY id DESC LIMIT 1
+)
+LEFT JOIN clientes c_hist ON cmh.cliente_id = c_hist.id
+LEFT JOIN facturas f_fac ON f_fac.lectura_id = l.id
+LEFT JOIN clientes c_fac ON f_fac.cliente_id = c_fac.id
+LEFT JOIN rutas r ON l.ruta_id = r.id`;
 
 export async function registrarLectura({ medidor_id, ruta_id, lectura_actual, vuelta_cero = false, consumo_m3: consumo_m3_legacy, fecha_lectura, periodo }, usuarioId) {
     const medidorResult = await dbTurso.execute({ sql: `SELECT id, lectura_base, capacidad_maxima FROM medidores WHERE id = ?`, args: [medidor_id] });
@@ -163,7 +188,24 @@ export async function modificarLectura(id, { medidor_id, lectura_actual, consumo
 
 export async function obtenerLecturasPorRutaYPeriodo({ ruta_id, periodo }) {
     const result = await dbTurso.execute({
-        sql: `SELECT l.id, l.fecha_lectura, l.consumo_m3, l.periodo, m.numero_serie, c.nombre AS cliente FROM lecturas l INNER JOIN medidores m ON l.medidor_id = m.id INNER JOIN clientes c ON m.cliente_id = c.id WHERE l.ruta_id = ? AND l.periodo = ? ORDER BY l.fecha_lectura ASC`,
+        sql: `SELECT 
+                l.id, 
+                l.fecha_lectura, 
+                l.consumo_m3, 
+                l.periodo, 
+                m.numero_serie, 
+                COALESCE(c.nombre, c_hist.nombre, c_fac.nombre, 'Sin Asignar') AS cliente 
+              FROM lecturas l 
+              INNER JOIN medidores m ON l.medidor_id = m.id 
+              LEFT JOIN clientes c ON m.cliente_id = c.id 
+              LEFT JOIN cliente_medidor_historial cmh ON cmh.medidor_id = m.id AND cmh.id = (
+                  SELECT id FROM cliente_medidor_historial WHERE medidor_id = m.id ORDER BY id DESC LIMIT 1
+              )
+              LEFT JOIN clientes c_hist ON cmh.cliente_id = c_hist.id
+              LEFT JOIN facturas f_fac ON f_fac.lectura_id = l.id
+              LEFT JOIN clientes c_fac ON f_fac.cliente_id = c_fac.id
+              WHERE l.ruta_id = ? AND l.periodo = ? 
+              ORDER BY l.fecha_lectura ASC`,
         args: [ruta_id, periodo]
     });
     return { lecturas: result.rows.map(r => ({ id: Number(r.id), fecha_lectura: r.fecha_lectura, consumo_m3: Number(r.consumo_m3), periodo: r.periodo, numero_serie: r.numero_serie, cliente: r.cliente })) };
@@ -206,7 +248,7 @@ export async function generarFacturasParaLecturasSinFactura({ periodo, ruta_id, 
     const motivoRecalculo = typeof motivoRaw === 'string' ? motivoRaw.trim() : '';
     const fecha_emision = fechaRaw || nowDate();
 
-    const condiciones = ['l.periodo = ?', 'c.tarifa_id IS NOT NULL', 'm.cliente_id IS NOT NULL'];
+    const condiciones = ['l.periodo = ?', 'c.tarifa_id IS NOT NULL', 'COALESCE(m.cliente_id, f.cliente_id, cmh.cliente_id) IS NOT NULL'];
     if (!recalcular) {
         condiciones.push('f.id IS NULL');
         condiciones.push("l.estado = 'pendiente'");
@@ -217,7 +259,27 @@ export async function generarFacturasParaLecturasSinFactura({ periodo, ruta_id, 
     if (ruta_id) { condiciones.push('l.ruta_id = ?'); queryArgs.push(ruta_id); }
 
     const result = await dbTurso.execute({
-        sql: `SELECT l.id as lectura_id, l.consumo_m3, l.fecha_lectura, l.periodo, m.cliente_id, c.tarifa_id, c.nombre as cliente_nombre, m.numero_serie as medidor_numero, f.id as factura_existente_id, f.total as factura_existente_total, f.saldo_pendiente as factura_existente_saldo, f.estado as factura_existente_estado FROM lecturas l LEFT JOIN medidores m ON l.medidor_id = m.id LEFT JOIN clientes c ON m.cliente_id = c.id LEFT JOIN facturas f ON l.id = f.lectura_id WHERE ${condiciones.join(' AND ')}`,
+        sql: `SELECT 
+                l.id as lectura_id, 
+                l.consumo_m3, 
+                l.fecha_lectura, 
+                l.periodo, 
+                COALESCE(m.cliente_id, f.cliente_id, cmh.cliente_id) as cliente_id, 
+                c.tarifa_id, 
+                COALESCE(c.nombre, 'Sin Asignar') as cliente_nombre, 
+                m.numero_serie as medidor_numero, 
+                f.id as factura_existente_id, 
+                f.total as factura_existente_total, 
+                f.saldo_pendiente as factura_existente_saldo, 
+                f.estado as factura_existente_estado 
+              FROM lecturas l 
+              LEFT JOIN medidores m ON l.medidor_id = m.id 
+              LEFT JOIN facturas f ON l.id = f.lectura_id 
+              LEFT JOIN cliente_medidor_historial cmh ON cmh.medidor_id = m.id AND cmh.id = (
+                  SELECT id FROM cliente_medidor_historial WHERE medidor_id = m.id ORDER BY id DESC LIMIT 1
+              )
+              LEFT JOIN clientes c ON c.id = COALESCE(m.cliente_id, f.cliente_id, cmh.cliente_id) 
+              WHERE ${condiciones.join(' AND ')}`,
         args: queryArgs
     });
     const lecturasSinFactura = result.rows || [];
@@ -279,7 +341,20 @@ export async function generarFacturasParaLecturasSinFactura({ periodo, ruta_id, 
 
 export async function obtenerLecturasPorMedidor(medidor_id, limit = 100) {
     const medidorResult = await dbTurso.execute({
-        sql: `SELECT m.id, m.numero_serie, m.cliente_id, c.nombre as cliente_nombre FROM medidores m LEFT JOIN clientes c ON m.cliente_id = c.id WHERE m.id = ?`,
+        sql: `SELECT m.id, m.numero_serie, 
+                     COALESCE(m.cliente_id, cmh.cliente_id, f_fac.cliente_id) AS cliente_id, 
+                     COALESCE(c.nombre, c_hist.nombre, c_fac.nombre) AS cliente_nombre 
+              FROM medidores m 
+              LEFT JOIN clientes c ON m.cliente_id = c.id 
+              LEFT JOIN cliente_medidor_historial cmh ON cmh.medidor_id = m.id AND cmh.id = (
+                  SELECT id FROM cliente_medidor_historial WHERE medidor_id = m.id ORDER BY id DESC LIMIT 1
+              )
+              LEFT JOIN clientes c_hist ON cmh.cliente_id = c_hist.id
+              LEFT JOIN lecturas l_fac ON l_fac.medidor_id = m.id
+              LEFT JOIN facturas f_fac ON f_fac.lectura_id = l_fac.id
+              LEFT JOIN clientes c_fac ON f_fac.cliente_id = c_fac.id
+              WHERE m.id = ?
+              LIMIT 1`,
         args: [medidor_id]
     });
     if (!medidorResult.rows.length) throw serviceError('Medidor no encontrado', 404);
@@ -311,7 +386,14 @@ export async function obtenerLecturasPorCliente(cliente_id, periodo) {
     if (!clienteResult.rows.length) throw serviceError('Cliente no encontrado', 404);
     const cliente = clienteResult.rows[0];
 
-    const medidoresResult = await dbTurso.execute({ sql: `SELECT id, numero_serie, ubicacion FROM medidores WHERE cliente_id = ?`, args: [cliente_id] });
+    const medidoresResult = await dbTurso.execute({
+        sql: `SELECT DISTINCT m.id, m.numero_serie, m.ubicacion 
+              FROM medidores m
+              WHERE m.cliente_id = ?
+                 OR m.id IN (SELECT medidor_id FROM cliente_medidor_historial WHERE cliente_id = ?)
+                 OR m.id IN (SELECT l.medidor_id FROM facturas f JOIN lecturas l ON f.lectura_id = l.id WHERE f.cliente_id = ?)`,
+        args: [cliente_id, cliente_id, cliente_id]
+    });
     if (!medidoresResult.rows.length) throw Object.assign(serviceError('Cliente no tiene medidores asignados', 404), { cliente: { id: Number(cliente.id), nombre: cliente.nombre } });
 
     const medidores = medidoresResult.rows.map(m => Number(m.id));

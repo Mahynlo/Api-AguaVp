@@ -971,8 +971,15 @@ const ReportsController = {
                     m.ubicacion as medidor_ubicacion,
                     m.latitud,
                     m.longitud,
-                    l_ant.consumo_m3 as consumo_anterior,
-                    l_ant.lectura_actual as lectura_fisica_anterior,
+                    COALESCE(
+                        l_ant.consumo_m3,
+                        (SELECT lf.consumo_m3 FROM facturas f JOIN lecturas lf ON f.lectura_id = lf.id WHERE f.cliente_id = c.id AND lf.periodo = ? LIMIT 1)
+                    ) as consumo_anterior,
+                    COALESCE(
+                        l_ant.lectura_actual,
+                        (SELECT lf.lectura_actual FROM facturas f JOIN lecturas lf ON f.lectura_id = lf.id WHERE f.cliente_id = c.id AND lf.periodo = ? LIMIT 1),
+                        m.lectura_base
+                    ) as lectura_fisica_anterior,
                     0 as lectura_anterior_calculada
                 FROM clientes c
                 LEFT JOIN medidores m ON c.id = m.cliente_id AND m.estado_medidor != 'Retirado'
@@ -980,7 +987,7 @@ const ReportsController = {
                 WHERE c.estado_cliente = 'Activo'
             `;
 
-            const params = [mesAnterior];
+            const params = [mesAnterior, mesAnterior, mesAnterior];
 
             if (localidad) {
                 query += ` AND c.ciudad = ?`;

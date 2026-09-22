@@ -323,23 +323,67 @@ const rutasController = {
             // Obtener medidores de TODAS las rutas de la página en una sola query (evita N+1)
             const idsPlaceholder2 = rutasPageIds.map(() => '?').join(',');
             const medidoresBulkQuery = `
+                WITH puntos_ruta AS (
+                    SELECT
+                        rp.ruta_id,
+                        rp.medidor_id,
+                        rp.orden
+                    FROM rutas_puntos rp
+                    WHERE rp.ruta_id IN (${idsPlaceholder2})
+
+                    UNION
+
+                    SELECT
+                        l.ruta_id,
+                        l.medidor_id,
+                        COALESCE(
+                            rp.orden,
+                            (
+                                SELECT rp2.orden 
+                                FROM rutas_puntos rp2 
+                                JOIN medidores m2 ON rp2.medidor_id = m2.id 
+                                WHERE m2.cliente_id = COALESCE(
+                                    m.cliente_id,
+                                    (SELECT cmh.cliente_id FROM cliente_medidor_historial cmh WHERE cmh.medidor_id = l.medidor_id ORDER BY cmh.id DESC LIMIT 1),
+                                    (SELECT f.cliente_id FROM facturas f WHERE f.lectura_id = l.id LIMIT 1)
+                                )
+                                AND rp2.ruta_id = l.ruta_id 
+                                LIMIT 1
+                            ),
+                            CASE 
+                                WHEN INSTR(c_pred.numero_predio, '-') > 0 
+                                THEN CAST(SUBSTR(c_pred.numero_predio, INSTR(c_pred.numero_predio, '-') + 1) AS INTEGER) 
+                                ELSE CAST(c_pred.numero_predio AS INTEGER) 
+                            END,
+                            9999
+                        ) AS orden
+                    FROM lecturas l
+                    JOIN medidores m ON l.medidor_id = m.id
+                    LEFT JOIN clientes c_pred ON c_pred.id = COALESCE(
+                        m.cliente_id,
+                        (SELECT cmh.cliente_id FROM cliente_medidor_historial cmh WHERE cmh.medidor_id = l.medidor_id ORDER BY cmh.id DESC LIMIT 1),
+                        (SELECT f.cliente_id FROM facturas f WHERE f.lectura_id = l.id LIMIT 1)
+                    )
+                    LEFT JOIN rutas_puntos rp ON rp.medidor_id = l.medidor_id AND rp.ruta_id = l.ruta_id
+                    WHERE l.periodo = ?
+                      AND l.ruta_id IN (${idsPlaceholder2})
+                )
                 SELECT
-                    rp.ruta_id,
+                    pr.ruta_id,
                     m.numero_serie,
                     m.id AS medidor_id,
                     CASE WHEN l.id IS NOT NULL THEN 1 ELSE 0 END AS tiene_lectura
-                FROM rutas_puntos rp
-                JOIN medidores m ON rp.medidor_id = m.id
+                FROM puntos_ruta pr
+                JOIN medidores m ON pr.medidor_id = m.id
                 LEFT JOIN lecturas l ON l.medidor_id = m.id
-                    AND l.ruta_id = rp.ruta_id
+                    AND l.ruta_id = pr.ruta_id
                     AND l.periodo = ?
-                WHERE rp.ruta_id IN (${idsPlaceholder2})
-                ORDER BY rp.ruta_id, rp.orden ASC
+                ORDER BY pr.ruta_id, pr.orden ASC
             `;
 
             const medidoresBulkResult = await dbTurso.execute({
                 sql: medidoresBulkQuery,
-                args: [periodo, ...rutasPageIds]
+                args: [...rutasPageIds, periodo, ...rutasPageIds, periodo]
             });
 
             // Obtener cuántas facturas existen por ruta en el período mostrado
@@ -511,11 +555,55 @@ const rutasController = {
             }
 
             const query = `
+                WITH puntos_ruta AS (
+                    SELECT 
+                        rp.ruta_id, 
+                        rp.medidor_id, 
+                        rp.orden 
+                    FROM rutas_puntos rp 
+                    WHERE rp.ruta_id = ?
+
+                    UNION
+
+                    SELECT 
+                        l.ruta_id, 
+                        l.medidor_id, 
+                        COALESCE(
+                            rp.orden,
+                            (
+                                SELECT rp2.orden 
+                                FROM rutas_puntos rp2 
+                                JOIN medidores m2 ON rp2.medidor_id = m2.id 
+                                WHERE m2.cliente_id = COALESCE(
+                                    m_hist.cliente_id,
+                                    (SELECT cmh.cliente_id FROM cliente_medidor_historial cmh WHERE cmh.medidor_id = l.medidor_id ORDER BY cmh.id DESC LIMIT 1),
+                                    (SELECT f.cliente_id FROM facturas f WHERE f.lectura_id = l.id LIMIT 1)
+                                )
+                                AND rp2.ruta_id = l.ruta_id 
+                                LIMIT 1
+                            ),
+                            CASE 
+                                WHEN INSTR(c_pred.numero_predio, '-') > 0 
+                                THEN CAST(SUBSTR(c_pred.numero_predio, INSTR(c_pred.numero_predio, '-') + 1) AS INTEGER) 
+                                ELSE CAST(c_pred.numero_predio AS INTEGER) 
+                            END,
+                            9999
+                        ) AS orden 
+                    FROM lecturas l 
+                    JOIN medidores m_hist ON l.medidor_id = m_hist.id
+                    LEFT JOIN clientes c_pred ON c_pred.id = COALESCE(
+                        m_hist.cliente_id,
+                        (SELECT cmh.cliente_id FROM cliente_medidor_historial cmh WHERE cmh.medidor_id = l.medidor_id ORDER BY cmh.id DESC LIMIT 1),
+                        (SELECT f.cliente_id FROM facturas f WHERE f.lectura_id = l.id LIMIT 1)
+                    )
+                    LEFT JOIN rutas_puntos rp ON rp.medidor_id = l.medidor_id AND rp.ruta_id = l.ruta_id 
+                    WHERE l.ruta_id = ? AND l.periodo = ?
+                )
                 SELECT 
                     r.id AS ruta_id, 
                     r.nombre AS ruta_nombre, 
                     r.descripcion AS ruta_descripcion, 
-                    rp.orden, 
+                    pr.orden, 
                     m.id AS medidor_id, 
                     m.numero_serie, 
                     m.ubicacion,
@@ -524,11 +612,21 @@ const rutasController = {
                     m.estado_medidor,
                     m.lectura_base,
                     m.capacidad_maxima,
-                    c.id AS cliente_id,
-                    c.nombre AS cliente_nombre,
-                    c.direccion AS cliente_direccion,
-                    c.telefono AS cliente_telefono,
-                    c.estado_cliente,
+                    COALESCE(c.id, c_hist.id, c_fac.id) AS cliente_id,
+                    COALESCE(c.nombre, c_hist.nombre, c_fac.nombre) AS cliente_nombre,
+                    COALESCE(c.numero_predio, c_hist.numero_predio, c_fac.numero_predio) AS cliente_numero_predio,
+                    COALESCE(c.direccion, c_hist.direccion, c_fac.direccion) AS cliente_direccion,
+                    COALESCE(c.telefono, c_hist.telefono, c_fac.telefono) AS cliente_telefono,
+                    COALESCE(c.estado_cliente, c_hist.estado_cliente, c_fac.estado_cliente, 'Activo') AS estado_cliente,
+                    (
+                        SELECT m_act.numero_serie 
+                        FROM medidores m_act 
+                        WHERE m_act.cliente_id = COALESCE(c.id, c_hist.id, c_fac.id)
+                          AND m_act.id != m.id
+                          AND m_act.estado_medidor = 'Activo'
+                        ORDER BY m_act.id DESC 
+                        LIMIT 1
+                    ) AS medidor_actual_reemplazo,
                     -- Datos de la lectura tomada específicamente en este período:
                     lp.id AS lectura_id_periodo,
                     lp.lectura_actual AS lectura_actual_periodo,
@@ -570,22 +668,39 @@ const rutasController = {
                         LIMIT 1
                     ) AS ultima_lectura_id_real
                 FROM rutas r
-                JOIN rutas_puntos rp ON r.id = rp.ruta_id
-                JOIN medidores m ON rp.medidor_id = m.id
+                JOIN puntos_ruta pr ON r.id = pr.ruta_id
+                JOIN medidores m ON pr.medidor_id = m.id
                 LEFT JOIN clientes c ON m.cliente_id = c.id
-                LEFT JOIN lecturas lp ON lp.medidor_id = m.id AND lp.periodo = ?
+                LEFT JOIN cliente_medidor_historial cmh ON cmh.medidor_id = m.id AND cmh.id = (
+                    SELECT id FROM cliente_medidor_historial WHERE medidor_id = m.id ORDER BY id DESC LIMIT 1
+                )
+                LEFT JOIN clientes c_hist ON cmh.cliente_id = c_hist.id
+                LEFT JOIN lecturas lp ON lp.medidor_id = m.id AND lp.periodo = ? AND lp.ruta_id = r.id
+                LEFT JOIN facturas f_fac ON lp.id IS NOT NULL AND f_fac.lectura_id = lp.id
+                LEFT JOIN clientes c_fac ON f_fac.cliente_id = c_fac.id
                 WHERE r.id = ?
-                ORDER BY rp.orden ASC
+                ORDER BY pr.orden ASC
             `;
 
-            const result = await dbTurso.execute({
-                sql: query,
-                args: [periodo, `${periodo}-01`, periodo, ruta_id]
-            });
+            const [result, facturasCountResult] = await Promise.all([
+                dbTurso.execute({
+                    sql: query,
+                    args: [ruta_id, ruta_id, periodo, periodo, `${periodo}-01`, periodo, ruta_id]
+                }),
+                dbTurso.execute({
+                    sql: `SELECT COUNT(f.id) AS facturas_generadas_periodo
+                          FROM facturas f
+                          JOIN lecturas l ON f.lectura_id = l.id
+                          WHERE l.periodo = ? AND l.ruta_id = ?`,
+                    args: [periodo, ruta_id]
+                })
+            ]);
 
             if (result.rows.length === 0) {
                 return res.status(404).json({ error: 'Ruta no encontrada o sin medidores' });
             }
+
+            const facturasGeneradasPeriodo = Number(facturasCountResult.rows?.[0]?.facturas_generadas_periodo || 0);
 
             // Convertir BigInt a Number y construir respuesta compatible
             const rows = result.rows.map(row => ({
@@ -600,6 +715,9 @@ const rutasController = {
                 nombre: rows[0].ruta_nombre,
                 descripcion: rows[0].ruta_descripcion,
                 periodo: periodo,
+                facturas_generadas_periodo: facturasGeneradasPeriodo,
+                tiene_facturacion_periodo: facturasGeneradasPeriodo > 0,
+                periodo_cerrado: facturasGeneradasPeriodo > 0,
                 puntos: rows.map(r => {
                     const tieneLectura = r.lectura_id_periodo !== null && r.lectura_id_periodo !== undefined;
                     const lectActualNum = r.lectura_actual_periodo !== null && r.lectura_actual_periodo !== undefined ? Number(r.lectura_actual_periodo) : null;
@@ -615,10 +733,13 @@ const rutasController = {
                         orden: r.orden,
                         medidor_id: r.medidor_id,
                         numero_serie: r.numero_serie,
+                        numero_predio: r.cliente_numero_predio || null,
                         ubicacion: r.ubicacion,
                         latitud: r.latitud,
                         longitud: r.longitud,
                         estado_medidor: r.estado_medidor,
+                        es_retirado: r.estado_medidor === 'Retirado',
+                        medidor_actual_reemplazo: r.medidor_actual_reemplazo || null,
                         lectura_base: r.lectura_base !== null && r.lectura_base !== undefined ? Number(r.lectura_base) : null,
                         capacidad_maxima: r.capacidad_maxima !== null && r.capacidad_maxima !== undefined ? Number(r.capacidad_maxima) : null,
                         // Datos específicos del período consultado:
@@ -636,6 +757,7 @@ const rutasController = {
                         ultima_lectura_id: r.lectura_id_periodo ? Number(r.lectura_id_periodo) : (r.ultima_lectura_id_real ? Number(r.ultima_lectura_id_real) : null),
                         cliente_id: r.cliente_id,
                         cliente_nombre: r.cliente_nombre,
+                        cliente_numero_predio: r.cliente_numero_predio || null,
                         cliente_direccion: r.cliente_direccion,
                         cliente_telefono: r.cliente_telefono,
                         estado_cliente: r.estado_cliente

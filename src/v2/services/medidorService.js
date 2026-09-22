@@ -40,9 +40,17 @@ export async function obtenerMedidores(query = {}) {
     const incluirEliminadosBool = incluirEliminados === 'true' || incluirEliminados === true;
     const hayPaginacion = page || limit || search || estado || ubicacion || cliente_id || cliente_nombre || numero_predio || asignacion || ciudad;
 
-    const baseSelect = `SELECT m.*, c.nombre AS cliente_nombre, c.numero_predio, rp.ruta_id, r.nombre AS ruta_nombre
+    const baseSelect = `SELECT m.*, 
+                        COALESCE(c.id, c_hist.id) AS cliente_id,
+                        COALESCE(c.nombre, c_hist.nombre) AS cliente_nombre, 
+                        COALESCE(c.numero_predio, c_hist.numero_predio) AS numero_predio, 
+                        rp.ruta_id, r.nombre AS ruta_nombre
                         FROM medidores m
                         LEFT JOIN clientes c ON c.id = m.cliente_id
+                        LEFT JOIN cliente_medidor_historial cmh ON cmh.medidor_id = m.id AND cmh.id = (
+                            SELECT id FROM cliente_medidor_historial WHERE medidor_id = m.id ORDER BY id DESC LIMIT 1
+                        )
+                        LEFT JOIN clientes c_hist ON cmh.cliente_id = c_hist.id
                         LEFT JOIN rutas_puntos rp ON rp.medidor_id = m.id
                         LEFT JOIN rutas r ON r.id = rp.ruta_id`;
 
@@ -199,31 +207,29 @@ export async function eliminarMedidor(id, usuarioId, razon) {
 
     if (medidor.fecha_eliminacion) throw serviceError("El medidor ya está eliminado", 400);
 
-    // Validar si está asignado a un cliente activo
-    if (medidor.cliente_id) {
-        const clienteResult = await dbTurso.execute({ sql: `SELECT id, nombre, estado_cliente FROM clientes WHERE id = ?`, args: [medidor.cliente_id] });
-        if (clienteResult.rows.length > 0) {
-            const cliente = clienteResult.rows[0];
-            if (cliente.estado_cliente !== 'Eliminado') {
-                throw serviceError(`No se puede eliminar el medidor porque está asignado al cliente activo "${cliente.nombre}". Libérelo primero.`, 400);
-            }
-        }
-    }
+    const clienteId = medidor.cliente_id ? Number(medidor.cliente_id) : null;
 
-    const clienteIdAnterior = medidor.cliente_id ? Number(medidor.cliente_id) : null;
-
-    // Ejecutar actualización
+    // Actualizar medidor: se marca como 'Retirado' y se envía a la papelera (soft delete),
+    // CONSERVANDO su cliente_id para preservar la trazabilidad histórica de lecturas y recibos.
     await dbTurso.execute({
         sql: `UPDATE medidores SET 
-                cliente_id = NULL,
+                estado_medidor = 'Retirado',
                 fecha_eliminacion = datetime('now'),
                 eliminado_por = ?,
                 razon_eliminacion = ?
               WHERE id = ?`,
-        args: [usuarioId, razon || 'Sin razón especificada', id]
+        args: [usuarioId, razon || 'Retiro de medidor', id]
     });
 
-    // Si estaba en una ruta, eliminarlo
+    // Cerrar cualquier asignación abierta en cliente_medidor_historial
+    if (clienteId) {
+        await dbTurso.execute({
+            sql: `UPDATE cliente_medidor_historial SET fecha_fin = date('now') WHERE medidor_id = ? AND fecha_fin IS NULL`,
+            args: [id]
+        });
+    }
+
+    // Remover de rutas_puntos de la ruta activa actual (las lecturas de períodos pasados facturados se preservan)
     await dbTurso.execute({
         sql: `DELETE FROM rutas_puntos WHERE medidor_id = ?`,
         args: [id]
@@ -232,10 +238,10 @@ export async function eliminarMedidor(id, usuarioId, razon) {
     // Registrar en historial_cambios
     await dbTurso.execute({
         sql: `INSERT INTO historial_cambios (tabla, operacion, registro_id, modificado_por, cambios) VALUES (?, ?, ?, ?, ?)`,
-        args: ['medidores', 'SOFT_DELETE', id, usuarioId, JSON.stringify({
+        args: ['medidores', 'SOFT_DELETE_RETIRADO', id, usuarioId, JSON.stringify({
             estado_anterior: medidor.estado_medidor,
-            cliente_id_anterior: clienteIdAnterior,
-            razon: razon || 'Sin razón especificada'
+            cliente_id: clienteId,
+            razon: razon || 'Retiro de medidor'
         })]
     });
 
@@ -270,8 +276,17 @@ export async function restaurarMedidor(id, usuarioId) {
 
 export async function obtenerMedidoresEliminados() {
     const result = await dbTurso.execute({
-        sql: `SELECT m.*, u.username as eliminado_por_nombre 
+        sql: `SELECT m.*, 
+                     COALESCE(c.id, c_hist.id) AS cliente_id,
+                     COALESCE(c.nombre, c_hist.nombre) AS cliente_nombre,
+                     COALESCE(c.numero_predio, c_hist.numero_predio) AS numero_predio,
+                     u.username as eliminado_por_nombre 
               FROM medidores m 
+              LEFT JOIN clientes c ON c.id = m.cliente_id
+              LEFT JOIN cliente_medidor_historial cmh ON cmh.medidor_id = m.id AND cmh.id = (
+                  SELECT id FROM cliente_medidor_historial WHERE medidor_id = m.id ORDER BY id DESC LIMIT 1
+              )
+              LEFT JOIN clientes c_hist ON cmh.cliente_id = c_hist.id
               LEFT JOIN usuarios u ON m.eliminado_por = u.id 
               WHERE m.fecha_eliminacion IS NOT NULL 
               ORDER BY m.fecha_eliminacion DESC`
