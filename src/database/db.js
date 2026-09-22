@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS cliente_medidor_historial (
 CREATE TRIGGER IF NOT EXISTS cerrar_historial_asignacion_anterior
 BEFORE UPDATE OF cliente_id ON medidores
 FOR EACH ROW
-WHEN OLD.cliente_id IS NOT NULL AND NEW.cliente_id != OLD.cliente_id
+WHEN OLD.cliente_id IS NOT NULL AND (NEW.cliente_id IS NULL OR NEW.cliente_id != OLD.cliente_id)
 BEGIN
   UPDATE cliente_medidor_historial
   SET fecha_fin = date('now')
@@ -90,7 +90,7 @@ END;
 CREATE TRIGGER IF NOT EXISTS registrar_historial_asignacion
 AFTER UPDATE OF cliente_id ON medidores
 FOR EACH ROW
-WHEN NEW.cliente_id IS NOT NULL AND NEW.cliente_id != OLD.cliente_id
+WHEN NEW.cliente_id IS NOT NULL AND (OLD.cliente_id IS NULL OR NEW.cliente_id != OLD.cliente_id)
 BEGIN
   INSERT INTO cliente_medidor_historial (cliente_id, medidor_id, fecha_inicio)
   VALUES (NEW.cliente_id, NEW.id, date('now'));

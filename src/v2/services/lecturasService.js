@@ -396,10 +396,39 @@ export async function obtenerLecturasPorCliente(cliente_id, periodo) {
     });
     if (!medidoresResult.rows.length) throw Object.assign(serviceError('Cliente no tiene medidores asignados', 404), { cliente: { id: Number(cliente.id), nombre: cliente.nombre } });
 
-    const medidores = medidoresResult.rows.map(m => Number(m.id));
     const placeholders = medidores.map(() => '?').join(',');
-    const args = [...medidores];
-    let sql = `SELECT l.id, l.medidor_id, m.numero_serie, m.ubicacion, l.consumo_m3, l.periodo, l.fecha_lectura, f.id as factura_id, f.total as monto_total, f.estado as factura_estado FROM lecturas l INNER JOIN medidores m ON l.medidor_id = m.id LEFT JOIN facturas f ON l.id = f.lectura_id WHERE l.medidor_id IN (${placeholders})`;
+    const args = [...medidores, cliente_id, cliente_id, cliente_id];
+    let sql = `SELECT 
+                l.id, 
+                l.medidor_id, 
+                m.numero_serie, 
+                m.ubicacion, 
+                l.consumo_m3, 
+                l.periodo, 
+                l.fecha_lectura, 
+                f.id as factura_id, 
+                f.total as monto_total, 
+                f.estado as factura_estado 
+              FROM lecturas l 
+              INNER JOIN medidores m ON l.medidor_id = m.id 
+              LEFT JOIN facturas f ON l.id = f.lectura_id 
+              WHERE l.medidor_id IN (${placeholders})
+                AND (
+                    f.cliente_id = ?
+                    OR (
+                        f.id IS NULL 
+                        AND (
+                            m.cliente_id = ? 
+                            OR EXISTS (
+                                SELECT 1 FROM cliente_medidor_historial cmh 
+                                WHERE cmh.medidor_id = l.medidor_id 
+                                  AND cmh.cliente_id = ? 
+                                  AND (date(l.fecha_lectura) >= cmh.fecha_inicio) 
+                                  AND (cmh.fecha_fin IS NULL OR date(l.fecha_lectura) <= cmh.fecha_fin)
+                            )
+                        )
+                    )
+                )`;
     if (periodo) { sql += ` AND l.periodo = ?`; args.push(periodo); }
     sql += ` ORDER BY l.fecha_lectura DESC`;
 

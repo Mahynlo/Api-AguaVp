@@ -176,13 +176,32 @@ export async function modificarCliente(clienteId, datos, usuarioId) {
             }
         }
 
-        if (medidoresLiberar.length === 1 && medidoresAsignar.length === 1 && medidoresLiberar[0] !== medidoresAsignar[0]) {
+        const esReemplazoDirecto1a1 = medidoresLiberar.length === 1 && medidoresAsignar.length === 1 && medidoresLiberar[0] !== medidoresAsignar[0];
+        if (esReemplazoDirecto1a1) {
             const anterior = Number(medidoresLiberar[0]), nuevo = Number(medidoresAsignar[0]);
             const rutaAnterior = selRutaPunto.get(anterior);
             if (rutaAnterior) {
                 if (selRutaPunto.get(nuevo)) throw { status: 400, error: [`No se pudo migrar ruta automáticamente: el medidor nuevo ${nuevo} ya pertenece a una ruta.`] };
                 sqlite.prepare(`UPDATE rutas_puntos SET medidor_id = ? WHERE ruta_id = ? AND medidor_id = ?`).run(nuevo, Number(rutaAnterior.ruta_id), anterior);
                 cambios.reasignacion_ruta_medidor = { ruta_id: Number(rutaAnterior.ruta_id), orden: Number(rutaAnterior.orden), medidor_anterior_id: anterior, medidor_nuevo_id: nuevo, accion: 'migracion_automatica_reemplazo_1_a_1' };
+            }
+        }
+
+        // Si se liberó un medidor que NO fue migrado en reemplazo 1 a 1,
+        // retirarlo de rutas_puntos para no dejar puntos huérfanos sin cliente en la ruta anterior
+        for (const mid of medidoresLiberar) {
+            if (!esReemplazoDirecto1a1 || Number(mid) !== Number(medidoresLiberar[0])) {
+                sqlite.prepare(`DELETE FROM rutas_puntos WHERE medidor_id = ?`).run(mid);
+            }
+            // Garantizar cierre de fecha_fin en el historial
+            sqlite.prepare(`UPDATE cliente_medidor_historial SET fecha_fin = date('now') WHERE medidor_id = ? AND fecha_fin IS NULL`).run(mid);
+        }
+
+        for (const mid of medidoresAsignar) {
+            // Garantizar registro abierto en cliente_medidor_historial para el cliente nuevo
+            const yaRegistrado = sqlite.prepare(`SELECT id FROM cliente_medidor_historial WHERE cliente_id = ? AND medidor_id = ? AND fecha_fin IS NULL`).get(safeClienteId, mid);
+            if (!yaRegistrado) {
+                sqlite.prepare(`INSERT OR IGNORE INTO cliente_medidor_historial (cliente_id, medidor_id, fecha_inicio, asignado_por) VALUES (?, ?, date('now'), ?)`).run(safeClienteId, mid, safeModificadoPor);
             }
         }
 
