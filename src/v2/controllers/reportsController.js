@@ -971,23 +971,69 @@ const ReportsController = {
                     m.ubicacion as medidor_ubicacion,
                     m.latitud,
                     m.longitud,
+                    m.lectura_base,
+                    -- Última lectura registrada específicamente para este medidor físico antes de este período
+                    (
+                        SELECT lf.lectura_actual 
+                        FROM lecturas lf 
+                        WHERE lf.medidor_id = m.id 
+                          AND (lf.periodo < ? OR (lf.periodo IS NULL AND lf.fecha_lectura < ?))
+                          AND lf.lectura_actual IS NOT NULL
+                        ORDER BY lf.periodo DESC, lf.fecha_lectura DESC, lf.id DESC 
+                        LIMIT 1
+                    ) as ultima_lectura_medidor,
+                    -- Consumo del mes anterior o último registrado
                     COALESCE(
-                        l_ant.consumo_m3,
-                        (SELECT lf.consumo_m3 FROM facturas f JOIN lecturas lf ON f.lectura_id = lf.id WHERE f.cliente_id = c.id AND lf.periodo = ? LIMIT 1)
+                        (
+                            SELECT lf.consumo_m3 
+                            FROM lecturas lf 
+                            WHERE lf.medidor_id = m.id 
+                              AND lf.periodo = ?
+                            LIMIT 1
+                        ),
+                        (
+                            SELECT lf.consumo_m3 
+                            FROM lecturas lf 
+                            WHERE lf.medidor_id = m.id 
+                              AND lf.periodo < ?
+                            ORDER BY lf.periodo DESC, lf.id DESC 
+                            LIMIT 1
+                        ),
+                        (
+                            SELECT lf.consumo_m3 
+                            FROM lecturas lf 
+                            JOIN medidores m_all ON lf.medidor_id = m_all.id 
+                            WHERE m_all.cliente_id = c.id 
+                              AND lf.periodo = ?
+                            LIMIT 1
+                        ),
+                        (
+                            SELECT lf.consumo_m3 
+                            FROM lecturas lf 
+                            JOIN medidores m_all ON lf.medidor_id = m_all.id 
+                            WHERE m_all.cliente_id = c.id 
+                              AND lf.periodo < ?
+                            ORDER BY lf.periodo DESC, lf.id DESC 
+                            LIMIT 1
+                        ),
+                        0
                     ) as consumo_anterior,
-                    COALESCE(
-                        l_ant.lectura_actual,
-                        (SELECT lf.lectura_actual FROM facturas f JOIN lecturas lf ON f.lectura_id = lf.id WHERE f.cliente_id = c.id AND lf.periodo = ? LIMIT 1),
-                        m.lectura_base
-                    ) as lectura_fisica_anterior,
-                    0 as lectura_anterior_calculada
+                    -- Medidor anterior retirado si hubo cambio
+                    (
+                        SELECT m_prev.numero_serie 
+                        FROM medidores m_prev 
+                        WHERE m_prev.cliente_id = c.id 
+                          AND m_prev.id != m.id 
+                          AND m_prev.estado_medidor = 'Retirado'
+                        ORDER BY m_prev.id DESC 
+                        LIMIT 1
+                    ) as medidor_anterior_serie
                 FROM clientes c
                 LEFT JOIN medidores m ON c.id = m.cliente_id AND m.estado_medidor != 'Retirado'
-                LEFT JOIN lecturas l_ant ON m.id = l_ant.medidor_id AND l_ant.periodo = ?
                 WHERE c.estado_cliente = 'Activo'
             `;
 
-            const params = [mesAnterior, mesAnterior, mesAnterior];
+            const params = [mes, mes + '-01', mesAnterior, mes, mesAnterior, mes];
 
             if (localidad) {
                 query += ` AND c.ciudad = ?`;
@@ -1009,6 +1055,32 @@ const ReportsController = {
                 }
 
                 const tieneMedidor = !!row.medidor_id;
+                let lecturaFisica = null;
+                let esCambioMedidor = false;
+                let esMedidorNuevo = false;
+
+                if (tieneMedidor) {
+                    const tieneLecturaPrevia = row.ultima_lectura_medidor !== null && row.ultima_lectura_medidor !== undefined;
+
+                    if (tieneLecturaPrevia) {
+                        const num = Number(row.ultima_lectura_medidor);
+                        lecturaFisica = isNaN(num) ? 0 : num;
+                    } else {
+                        // Es su primera lectura en este medidor: usar lectura base
+                        const base = (row.lectura_base !== null && row.lectura_base !== undefined)
+                            ? Number(row.lectura_base)
+                            : 0;
+                        lecturaFisica = isNaN(base) ? 0 : base;
+
+                        // Solo en esta primera toma se muestra si fue cambio o medidor nuevo
+                        if (row.medidor_anterior_serie) {
+                            esCambioMedidor = true;
+                        } else {
+                            esMedidorNuevo = true;
+                        }
+                    }
+                }
+
                 porLocalidad[loc].push({
                     id: row.cliente_id,
                     numero_predio: row.numero_predio || null,
@@ -1025,11 +1097,12 @@ const ReportsController = {
                     } : null,
                     lectura_anterior: tieneMedidor ? {
                         periodo: mesAnterior,
-                        valor: 0,
+                        valor: lecturaFisica ?? 0,
                         consumo_registrado: Number(row.consumo_anterior || 0),
-                        lectura_fisica: row.lectura_fisica_anterior !== null && row.lectura_fisica_anterior !== undefined
-                            ? Number(row.lectura_fisica_anterior)
-                            : null
+                        lectura_fisica: lecturaFisica,
+                        es_cambio_medidor: esCambioMedidor,
+                        es_medidor_nuevo: esMedidorNuevo,
+                        medidor_anterior_serie: row.medidor_anterior_serie || null
                     } : null
                 });
                 totalClientes++;
