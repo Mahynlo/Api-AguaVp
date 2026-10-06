@@ -88,6 +88,20 @@ async function dropAllRemoteTriggers() {
 }
 
 /**
+ * Normaliza una fecha ISO o Date al formato canónico de SQLite en UTC: YYYY-MM-DD HH:MM:SS
+ */
+function toSqliteDateTime(date = new Date()) {
+    try {
+        const d = typeof date === 'string' ? new Date(date) : date;
+        if (isNaN(d.getTime())) return '1970-01-01 00:00:00';
+        const pad = n => String(n).padStart(2, '0');
+        return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+    } catch (_) {
+        return '1970-01-01 00:00:00';
+    }
+}
+
+/**
  * Inserta o reemplaza filas en lotes en Turso (INSERT OR REPLACE)
  */
 async function upsertBatch(tableName, rows) {
@@ -210,6 +224,7 @@ export async function seedDatabase() {
 
     syncState.inProgress = true;
     syncState.lastError = null;
+    const seedStartTime = new Date().toISOString();
     console.log('[TursoSync] 🚀 Iniciando carga semilla inicial hacia Turso...');
 
     try {
@@ -315,7 +330,7 @@ export async function seedDatabase() {
             console.log(`[TursoSync] ✓ Tabla ${tableName} copiada (${rows.length} registros)`);
         }
 
-        syncState.lastSync = new Date().toISOString();
+        syncState.lastSync = seedStartTime;
         syncState.lastSyncSuccess = true;
         syncState.totalRecordsSynced += totalRows;
 
@@ -351,7 +366,8 @@ export async function syncIncremental() {
         return await seedDatabase();
     }
 
-    const lastSync = syncState.lastSync;
+    const syncStartTime = new Date().toISOString();
+    const lastSyncSqlite = toSqliteDateTime(syncState.lastSync);
     let pendingChangesCount = 0;
     const modifiedTables = new Map(); // table -> Set of ids
 
@@ -359,8 +375,9 @@ export async function syncIncremental() {
     try {
         const recentHistorial = sqlite.prepare(`
             SELECT tabla, registro_id FROM historial_cambios 
-            WHERE fecha_modificacion >= ?
-        `).all(lastSync);
+            WHERE datetime(fecha_modificacion) >= datetime(?)
+              AND operacion NOT IN ('HARD_DELETE', 'DELETE')
+        `).all(lastSyncSqlite);
 
         for (const h of recentHistorial) {
             if (!modifiedTables.has(h.tabla)) {
@@ -392,8 +409,8 @@ export async function syncIncremental() {
         try {
             const rows = sqlite.prepare(`
                 SELECT * FROM "${dt.name}" 
-                WHERE "${dt.col}" >= ?
-            `).all(lastSync);
+                WHERE datetime("${dt.col}") >= datetime(?)
+            `).all(lastSyncSqlite);
 
             if (rows.length > 0) {
                 newRowsByTable.set(dt.name, rows);
@@ -418,8 +435,9 @@ export async function syncIncremental() {
         }
 
         const paidParcialidades = sqlite.prepare(`
-            SELECT * FROM parcialidades_convenio WHERE fecha_pago >= ?
-        `).all(lastSync);
+            SELECT * FROM parcialidades_convenio 
+            WHERE datetime(fecha_pago) >= datetime(?)
+        `).all(lastSyncSqlite);
         if (paidParcialidades.length > 0) {
             const existing = newRowsByTable.get('parcialidades_convenio') || [];
             const existingIds = new Set(existing.map(p => p.id));
@@ -456,24 +474,25 @@ export async function syncIncremental() {
     }
 
     // Detectar eliminaciones físicas registradas en historial_cambios (HARD_DELETE o DELETE)
-    const deletedRecords = [];
+    const deletedRecordsMap = new Map();
     try {
         const deletions = sqlite.prepare(`
             SELECT tabla, registro_id FROM historial_cambios 
             WHERE operacion IN ('HARD_DELETE', 'DELETE') 
-              AND fecha_modificacion >= ?
-        `).all(lastSync);
+              AND datetime(fecha_modificacion) >= datetime(?)
+        `).all(lastSyncSqlite);
 
         for (const d of deletions) {
-            deletedRecords.push(d);
+            deletedRecordsMap.set(`${d.tabla}:${d.registro_id}`, d);
             pendingChangesCount++;
         }
     } catch (_) {}
+    const deletedRecords = Array.from(deletedRecordsMap.values());
 
     // ⭐ GUARDA DE CONSUMO (Cuidado de los 3 GB mensuales):
     // Si no hay NINGÚN cambio local, NO hacer llamadas a Turso por red.
     if (pendingChangesCount === 0) {
-        syncState.lastSync = new Date().toISOString();
+        syncState.lastSync = syncStartTime;
         syncState.lastSyncSuccess = true;
         return {
             success: true,
@@ -538,7 +557,7 @@ export async function syncIncremental() {
             }
         }
 
-        syncState.lastSync = new Date().toISOString();
+        syncState.lastSync = syncStartTime;
         syncState.lastSyncSuccess = true;
         syncState.totalRecordsSynced += totalSynced;
 

@@ -59,6 +59,7 @@ La función `seedDatabase()` clona la estructura y todos los registros locales h
    * Consulta `SELECT name FROM sqlite_master WHERE type = 'trigger'` en Turso.
    * Ejecuta `DROP TRIGGER IF EXISTS` para cada trigger.
    * **Razón técnica:** En Turso no deben ejecutarse disparadores de validación de saldos (`validar_pago_contra_saldo`) ni de recálculo (`actualizar_saldo_factura`), ya que rechazarían los pagos históricos ya liquidados o alterarían los saldos reales consolidados por el SQLite local.
+   * **Limpieza previa en orden inverso:** Antes de insertar los registros locales, vacía las tablas en Turso en orden inverso de claves foráneas (`DELETE FROM [tabla]`), garantizando que registros eliminados en local no persistan en la nube.
 4. **Copia de Datos en Orden de Dependencias:**
    Las tablas se procesan en lotes de 100 registros (`tursoClient.batch`) respetando estrictamente el siguiente orden:
    ```javascript
@@ -89,7 +90,7 @@ La función `seedDatabase()` clona la estructura y todos los registros locales h
        'historial_cambios'
    ];
    ```
-5. **Actualización de Metadatos:** Actualiza `syncState.lastSync` con la fecha y hora UTC ISO.
+5. **Actualización de Metadatos:** Actualiza `syncState.lastSync` con `seedStartTime` al inicio de la ejecución.
 
 ---
 
@@ -102,16 +103,20 @@ flowchart TD
     Start["Ciclo de Sincronización (15 min)"] --> CheckConfig{"¿Cliente Turso configurado?"}
     CheckConfig -- No --> EndSkip["Finalizar sin acción"]
     CheckConfig -- Sí --> QueryLocal["Consultar SQLite local:<br/>historial_cambios y fecha_creacion >= lastSync"]
-    QueryLocal --> HasChanges{"¿Hay registros nuevos o modificados?"}
+    QueryLocal --> HasChanges{"¿Hay registros nuevos, modificados o borrados?"}
     HasChanges -- No (0 cambios) --> ZeroNetwork["Retornar éxito<br/>LLAMADAS DE RED = 0<br/>BYTES CONSUMIDOS = 0"]
     HasChanges -- Sí --> DropTrig["dropAllRemoteTriggers() en Turso"]
     DropTrig --> BatchUpsert["INSERT OR REPLACE por lotes en Turso<br/>(Solo filas modificadas)"]
-    BatchUpsert --> UpdateLastSync["Actualizar lastSync local"]
+    BatchUpsert --> ExecuteDeletes["DELETE en Turso para HARD_DELETE"]
+    ExecuteDeletes --> UpdateLastSync["Actualizar lastSync = syncStartTime"]
 ```
 
-### Detección Local de Cambios:
-* **Actualizaciones (`UPDATE`):** Se identifican consultando `historial_cambios` local para `fecha_modificacion >= lastSync`.
-* **Inserciones (`INSERT`):** Se identifican consultando las tablas operativas para `fecha_creacion >= lastSync` (`facturas`, `pagos`, `lecturas`, `clientes`, etc.).
+### Detección Local de Cambios y Ciclo Completo:
+* **Actualizaciones (`UPDATE` y `SOFT_DELETE`):** Se identifican consultando `historial_cambios` local para `datetime(fecha_modificacion) >= datetime(?)`.
+* **Inserciones (`INSERT`):** Se identifican consultando las tablas operativas para `datetime(fecha_creacion) >= datetime(?)` (`facturas`, `pagos`, `lecturas`, `clientes`, etc.).
+* **Eliminaciones Físicas (`HARD_DELETE` y `DELETE`):** Se identifican en `historial_cambios` y ejecutan `DELETE FROM [tabla] WHERE id = ?` en Turso Cloud.
+* **Normalización de Fechas:** Se utiliza la función `toSqliteDateTime()` y la sintaxis canónica `datetime(?)` de SQLite para neutralizar incompatibilidades entre cadenas con espacio (`YYYY-MM-DD HH:MM:SS`) y formatos ISO-8601 con `T`.
+* **Prevención de Condiciones de Carrera:** `syncState.lastSync` se establece con el instante de inicio de la sincronización (`syncStartTime`), asegurando que transacciones creadas durante la llamada a la red sean procesadas en el siguiente ciclo.
 * **Relaciones dependientes:** Si se detectan `convenios_pago` nuevos, se sincronizan sus `parcialidades_convenio`; si se detectan `rutas` nuevas, se sincronizan sus `rutas_puntos`.
 * **Catálogos:** `tarifas`, `rangos_tarifas` y `configuracion_servicio` únicamente se transmiten si sufrieron modificaciones registradas en el historial.
 
