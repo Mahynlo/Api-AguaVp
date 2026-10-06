@@ -143,6 +143,166 @@ export function customMigrate(db, migrationsFolder, log = console.log) {
     } else {
         log(`📦 ${applied} migración(es) aplicada(s) correctamente.`);
     }
+
+    // ── 5. Asegurar triggers esenciales de negocio (por si la BD fue restaurada desde Turso) ──
+    ensureCoreTriggers(db, log);
+}
+
+/**
+ * Asegura que todos los disparadores (triggers) esenciales de negocio existan.
+ * Esto es crítico si la base de datos se restauró desde un respaldo de Turso Cloud,
+ * donde los triggers se desactivaron temporalmente para la replicación.
+ */
+function ensureCoreTriggers(db, log) {
+    try {
+        const existingTriggers = new Set(
+            db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger'").all().map(r => r.name)
+        );
+
+        const coreTriggers = [
+            {
+                name: 'validar_pago_contra_saldo',
+                sql: `
+                    CREATE TRIGGER IF NOT EXISTS validar_pago_contra_saldo
+                    BEFORE INSERT ON pagos
+                    FOR EACH ROW
+                    WHEN NEW.factura_id IS NOT NULL
+                    BEGIN
+                      SELECT 
+                        CASE 
+                          WHEN (SELECT ROUND(saldo_pendiente, 2) FROM facturas WHERE id = NEW.factura_id) < ROUND(NEW.monto, 2)
+                          THEN RAISE(ABORT, 'El monto del pago excede el saldo pendiente de la factura')
+                        END;
+                    END;
+                `
+            },
+            {
+                name: 'validar_pago_parcialidad',
+                sql: `
+                    CREATE TRIGGER IF NOT EXISTS validar_pago_parcialidad
+                    BEFORE INSERT ON pagos
+                    FOR EACH ROW
+                    WHEN NEW.parcialidad_id IS NOT NULL
+                    BEGIN
+                      SELECT 
+                        CASE 
+                          WHEN (SELECT ROUND(monto_esperado, 2) FROM parcialidades_convenio WHERE id = NEW.parcialidad_id) < ROUND(NEW.monto, 2)
+                          THEN RAISE(ABORT, 'El monto del pago excede el monto esperado de la parcialidad')
+                        END;
+                    END;
+                `
+            },
+            {
+                name: 'validar_tipo_pago',
+                sql: `
+                    CREATE TRIGGER IF NOT EXISTS validar_tipo_pago
+                    BEFORE INSERT ON pagos
+                    FOR EACH ROW
+                    BEGIN
+                      SELECT 
+                        CASE 
+                          WHEN NEW.factura_id IS NOT NULL AND NEW.parcialidad_id IS NOT NULL
+                          THEN RAISE(ABORT, 'Un pago no puede estar asociado a una factura y una parcialidad al mismo tiempo')
+                          WHEN NEW.factura_id IS NULL AND NEW.parcialidad_id IS NULL
+                          THEN RAISE(ABORT, 'Un pago debe estar asociado a una factura o a una parcialidad')
+                        END;
+                    END;
+                `
+            },
+            {
+                name: 'actualizar_saldo_factura',
+                sql: `
+                    CREATE TRIGGER IF NOT EXISTS actualizar_saldo_factura
+                    AFTER INSERT ON pagos
+                    FOR EACH ROW
+                    WHEN NEW.factura_id IS NOT NULL
+                    BEGIN
+                        UPDATE facturas
+                        SET saldo_pendiente = ROUND(saldo_pendiente - NEW.monto, 2)
+                        WHERE id = NEW.factura_id;
+                    END;
+                `
+            },
+            {
+                name: 'actualizar_estado_factura',
+                sql: `
+                    CREATE TRIGGER IF NOT EXISTS actualizar_estado_factura
+                    AFTER UPDATE OF saldo_pendiente ON facturas
+                    FOR EACH ROW
+                    WHEN NEW.saldo_pendiente <= 0
+                    BEGIN
+                        UPDATE facturas
+                        SET estado = 'Pagado',
+                            saldo_pendiente = 0.00
+                        WHERE id = NEW.id;
+                    END;
+                `
+            },
+            {
+                name: 'registrar_cambios_facturas',
+                sql: `
+                    CREATE TRIGGER IF NOT EXISTS registrar_cambios_facturas
+                    AFTER UPDATE ON facturas
+                    FOR EACH ROW
+                    BEGIN
+                        INSERT INTO historial_cambios (tabla, operacion, registro_id, modificado_por, cambios)
+                        VALUES (
+                            'facturas',
+                            'UPDATE',
+                            OLD.id,
+                            NEW.modificado_por,
+                            'Estado: ' || OLD.estado || ' → ' || NEW.estado || ', Saldo: ' || OLD.saldo_pendiente || ' → ' || NEW.saldo_pendiente
+                        );
+                    END;
+                `
+            },
+            {
+                name: 'cerrar_historial_asignacion_anterior',
+                sql: `
+                    CREATE TRIGGER IF NOT EXISTS cerrar_historial_asignacion_anterior
+                    BEFORE UPDATE OF cliente_id ON medidores
+                    FOR EACH ROW
+                    WHEN OLD.cliente_id IS NOT NULL AND NEW.cliente_id != OLD.cliente_id
+                    BEGIN
+                      UPDATE cliente_medidor_historial
+                      SET fecha_fin = date('now')
+                      WHERE medidor_id = OLD.id AND fecha_fin IS NULL;
+                    END;
+                `
+            },
+            {
+                name: 'registrar_historial_asignacion',
+                sql: `
+                    CREATE TRIGGER IF NOT EXISTS registrar_historial_asignacion
+                    AFTER UPDATE OF cliente_id ON medidores
+                    FOR EACH ROW
+                    WHEN NEW.cliente_id IS NOT NULL AND NEW.cliente_id != OLD.cliente_id
+                    BEGIN
+                      INSERT INTO cliente_medidor_historial (cliente_id, medidor_id, fecha_inicio)
+                      VALUES (NEW.cliente_id, NEW.id, date('now'));
+                    END;
+                `
+            }
+        ];
+
+        let triggersRecreated = 0;
+        for (const trig of coreTriggers) {
+            if (!existingTriggers.has(trig.name)) {
+                try {
+                    db.exec(trig.sql);
+                    triggersRecreated++;
+                } catch (err) {
+                    log(`⚠️ Aviso al restaurar trigger ${trig.name}: ${err.message}`);
+                }
+            }
+        }
+
+        if (triggersRecreated > 0) {
+            log(`⚡ Se reactivaron automáticamente ${triggersRecreated} triggers esenciales de la base de datos.`);
+        }
+    } catch (e) {
+        log(`⚠️ Aviso al verificar triggers: ${e.message}`);
+    }
 }
 
 

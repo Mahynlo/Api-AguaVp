@@ -46,6 +46,7 @@ import reportsRoutes from './routes/reports.js'; // Nueva ruta para Reportes
 import deudoresRoutes from './routes/deudores.js'; // Nueva ruta para Deudores
 import oauthRoutes from './routes/oauthRoutes.js'; // Rutas OAuth 2.0
 import usersRoutes from './routes/users.js'; // Nueva ruta Gestión Usuarios
+import syncRoutes from './routes/sync.js'; // Sincronización Turso Cloud
 
 const router = express.Router();
 
@@ -109,6 +110,7 @@ router.use('/dashboard', dashboardRoutes); // Nuevo: Dashboard
 router.use('/reports', reportsRoutes);     // Nuevo: Reportes
 router.use('/deudores', deudoresRoutes);     // Nuevo: Deudores
 router.use('/oauth', oauthRoutes);           // Nuevo: OAuth 2.0
+router.use('/sync', syncRoutes);             // Sincronización Turso Cloud
 
 // Exporta el router de la v2
 export default router;

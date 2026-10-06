@@ -47,6 +47,12 @@ class AguaVPServer extends EventEmitter {
             // Control de migraciones
             autoMigrate: config.autoMigrate !== false, // true por default
 
+            // Configuración de sincronización Turso Cloud (opcional)
+            tursoDatabaseUrl: config.tursoDatabaseUrl || process.env.TURSO_DATABASE_URL || '',
+            tursoAuthToken: config.tursoAuthToken || process.env.TURSO_AUTH_TOKEN || '',
+            tursoAutoSync: config.tursoAutoSync !== false,
+            tursoSyncIntervalMs: config.tursoSyncIntervalMs || 15 * 60 * 1000,
+
             // Otras opciones
             ...config
         };
@@ -236,6 +242,8 @@ class AguaVPServer extends EventEmitter {
         process.env.JWT_EXPIRES_IN = this.config.jwtExpiresIn;
         process.env.EXECUTION_MODE = this.config.executionMode;
         process.env.NODE_ENV = this.config.nodeEnv;
+        if (this.config.tursoDatabaseUrl) process.env.TURSO_DATABASE_URL = this.config.tursoDatabaseUrl;
+        if (this.config.tursoAuthToken) process.env.TURSO_AUTH_TOKEN = this.config.tursoAuthToken;
 
         this.emit('log', '✅ Variables de entorno configuradas');
     }
@@ -285,6 +293,21 @@ class AguaVPServer extends EventEmitter {
                         this.emit('log', '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
                         this.emit('log', `✅ API Server corriendo en http://localhost:${this.config.port}`);
                         this.emit('log', '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+
+                        // Inicializar sincronización con Turso Cloud si está configurada
+                        if (this.config.tursoDatabaseUrl && this.config.tursoAuthToken) {
+                            import('./v2/services/tursoSyncService.js').then(({ configure: configureTursoSync }) => {
+                                configureTursoSync({
+                                    tursoUrl: this.config.tursoDatabaseUrl,
+                                    tursoToken: this.config.tursoAuthToken,
+                                    autoSync: this.config.tursoAutoSync,
+                                    syncIntervalMs: this.config.tursoSyncIntervalMs
+                                });
+                                this.emit('log', '☁️ Sincronización en la Nube (Turso Cloud) activada');
+                            }).catch(err => {
+                                this.emit('log', `⚠️ Aviso inicializando TursoSync: ${err.message}`);
+                            });
+                        }
 
                         resolve(info);
                     }
