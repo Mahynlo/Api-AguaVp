@@ -59,9 +59,9 @@ const TABLE_SYNC_ORDER = [
     'cliente_medidor_historial',
     'lecturas',
     'facturas',
+    'pagos',
     'convenios_pago',
     'parcialidades_convenio',
-    'pagos',
     'cortes_servicio',
     'historial_cambios'
 ];
