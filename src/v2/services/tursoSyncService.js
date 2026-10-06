@@ -44,6 +44,10 @@ const TABLE_SYNC_ORDER = [
     'sesiones',
     'tokens_revocados',
     'auditoria_seguridad',
+    'permissions_catalog',
+    'role_permissions',
+    'user_permission_overrides',
+    'password_recovery_tokens',
     'configuracion_servicio',
     'tarifas',
     'rangos_tarifas',
@@ -295,7 +299,20 @@ export async function seedDatabase() {
         // 5. IMPORTANTE: Desactivar/eliminar triggers en Turso para que no interfieran con la carga de datos
         await dropAllRemoteTriggers();
 
-        // 6. Limpiar registros obsoletos en Turso (en orden inverso de claves foráneas)
+        // 6. Desactivar verificación de claves foráneas en Turso durante la carga masiva.
+        //    Los datos ya fueron validados por el SQLite local (maestro), así que es seguro.
+        try {
+            await tursoClient.execute('PRAGMA foreign_keys = OFF');
+            console.log('[TursoSync] 🔓 Foreign keys desactivadas en Turso para carga masiva');
+        } catch (fkErr) {
+            console.warn('[TursoSync] Aviso: no se pudo desactivar foreign_keys, intentando defer:', fkErr.message);
+            try {
+                await tursoClient.execute('PRAGMA defer_foreign_keys = ON');
+                console.log('[TursoSync] 🔓 Foreign keys diferidas en Turso para carga masiva');
+            } catch (_) {}
+        }
+
+        // 7. Limpiar registros obsoletos en Turso (en orden inverso de claves foráneas)
         // para garantizar que registros eliminados localmente no persistan en la nube
         const allSyncTables = [...TABLE_SYNC_ORDER];
         for (const [tableName] of tableMap.entries()) {
@@ -316,7 +333,7 @@ export async function seedDatabase() {
         let totalRows = 0;
         const tablesCopied = [];
 
-        // 7. Copiar datos tabla por tabla en lotes respetando el orden de claves foráneas
+        // 8. Copiar datos tabla por tabla en lotes respetando el orden de claves foráneas
         for (const tableName of allSyncTables) {
             if (!tableMap.has(tableName)) continue;
 
@@ -347,6 +364,10 @@ export async function seedDatabase() {
         console.error('[TursoSync] ❌ Error en carga semilla:', error);
         throw error;
     } finally {
+        // Re-activar FKs siempre, incluso si hubo error
+        try {
+            await tursoClient.execute('PRAGMA foreign_keys = ON');
+        } catch (_) {}
         syncState.inProgress = false;
     }
 }
@@ -509,6 +530,14 @@ export async function syncIncremental() {
         // Asegurar que Turso no tenga triggers activos que interfieran
         await dropAllRemoteTriggers();
 
+        // Desactivar FKs durante la sincronización incremental
+        // INSERT OR REPLACE hace DELETE+INSERT internamente, lo que activa validación de FKs
+        try {
+            await tursoClient.execute('PRAGMA foreign_keys = OFF');
+        } catch (_) {
+            try { await tursoClient.execute('PRAGMA defer_foreign_keys = ON'); } catch (_) {}
+        }
+
         let totalSynced = 0;
 
         for (const tableName of TABLE_SYNC_ORDER) {
@@ -576,6 +605,10 @@ export async function syncIncremental() {
             error: error.message
         };
     } finally {
+        // Re-activar FKs siempre, incluso si hubo error
+        try {
+            await tursoClient.execute('PRAGMA foreign_keys = ON');
+        } catch (_) {}
         syncState.inProgress = false;
     }
 }
