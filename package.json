@@ -1,6 +1,6 @@
 {
   "name": "@aguavp/api-server",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "Agua VP API Server - Controlable SQLite server with auto-migrations",
   "type": "module",
   "exports": {
@@ -25,6 +25,7 @@
     "test:clientes": "node --test src/test/unit/clientes.test.js",
     "test:tarifas": "node --test src/test/unit/tarifas.test.js",
     "test:usuarios": "node --test src/test/unit/usuarios-roles-permisos.test.js",
+    "test:sync": "node --test src/test/unit/turso-sync-core.test.js src/test/unit/core-triggers.test.js",
     "test:v2": "node --test src/test/unit/trazabilidad-medidores.test.js src/test/unit/pagos-facturas.test.js src/test/unit/lecturas.test.js src/test/unit/rutas.test.js src/test/unit/clientes.test.js src/test/unit/tarifas.test.js src/test/unit/usuarios-roles-permisos.test.js",
     "dev": "nodemon src/index.js",
     "start": "node src/index.js",

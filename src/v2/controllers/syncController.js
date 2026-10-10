@@ -6,6 +6,20 @@
 import * as syncService from '../services/tursoSyncService.js';
 
 /**
+ * Respuesta cuando la carga semilla se bloquea para proteger la copia en la nube.
+ * La app muestra los motivos y ofrece un reemplazo forzado ({ force: true } en /seed).
+ */
+function conflictResponse(result) {
+    return {
+        success: false,
+        conflict: true,
+        error: 'Sincronización bloqueada para proteger la copia en la nube',
+        motivos: result.motivos,
+        comparacion: result.comparacion
+    };
+}
+
+/**
  * Obtener estado de la sincronización
  */
 export async function getStatus(req, res) {
@@ -83,7 +97,11 @@ export async function configure(req, res) {
  */
 export async function runSeed(req, res) {
     try {
-        const result = await syncService.seedDatabase();
+        const force = req.body?.force === true;
+        const result = await syncService.seedDatabase({ force });
+        if (result?.conflict) {
+            return res.status(409).json(conflictResponse(result));
+        }
         res.json({
             success: true,
             message: 'Carga semilla inicial completada',
@@ -103,6 +121,9 @@ export async function runSeed(req, res) {
 export async function syncNow(req, res) {
     try {
         const result = await syncService.syncIncremental();
+        if (result?.conflict) {
+            return res.status(409).json(conflictResponse(result));
+        }
         res.json({
             success: true,
             message: 'Sincronización completada',
