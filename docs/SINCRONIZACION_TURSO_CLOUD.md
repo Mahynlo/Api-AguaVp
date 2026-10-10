@@ -2,7 +2,7 @@
 
 Especificación técnica del subsistema de copia de seguridad en Turso Cloud integrado en `@aguavp/api-server`.
 
-> Versión documentada: **1.0.8**. Guía operativa para usuarios/administradores: `AguaVP/docs/sincronizacion-turso-cloud.md` (app). Plan de mejoras: `AguaVP/docs/plan-sincronizacion-turso.md`.
+> Versión documentada: **1.0.11**. Guía operativa para usuarios/administradores: `AguaVP/docs/sincronizacion-turso-cloud.md` (app). Plan de mejoras: `AguaVP/docs/plan-sincronizacion-turso.md`.
 
 **Regla principal:** el SQLite local es el único escritor y ninguna operación puede dejar la nube con menos datos válidos de los que tenía.
 
@@ -60,6 +60,8 @@ Sin credenciales → `401`; rol insuficiente → `403`.
 | `POST` | `/configure` | Reconfigura en caliente (URL vacía = desvincular) | `{ tursoUrl, tursoToken, autoSync, syncIntervalMs }` | `200 { status }` |
 | `POST` | `/seed` | Carga completa protegida | `{ force?: boolean }` | `200 { data }` / `409 { conflict, motivos, comparacion }` / `500` |
 | `POST` | `/now` | Ciclo incremental (delega en la carga completa si hace falta) | — | `200 { data }` / `409` (igual que `/seed`) |
+| `GET` | `/restore/preview` | Resumen de la copia para confirmar una restauración | — | `200 { data: { disponible, lastSyncNube, mismaBase, tablas, comparacion } }` |
+| `POST` | `/restore/prepare` | Construye y valida una base restaurada en un archivo nuevo (no toca la base en uso) | — | `200 { data: { archivo, totalRegistros, tablas, triggers, instanciaId, fkViolaciones } }` / `500` |
 
 `status` incluye: `configured`, `tursoUrl`, `autoSync`, `inProgress`, `lastSync`, `lastSyncSuccess`, `lastError`, `totalRecordsSynced`, `conflicto` (`{ motivos, comparacion, fecha }` o `null`), `verificacion` (`{ ok, diferencias, reparadas, conservadas, fecha, completa }` o `null`), `cambiosPendientes`.
 
@@ -83,12 +85,15 @@ Se ejecuta cuando no hay `last_sync` para la URL actual, cuando `requiere_carga_
 3. **Guarda anti-sobrescritura** (`checkSeedSafety`):
    * `instancia`: la nube tiene un `instancia_id` distinto.
    * `conteo`: en alguna `GUARD_TABLES` la nube tiene **más** registros que la local.
+   * `columnas`: la nube tiene columnas que la base local no tiene (`remoteExtraColumns`); un `INSERT OR REPLACE` las dejaría en NULL. Ocurre si la base local se recreó con un esquema que no incluye columnas de migraciones antiguas. El incremental también lo detecta cuando cambia la versión de esquema (`needsSeed: 'remote_columns'`).
    * Con motivos y sin `force` → **no se toca la nube**; devuelve `{ success: false, conflict: true, motivos, comparacion }`.
    * Una nube sin `_aguavp_sync_meta` (copias anteriores a 1.0.7) se adopta si pasa la regla de conteos.
 4. **Registro de cambios** activado y cursor de inicio = `MAX(sync_cambios.id)`, **antes** de leer los datos: lo que cambie durante la copia queda para el siguiente incremental (re-subir es idempotente).
 5. **Esquema remoto** (`reconcileRemoteSchema`): crea tablas faltantes; agrega con `ALTER TABLE … ADD COLUMN "col" TIPO` las columnas que falten; índices y vistas best-effort.
 6. **Triggers remotos** eliminados y **tablas excluidas** vaciadas en la nube.
-7. **Copia** en orden de dependencias (`TABLE_SYNC_ORDER`, luego el resto alfabético) con `INSERT OR REPLACE` en lotes atómicos de 100.
+7. **Copia** en orden de dependencias (`TABLE_SYNC_ORDER`, luego el resto alfabético) con `upsertBatch` en lotes atómicos de 100.
+
+> **`upsertBatch` actualiza en su lugar** (`INSERT … ON CONFLICT(id) DO UPDATE`). Hasta 1.0.10 usaba `INSERT OR REPLACE`, que SQLite ejecuta como borrar + insertar; Turso aplica las llaves foráneas a ese borrado, así que subir un usuario vaciaba `user_permission_overrides.updated_by` (ON DELETE SET NULL) y borraba sus permisos individuales, subir una tarifa borraba sus `rangos_tarifas`, una ruta sus `rutas_puntos` y el catálogo de permisos los permisos de roles (ON DELETE CASCADE). Si un lote choca con otro índice UNIQUE (p. ej. intercambio de `orden` en una ruta), se reintenta fila por fila y se borran en la nube solo las filas obsoletas que ocupan esa clave con otro id; en ese caso el ciclo verifica todas las tablas.
 8. **Borrado por diferencia** (`pruneRemoteRows`), de hijas a padres: solo los `id` que ya no existen en local. **Nunca `DELETE FROM tabla` completo** (salvo tablas excluidas).
 9. **Metadatos remotos**, `commitChanges(cursor de inicio)`, `last_sync`, `requiere_carga_completa = 0`.
 10. **Verificación** de todas las tablas (`verifyRemote`), registrada como verificación completa.
@@ -107,7 +112,7 @@ Cada `syncIntervalMs` (15 min) o a petición:
 4. **Sin cambios y sin verificación diaria pendiente → 0 llamadas de red.**
 5. Lee `_aguavp_sync_meta`; si `instancia_id` no coincide → `needsSeed: 'remote_identity'` → carga semilla protegida.
 6. Si `ultima_migracion` difiere → `reconcileRemoteSchema`.
-7. `pushChanges`: para cada tabla (padres → hijas) lee el **estado actual** de los ids registrados; los que existen se suben con `INSERT OR REPLACE`; los que ya no existen se borran en la nube (hijas → padres).
+7. `pushChanges`: para cada tabla (padres → hijas) lee el **estado actual** de los ids registrados; los que existen se suben con `upsertBatch` (actualización en su lugar); los que ya no existen se borran en la nube (hijas → padres).
 8. `commitChanges(maxId)`: guarda el cursor y elimina del registro lo subido. Si algo falla antes, el registro queda intacto y se reintenta.
 9. **Verificación** (`verifyRemote`): `COUNT(*)` y `MAX(id)` local vs nube de las tablas tocadas; de **todas** si pasaron 24 h desde la última verificación completa correcta. Las tablas con diferencias (y sin cambios nuevos registrados durante el ciclo) se reparan con `repairTables`: re-subida completa + borrado por diferencia, **excepto** en `GUARD_TABLES` con más registros en la nube, que se conservan y se reportan en `verificacion.conservadas`.
 10. Metadatos remotos y `last_sync`.
@@ -116,7 +121,27 @@ Limitación: la verificación compara cantidades e ids, no el contenido de cada 
 
 ---
 
-## 6. Triggers en Bases Restauradas (`ensureCoreTriggers`)
+## 6. Restauración desde la Nube (`prepareRestore` → `restoreRemoteInto`)
+
+La API **no reemplaza** la base en uso (su conexión `db-sqlite` permanece abierta mientras corre el proceso y, en modo WAL, copiar un archivo encima corrompe o deshace el cambio). Solo construye un archivo validado; el reemplazo lo hace la app al reiniciar.
+
+1. `prepareRestore` crea `<dir de DB_PATH>/restauraciones/nube-<fecha>.db` (`journal_mode = DELETE`) y ejecuta `customMigrate` con las migraciones del paquete: **esquema actual + triggers de negocio** (vía `ensureCoreTriggers`).
+2. `restoreRemoteInto(target, remote)`:
+   * Falla si la nube no tiene copia (`describeRemoteCopy().disponible`).
+   * Guarda y elimina los triggers del destino; `foreign_keys = OFF`.
+   * **Conserva lo que esta versión no conoce:** tablas de la nube inexistentes en el esquema actual se crean con su definición de la nube (`tablasConservadas`) y columnas de la nube inexistentes se agregan con nombre y tipo (`columnasConservadas`).
+   * Por cada tabla sincronizable presente en la nube (excepto `__drizzle_migrations`): vacía la tabla destino (las migraciones pueden haber sembrado filas), copia en una transacción las **columnas comunes** paginando por `id` (1000 filas); las columnas que la nube no tiene toman su `DEFAULT`. BLOB (`ArrayBuffer`) → `Buffer`.
+   * Restaura los triggers; `foreign_keys = ON`.
+   * `sync_estado`: `instancia_id` de la nube, `requiere_carga_completa = 1`, `restaurada_desde_nube`.
+   * Valida: `quick_check`, registros por tabla iguales a la nube y mismo número de triggers. Cualquier fallo lanza error y se borra el archivo.
+3. La app (`apiManager.restoreFromCloud`) mueve el archivo a `agua-vp.db.restaurar` (`stageRestore`, que repite `integrity_check`) y reinicia. Al arrancar, antes de abrir la base, `applyPendingRestore` respalda la base actual con `VACUUM INTO` (incluye el WAL; si el respaldo falla no se restaura), reemplaza el archivo y elimina `-wal`/`-shm` de la base anterior.
+4. Al volver a sincronizar: carga semilla protegida (misma identidad, mismos conteos → sin conflicto) y verificación completa.
+
+Tablas excluidas quedan vacías: los usuarios vuelven a iniciar sesión.
+
+---
+
+## 7. Triggers en Bases Restauradas (`ensureCoreTriggers`)
 
 La nube no tiene triggers (rechazarían pagos históricos o recalcularían saldos ya consolidados). Al arrancar, después de las migraciones, `ensureCoreTriggers(db, log)` crea los que falten de `CORE_TRIGGERS`:
 
@@ -129,7 +154,7 @@ La nube no tiene triggers (rechazarían pagos históricos o recalcularían saldo
 
 ---
 
-## 7. Resiliencia
+## 8. Resiliencia
 
 * Errores del ciclo automático: `console.warn`, el servidor sigue atendiendo, se reintenta en el siguiente ciclo sin perder cambios (siguen en `sync_cambios`).
 * `syncState.inProgress` evita ejecuciones simultáneas.
@@ -137,7 +162,7 @@ La nube no tiene triggers (rechazarían pagos históricos o recalcularían saldo
 
 ---
 
-## 8. Pruebas
+## 9. Pruebas
 
 ```bash
 npm run test:sync
@@ -148,6 +173,7 @@ Con `node:test` (no Jest), usando `node:sqlite` en memoria como base local y un 
 * `src/test/unit/turso-sync-core.test.js`
   * Protección: primera carga sin triggers remotos; base local vacía y respaldo antiguo bloqueados (nube intacta); reemplazo forzado; borrado por diferencia; tabla protegida con faltantes; columna nueva; adopción de copia sin identidad; herencia de identidad.
   * Registro de cambios: tablas excluidas; cero red sin cambios; altas/ediciones/borrados de cualquier tabla; cambios de triggers de negocio y cascadas; reparación por verificación; registros extra conservados en tablas protegidas; carga completa requerida ante otra base o tabla nueva; desvincular; base dañada nunca se sube.
+  * Restauración: ida y vuelta local → nube → base nueva (conteos, fila sembrada reemplazada, saldos tal cual, columna nueva con DEFAULT, triggers activos, identidad heredada, tablas excluidas vacías); re-vinculación sin conflicto; nube vacía; resumen sin tablas internas.
 * `src/test/unit/core-triggers.test.js`: `CORE_TRIGGERS` igual a las migraciones y comportamiento (estado "Parcial"/"Pagado", rechazo de sobrepago, historial al asignar/retirar medidor).
 
 Las suites `node:test` aparecen como fallidas si se ejecutan con Jest (`npm test`); usar su script.

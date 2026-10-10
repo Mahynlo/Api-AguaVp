@@ -17,8 +17,16 @@
  */
 
 import { createClient } from '@libsql/client';
+import Database from 'better-sqlite3';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { sqlite } from '../../database/db-sqlite.js';
+import { customMigrate } from '../../database/sqlite-migrator.js';
 import {
+    GUARD_TABLES,
+    describeRemoteCopy,
+    restoreRemoteInto,
     ensureLocalStateTable,
     getLocalState,
     setLocalState,
@@ -31,6 +39,7 @@ import {
 } from './tursoSyncCore.js';
 
 const VERIFICACION_COMPLETA_MS = 24 * 60 * 60 * 1000;
+const MIGRATIONS_FOLDER = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../database/migrations');
 
 // Estado en memoria del servicio
 let tursoClient = null;
@@ -322,11 +331,82 @@ export async function syncIncremental() {
     }
 
     // La nube no corresponde a esta base o faltaba el registro de cambios: carga semilla protegida
-    log(result.reason === 'remote_identity'
-        ? 'La nube no corresponde a esta base local — se ejecuta carga semilla protegida'
-        : 'Registro de cambios recién activado — se ejecuta carga semilla protegida');
+    const motivos = {
+        remote_identity: 'La nube no corresponde a esta base local',
+        remote_columns: 'La nube tiene columnas que esta base no tiene',
+        tracking_installed: 'Registro de cambios recién activado'
+    };
+    log(`${motivos[result.reason] || result.reason} — se ejecuta carga semilla protegida`);
     setLocalState(sqlite, 'requiere_carga_completa', '1');
     return await seedDatabase();
+}
+
+// ── Restauración desde la nube ────────────────────────────────────────────────
+
+/**
+ * Resumen de la copia en la nube (fecha, identidad, registros por tabla) junto a los registros
+ * de la base local, para que el administrador confirme la restauración.
+ */
+export async function describeCloudCopy() {
+    if (!tursoClient) throw new Error('El cliente de Turso no está configurado');
+    const copia = await describeRemoteCopy(tursoClient);
+    const local = Object.fromEntries(GUARD_TABLES.map(t => {
+        try {
+            return [t, Number(sqlite.prepare(`SELECT COUNT(*) AS n FROM "${t}"`).get().n)];
+        } catch (_) {
+            return [t, 0];
+        }
+    }));
+    return {
+        disponible: copia.disponible,
+        lastSyncNube: copia.meta.last_sync || null,
+        mismaBase: Boolean(copia.meta.instancia_id) && copia.meta.instancia_id === getOrCreateInstanciaId(sqlite),
+        tablas: copia.tablas,
+        comparacion: GUARD_TABLES.map(t => ({
+            tabla: t,
+            nube: copia.tablas.find(x => x.tabla === t)?.nube ?? 0,
+            local: local[t]
+        }))
+    };
+}
+
+/**
+ * Construye en un archivo NUEVO (carpeta `restauraciones` junto a la base) una base con el esquema
+ * de esta versión y los datos de la nube, y la valida. No toca la base en uso: el reemplazo lo hace
+ * la app de escritorio al reiniciar (la conexión de la API debe estar cerrada).
+ * @returns {Promise<Object>} resumen de restoreRemoteInto + { archivo }
+ */
+export async function prepareRestore() {
+    if (!tursoClient) throw new Error('El cliente de Turso no está configurado');
+    if (syncState.inProgress) throw new Error('Una sincronización ya se encuentra en progreso');
+
+    syncState.inProgress = true;
+    const dbDir = path.dirname(process.env.DB_PATH || sqlite.name);
+    const dir = path.join(dbDir, 'restauraciones');
+    fs.mkdirSync(dir, { recursive: true });
+    const archivo = path.join(dir, `nube-${new Date().toISOString().replace(/[:.]/g, '-')}.db`);
+    log(`⬇️ Preparando restauración desde la nube en ${archivo}`);
+
+    let target;
+    try {
+        target = new Database(archivo);
+        target.pragma('journal_mode = DELETE'); // archivo único, listo para copiarse
+        customMigrate(target, MIGRATIONS_FOLDER, () => {});
+        const result = await restoreRemoteInto(target, tursoClient, { log });
+        target.close();
+        target = null;
+        log(`✅ Copia de la nube preparada y verificada (${result.totalRegistros} registros)`);
+        return { ...result, archivo };
+    } catch (error) {
+        if (target) {
+            try { target.close(); } catch (_) {}
+        }
+        fs.rmSync(archivo, { force: true });
+        console.error('[TursoSync] ❌ Error preparando la restauración:', error);
+        throw error;
+    } finally {
+        syncState.inProgress = false;
+    }
 }
 
 export default {
@@ -334,5 +414,7 @@ export default {
     configure,
     getStatus,
     seedDatabase,
-    syncIncremental
+    syncIncremental,
+    describeCloudCopy,
+    prepareRestore
 };

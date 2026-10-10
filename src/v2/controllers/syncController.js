@@ -137,10 +137,36 @@ export async function syncNow(req, res) {
     }
 }
 
+/**
+ * Resumen de la copia en la nube para confirmar una restauración
+ */
+export async function restorePreview(req, res) {
+    try {
+        const data = await syncService.describeCloudCopy();
+        res.json({ success: true, data });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+}
+
+/**
+ * Construye y valida una base restaurada desde la nube (no reemplaza la base en uso)
+ */
+export async function restorePrepare(req, res) {
+    try {
+        const data = await syncService.prepareRestore();
+        res.json({ success: true, message: 'Copia de la nube preparada y verificada', data });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+}
+
 export default {
     getStatus,
     testConnection,
     configure,
     runSeed,
-    syncNow
+    syncNow,
+    restorePreview,
+    restorePrepare
 };

@@ -12,6 +12,8 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import {
+    restoreRemoteInto,
+    describeRemoteCopy,
     incrementalRemote,
     readPendingChanges,
     disableChangeTracking,
@@ -31,7 +33,11 @@ const SCHEMA = `
         cliente_id INTEGER REFERENCES clientes(id), total NUMERIC NOT NULL, saldo_pendiente NUMERIC NOT NULL);
     CREATE TABLE pagos (id INTEGER PRIMARY KEY AUTOINCREMENT,
         factura_id INTEGER REFERENCES facturas(id), monto NUMERIC NOT NULL);
-    CREATE TABLE rutas_puntos (id INTEGER PRIMARY KEY AUTOINCREMENT, ruta_id INTEGER NOT NULL, orden INTEGER NOT NULL);
+    CREATE TABLE rutas_puntos (id INTEGER PRIMARY KEY AUTOINCREMENT, ruta_id INTEGER NOT NULL, orden INTEGER NOT NULL,
+        UNIQUE(ruta_id, orden));
+    CREATE TABLE user_permission_overrides (id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+        updated_by INTEGER REFERENCES usuarios(id) ON DELETE SET NULL, permission_key TEXT NOT NULL);
     CREATE TABLE rangos_tarifas (id INTEGER PRIMARY KEY AUTOINCREMENT,
         tarifa_id INTEGER NOT NULL REFERENCES tarifas(id) ON DELETE CASCADE, precio NUMERIC);
     CREATE TABLE sesiones (id INTEGER PRIMARY KEY AUTOINCREMENT, token TEXT);
@@ -51,6 +57,7 @@ function fillLocal(db, clientes = 3) {
     db.exec(`INSERT INTO tarifas (nombre) VALUES ('Domestica')`);
     db.exec(`INSERT INTO rangos_tarifas (tarifa_id, precio) VALUES (1, 10), (1, 20)`);
     db.exec(`INSERT INTO sesiones (token) VALUES ('secreto')`);
+    db.exec(`INSERT INTO user_permission_overrides (user_id, updated_by, permission_key) VALUES (1, 1, 'clientes.crear')`);
     for (let i = 1; i <= clientes; i++) {
         db.prepare(`INSERT INTO clientes (nombre, tarifa_id) VALUES (?, 1)`).run(`Cliente ${i}`);
         db.prepare(`INSERT INTO facturas (cliente_id, total, saldo_pendiente) VALUES (?, 100, 100)`).run(i);
@@ -343,5 +350,195 @@ describe('tursoSyncCore — registro de cambios, verificación e integridad', ()
             /integridad/
         );
         assert.equal(await remoteCount(remote, 'clientes'), 3);
+    });
+});
+
+describe('tursoSyncCore — restauración desde la nube', () => {
+    let dir;
+    let remote;
+
+    beforeEach(() => {
+        dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aguavp-restore-'));
+        remote = createClient({ url: 'file:' + path.join(dir, 'nube.db').split(path.sep).join('/') });
+    });
+
+    afterEach(() => {
+        remote.close();
+        try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); } catch (_) {}
+    });
+
+    // Base "recién migrada" de una versión más nueva: esquema actual + triggers + filas sembradas por migración
+    const nuevaBaseMigrada = () => {
+        const db = newLocal();
+        db.exec(`ALTER TABLE clientes ADD COLUMN estado TEXT NOT NULL DEFAULT 'Activo'`);
+        db.exec(`INSERT INTO tarifas (nombre) VALUES ('Sembrada por migración')`);
+        return db;
+    };
+
+    it('ida y vuelta: local → nube → base nueva con mismos datos, triggers funcionando e identidad heredada', async () => {
+        const original = newLocal();
+        fillLocal(original, 4);
+        original.exec(`INSERT INTO pagos (factura_id, monto) VALUES (2, 60)`); // factura 2 queda en 0
+        const id = getOrCreateInstanciaId(original);
+        await seedRemote(original, remote, { instanciaId: id, timestamp: ts() });
+
+        const restaurada = nuevaBaseMigrada();
+        const res = await restoreRemoteInto(restaurada, remote);
+
+        assert.equal(res.instanciaId, id);
+        for (const t of ['usuarios', 'tarifas', 'clientes', 'facturas', 'pagos', 'rutas_puntos', 'rangos_tarifas']) {
+            const a = original.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n;
+            const b = restaurada.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n;
+            assert.equal(b, a, `registros de ${t}`);
+        }
+        // La fila sembrada por la migración fue reemplazada por los datos de la nube
+        assert.equal(restaurada.prepare(`SELECT nombre FROM tarifas WHERE id = 1`).get().nombre, 'Domestica');
+        // Saldos copiados tal cual (sin re-aplicar triggers durante la copia)
+        assert.equal(Number(restaurada.prepare('SELECT saldo_pendiente FROM facturas WHERE id = 2').get().saldo_pendiente), 0);
+        // Columna nueva (no existe en la nube) toma su DEFAULT
+        assert.equal(restaurada.prepare('SELECT estado FROM clientes WHERE id = 1').get().estado, 'Activo');
+        // Triggers de negocio de nuevo activos
+        restaurada.exec(`INSERT INTO pagos (factura_id, monto) VALUES (1, 10)`);
+        assert.equal(Number(restaurada.prepare('SELECT saldo_pendiente FROM facturas WHERE id = 1').get().saldo_pendiente), 50);
+        // Tablas excluidas vacías; marcada para carga completa al volver a vincular
+        assert.equal(Number(restaurada.prepare('SELECT COUNT(*) AS n FROM sesiones').get().n), 0);
+        assert.equal(restaurada.prepare(`SELECT valor FROM sync_estado WHERE clave = 'requiere_carga_completa'`).get().valor, '1');
+    });
+
+    it('al volver a vincular, la base restaurada continúa con la misma copia sin conflicto', async () => {
+        const original = newLocal();
+        fillLocal(original, 3);
+        const id = getOrCreateInstanciaId(original);
+        await seedRemote(original, remote, { instanciaId: id, timestamp: ts() });
+
+        const restaurada = newLocal();
+        await restoreRemoteInto(restaurada, remote);
+        const res = await seedRemote(restaurada, remote, { instanciaId: getOrCreateInstanciaId(restaurada), timestamp: ts() });
+
+        assert.equal(res.success, true);
+        assert.equal(res.pruned, 0);
+        assert.equal(res.verificacion.ok, true);
+    });
+
+    it('columnas y tablas que la versión instalada no conoce se conservan al restaurar', async () => {
+        // Base original con una columna y una tabla de una migración que ya no existe en el código
+        const original = newLocal();
+        original.exec(`ALTER TABLE facturas ADD COLUMN fecha_entrega_recibo DATE`);
+        original.exec(`CREATE TABLE notas_internas (id INTEGER PRIMARY KEY, texto TEXT)`);
+        fillLocal(original, 3);
+        original.exec(`UPDATE facturas SET fecha_entrega_recibo = '2026-05-0' || id`);
+        original.exec(`INSERT INTO notas_internas (texto) VALUES ('importante')`);
+        const id = getOrCreateInstanciaId(original);
+        await seedRemote(original, remote, { instanciaId: id, timestamp: ts() });
+
+        const restaurada = newLocal(); // esquema de la versión instalada: sin esa columna ni tabla
+        const res = await restoreRemoteInto(restaurada, remote);
+
+        assert.deepEqual(res.columnasConservadas, ['facturas.fecha_entrega_recibo']);
+        assert.deepEqual(res.tablasConservadas, ['notas_internas']);
+        assert.equal(restaurada.prepare('SELECT fecha_entrega_recibo AS f FROM facturas WHERE id = 2').get().f, '2026-05-02');
+        assert.equal(restaurada.prepare('SELECT texto FROM notas_internas').get().texto, 'importante');
+
+        // Y al volver a vincular no se pierde nada en la nube
+        const seed = await seedRemote(restaurada, remote, { instanciaId: getOrCreateInstanciaId(restaurada), timestamp: ts() });
+        assert.equal(seed.success, true);
+        const enNube = (await remote.execute('SELECT COUNT(*) AS n FROM facturas WHERE fecha_entrega_recibo IS NOT NULL')).rows[0].n;
+        assert.equal(Number(enNube), 3);
+    });
+
+    it('una base sin columnas que la nube sí tiene NO puede subirse (se vaciarían en la nube)', async () => {
+        const original = newLocal();
+        original.exec(`ALTER TABLE facturas ADD COLUMN fecha_entrega_recibo DATE`);
+        fillLocal(original, 3);
+        original.exec(`UPDATE facturas SET fecha_entrega_recibo = '2026-05-01'`);
+        const id = getOrCreateInstanciaId(original);
+        await seedRemote(original, remote, { instanciaId: id, timestamp: ts() });
+
+        // Misma identidad y mismos registros, pero sin la columna (restauración de una versión anterior)
+        const sinColumna = newLocal();
+        fillLocal(sinColumna, 3);
+        const { setLocalState: set } = await import('../../v2/services/tursoSyncCore.js');
+        getOrCreateInstanciaId(sinColumna);
+        set(sinColumna, 'instancia_id', id);
+
+        const seed = await seedRemote(sinColumna, remote, { instanciaId: id, timestamp: ts() });
+        assert.equal(seed.conflict, true);
+        assert.deepEqual(seed.motivos.map(m => m.tipo), ['columnas']);
+        const enNube = (await remote.execute('SELECT COUNT(*) AS n FROM facturas WHERE fecha_entrega_recibo IS NOT NULL')).rows[0].n;
+        assert.equal(Number(enNube), 3, 'la nube conserva los valores');
+    });
+
+    it('nube vacía: no hay nada que restaurar', async () => {
+        await assert.rejects(restoreRemoteInto(newLocal(), remote), /no contiene una copia/);
+    });
+
+    it('describeRemoteCopy no incluye tablas internas ni excluidas', async () => {
+        const original = newLocal();
+        fillLocal(original);
+        await seedRemote(original, remote, { instanciaId: getOrCreateInstanciaId(original), timestamp: ts() });
+        const copia = await describeRemoteCopy(remote);
+        const nombres = copia.tablas.map(t => t.tabla);
+        assert.equal(copia.disponible, true);
+        assert.ok(nombres.includes('clientes'));
+        for (const t of ['sesiones', '_aguavp_sync_meta', 'sync_estado', 'sync_cambios']) assert.ok(!nombres.includes(t));
+    });
+});
+
+describe('tursoSyncCore — nube con llaves foráneas activas (como Turso)', () => {
+    let dir;
+    let remote;
+    let local;
+    let id;
+
+    const remoteCount = async (sql) => Number((await remote.execute(sql)).rows[0].n);
+
+    beforeEach(async () => {
+        dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aguavp-fk-'));
+        remote = createClient({ url: 'file:' + path.join(dir, 'nube.db').split(path.sep).join('/') });
+        local = newLocal();
+        fillLocal(local, 3);
+        id = getOrCreateInstanciaId(local);
+        await seedRemote(local, remote, { instanciaId: id, timestamp: ts() });
+        await remote.execute('PRAGMA foreign_keys = ON');
+        assert.equal(Number((await remote.execute('PRAGMA foreign_keys')).rows[0].foreign_keys), 1);
+    });
+
+    afterEach(() => {
+        remote.close();
+        try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); } catch (_) {}
+    });
+
+    it('subir un usuario editado no borra ni vacía sus permisos en la nube', async () => {
+        local.exec(`UPDATE usuarios SET nombre = 'Admin (último acceso)' WHERE id = 1`);
+        await incrementalRemote(local, remote, { instanciaId: id, timestamp: ts() });
+
+        assert.equal(await remoteCount(`SELECT COUNT(*) AS n FROM user_permission_overrides WHERE user_id = 1`), 1);
+        assert.equal(await remoteCount(`SELECT COUNT(*) AS n FROM user_permission_overrides WHERE updated_by = 1`), 1);
+    });
+
+    it('subir una tarifa editada no borra sus rangos en la nube', async () => {
+        local.exec(`UPDATE tarifas SET nombre = 'Doméstica 2026' WHERE id = 1`);
+        await incrementalRemote(local, remote, { instanciaId: id, timestamp: ts() });
+        assert.equal(await remoteCount(`SELECT COUNT(*) AS n FROM rangos_tarifas WHERE tarifa_id = 1`), 2);
+    });
+
+    it('la carga completa tampoco borra dependientes en la nube', async () => {
+        const res = await seedRemote(local, remote, { instanciaId: id, timestamp: ts() });
+        assert.equal(res.verificacion.ok, true);
+        assert.equal(await remoteCount(`SELECT COUNT(*) AS n FROM rangos_tarifas`), 2);
+        assert.equal(await remoteCount(`SELECT COUNT(*) AS n FROM user_permission_overrides WHERE updated_by = 1`), 1);
+    });
+
+    it('intercambiar el orden de dos puntos de ruta (clave única) se sube sin error', async () => {
+        local.exec(`UPDATE rutas_puntos SET orden = -1 WHERE id = 1`);
+        local.exec(`UPDATE rutas_puntos SET orden = 1 WHERE id = 2`);
+        local.exec(`UPDATE rutas_puntos SET orden = 2 WHERE id = 1`);
+
+        const res = await incrementalRemote(local, remote, { instanciaId: id, timestamp: ts() });
+
+        assert.equal(res.success, true);
+        const filas = (await remote.execute('SELECT id, orden FROM rutas_puntos ORDER BY id')).rows.map(r => [Number(r.id), Number(r.orden)]);
+        assert.deepEqual(filas, [[1, 2], [2, 1], [3, 3]]);
+        assert.equal(res.verificacion.ok, true);
     });
 });

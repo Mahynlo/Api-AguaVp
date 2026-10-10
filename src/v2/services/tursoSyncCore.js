@@ -291,7 +291,7 @@ export function commitChanges(local, maxId) {
  * en la nube; si ya no existe, se borra en la nube. Padres antes que hijos al subir, hijos antes
  * que padres al borrar.
  */
-export async function pushChanges(local, remote, porTabla) {
+export async function pushChanges(local, remote, porTabla, stats = { conflictosResueltos: 0 }) {
     const tables = getLocalTables(local).map(t => t.name).filter(t => porTabla.has(t));
     const deletesByTable = new Map();
     let upserted = 0;
@@ -305,7 +305,7 @@ export async function pushChanges(local, remote, porTabla) {
                 `SELECT * FROM ${quoteId(table)} WHERE id IN (${chunk.map(() => '?').join(', ')})`
             ).all(...chunk);
             rows.forEach(r => found.add(String(r.id)));
-            upserted += await upsertBatch(remote, table, rows);
+            upserted += await upsertBatch(remote, table, rows, { local, stats });
         }
         const missing = ids.filter(id => !found.has(String(id)));
         if (missing.length) deletesByTable.set(table, missing);
@@ -323,7 +323,7 @@ export async function pushChanges(local, remote, porTabla) {
         deleted += ids.length;
     }
 
-    return { upserted, deleted, tablas: tables };
+    return { upserted, deleted, tablas: tables, conflictosResueltos: stats.conflictosResueltos };
 }
 
 // ── Metadatos remotos (_aguavp_sync_meta) ─────────────────────────────────────
@@ -393,7 +393,36 @@ export async function checkSeedSafety(local, remote, instanciaId) {
         });
     }
 
-    return { seguro: motivos.length === 0, motivos, comparacion, remoteMeta };
+    const columnasSoloNube = await remoteExtraColumns(local, remote, getLocalTables(local).map(t => t.name), existing);
+    if (columnasSoloNube.length > 0) {
+        motivos.push({
+            tipo: 'columnas',
+            mensaje: 'La nube tiene columnas con datos que esta base no tiene: ' + columnasSoloNube.join(', ') +
+                '. Subir esta base las vaciaría en la nube; restaura desde la nube para conservarlas.'
+        });
+    }
+
+    return { seguro: motivos.length === 0, motivos, comparacion, remoteMeta, columnasSoloNube };
+}
+
+/**
+ * Columnas que existen en la nube pero no en la base local (tablas sincronizadas presentes en ambos lados).
+ * Un INSERT OR REPLACE desde esta base las dejaría en NULL en la nube.
+ * @returns {Promise<string[]>} "tabla.columna"
+ */
+export async function remoteExtraColumns(local, remote, tableNames, existing = null) {
+    const names = existing || await remoteTableNames(remote);
+    const present = tableNames.filter(t => names.has(t));
+    if (present.length === 0) return [];
+    const results = await remote.batch(present.map(t => ({ sql: `PRAGMA table_info(${quoteId(t)})` })), 'read');
+    const extras = [];
+    present.forEach((t, i) => {
+        const localCols = new Set(localColumns(local, t).map(c => c.name));
+        for (const r of results[i].rows) {
+            if (!localCols.has(r.name)) extras.push(`${t}.${r.name}`);
+        }
+    });
+    return extras;
 }
 
 // ── Esquema remoto ────────────────────────────────────────────────────────────
@@ -468,23 +497,70 @@ async function purgeExcludedRemoteTables(remote) {
 
 // ── Copia de datos ────────────────────────────────────────────────────────────
 
-/** Inserta o reemplaza filas en lotes (cada lote es atómico). */
-export async function upsertBatch(remote, tableName, rows) {
+const isUniqueError = (err) => /UNIQUE constraint failed/i.test(String(err?.message || err));
+
+/** Índices UNIQUE (no la llave primaria) de una tabla local: [['col1','col2'], ...] */
+function uniqueKeys(local, table) {
+    return local.prepare(`PRAGMA index_list(${quoteId(table)})`).all()
+        .filter(i => i.unique && i.origin !== 'pk' && !i.partial)
+        .map(i => local.prepare(`PRAGMA index_info(${quoteId(i.name)})`).all().map(c => c.name))
+        .filter(cols => cols.length && cols.every(Boolean));
+}
+
+/**
+ * Inserta o actualiza filas en la nube EN SU LUGAR (`INSERT … ON CONFLICT(id) DO UPDATE`), en lotes atómicos.
+ *
+ * No se usa `INSERT OR REPLACE`: para SQLite eso es borrar + insertar, y Turso aplica las acciones de las
+ * llaves foráneas (ON DELETE CASCADE / SET NULL) a ese borrado — p. ej. subir una tarifa borraba sus rangos
+ * en la nube y subir un usuario vaciaba `user_permission_overrides.updated_by`.
+ *
+ * Si un lote choca con otro índice UNIQUE (p. ej. intercambio de `orden` en una ruta), se reintenta fila por
+ * fila y se eliminan en la nube solo las filas OBSOLETAS que ocupan esa clave única con otro id (en local esa
+ * clave pertenece a la fila que se sube). Esos casos se cuentan en `stats.conflictosResueltos`.
+ *
+ * @param {Object} [opts]
+ * @param {Object} [opts.local] - base local (para conocer los índices UNIQUE al resolver choques)
+ * @param {{ conflictosResueltos: number }} [opts.stats]
+ */
+export async function upsertBatch(remote, tableName, rows, { local = null, stats = null } = {}) {
     if (!rows || rows.length === 0) return 0;
     const columns = Object.keys(rows[0]);
-    const insertSql = `INSERT OR REPLACE INTO ${quoteId(tableName)} (${columns.map(quoteId).join(', ')}) ` +
-        `VALUES (${columns.map(() => '?').join(', ')})`;
+    const table = quoteId(tableName);
+    const insertCols = `(${columns.map(quoteId).join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`;
+    const updates = columns.filter(c => c !== 'id').map(c => `${quoteId(c)} = excluded.${quoteId(c)}`);
+    const sql = !columns.includes('id')
+        ? `INSERT OR REPLACE INTO ${table} ${insertCols}`
+        : `INSERT INTO ${table} ${insertCols} ON CONFLICT(id) DO ${updates.length ? `UPDATE SET ${updates.join(', ')}` : 'NOTHING'}`;
+    const argsOf = (row) => columns.map(c => {
+        const val = row[c];
+        if (typeof val === 'boolean') return val ? 1 : 0;
+        if (val === undefined) return null;
+        return val;
+    });
 
     for (const chunk of chunks(rows, UPSERT_BATCH_SIZE)) {
-        await remote.batch(chunk.map(row => ({
-            sql: insertSql,
-            args: columns.map(c => {
-                const val = row[c];
-                if (typeof val === 'boolean') return val ? 1 : 0;
-                if (val === undefined) return null;
-                return val;
-            })
-        })), 'write');
+        try {
+            await remote.batch(chunk.map(row => ({ sql, args: argsOf(row) })), 'write');
+        } catch (err) {
+            if (!isUniqueError(err) || !local || !columns.includes('id')) throw err;
+            const keys = uniqueKeys(local, tableName);
+            for (const row of chunk) {
+                try {
+                    await remote.execute({ sql, args: argsOf(row) });
+                } catch (rowErr) {
+                    if (!isUniqueError(rowErr)) throw rowErr;
+                    for (const key of keys) {
+                        if (key.some(c => row[c] === null || row[c] === undefined)) continue;
+                        const res = await remote.execute({
+                            sql: `DELETE FROM ${table} WHERE ${key.map(c => `${quoteId(c)} = ?`).join(' AND ')} AND id <> ?`,
+                            args: [...key.map(c => row[c]), row.id]
+                        });
+                        if (stats && res.rowsAffected) stats.conflictosResueltos += res.rowsAffected;
+                    }
+                    await remote.execute({ sql, args: argsOf(row) });
+                }
+            }
+        }
     }
     return rows.length;
 }
@@ -558,7 +634,7 @@ export async function repairTables(local, remote, diferencias) {
 
     for (const t of targets) {
         const rows = local.prepare(`SELECT * FROM ${quoteId(t)}`).all();
-        await upsertBatch(remote, t, rows);
+        await upsertBatch(remote, t, rows, { local });
     }
     for (const t of [...targets].reverse()) {
         const d = byTable.get(t);
@@ -570,6 +646,164 @@ export async function repairTables(local, remote, diferencias) {
         reparadas.push(t);
     }
     return { reparadas, conservadas };
+}
+
+// ── Restauración desde la nube ────────────────────────────────────────────────
+
+const RESTORE_PAGE_SIZE = 1000;
+
+/** Valores de libsql → valores aceptados por SQLite local (BLOB llega como ArrayBuffer). */
+const toLocalValue = (v) => (v instanceof ArrayBuffer ? Buffer.from(v) : v);
+
+/**
+ * Resumen de la copia en la nube para confirmar una restauración (sin escribir nada).
+ * @returns {Promise<{ disponible: boolean, meta: Object, tablas: Array<{ tabla, nube }> }>}
+ */
+export async function describeRemoteCopy(remote) {
+    const meta = await readRemoteMeta(remote);
+    const existing = await remoteTableNames(remote);
+    const tablas = [...existing].filter(t =>
+        !LOCAL_ONLY_TABLES.has(t) && !EXCLUDED_TABLES.has(t) && !t.startsWith('sqlite_') && t !== '__drizzle_migrations'
+    ).sort();
+    const counts = await countRemote(remote, tablas, existing);
+    const conDatos = GUARD_TABLES.some(t => counts[t] > 0);
+    return {
+        disponible: Boolean(meta.instancia_id) || conDatos,
+        meta,
+        tablas: tablas.map(t => ({ tabla: t, nube: counts[t] }))
+    };
+}
+
+/**
+ * Llena una base local NUEVA, ya creada con las migraciones de la versión instalada
+ * (esquema actual + triggers de negocio), con los datos de la copia en la nube.
+ *
+ * - Se copian solo las columnas que existen en ambos lados; las columnas nuevas toman su DEFAULT.
+ * - `__drizzle_migrations` no se copia (la base nueva tiene su propio historial de migraciones).
+ * - Los triggers se desactivan durante la copia (los datos ya vienen calculados) y se restauran al final.
+ * - La base resultante hereda la identidad de la copia y queda marcada para una carga completa
+ *   (verificada) cuando la sincronización vuelva a activarse.
+ * - Valida integridad y que la cantidad de registros copiados coincida con la nube; si algo falla, lanza error
+ *   (la base local en uso NO se toca en ningún caso: esto solo escribe en `target`).
+ *
+ * @returns {Promise<{ instanciaId, lastSyncNube, tablas: Array<{ tabla, registros }>, totalRegistros, fkViolaciones, triggers }>}
+ */
+export async function restoreRemoteInto(target, remote, { log = () => {} } = {}) {
+    const copia = await describeRemoteCopy(remote);
+    if (!copia.disponible) {
+        throw new Error('La nube no contiene una copia de AguaVP para restaurar.');
+    }
+    const remoteCounts = new Map(copia.tablas.map(t => [t.tabla, t.nube]));
+
+    // Desactivar triggers (de negocio y de registro) durante la copia
+    const triggers = target.prepare(`SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND sql IS NOT NULL`).all();
+    for (const t of triggers) target.exec(`DROP TRIGGER IF EXISTS ${quoteId(t.name)}`);
+    target.exec('PRAGMA foreign_keys = OFF');
+
+    const tablas = [];
+    const tablasConservadas = [];
+    const columnasConservadas = [];
+    let totalRegistros = 0;
+    try {
+        // Tablas que existen en la nube pero no en esta versión (p. ej. de migraciones que ya no están
+        // en el código): se recrean con su definición de la nube para no perder sus datos
+        const targetTables = new Set(getLocalTables(target).map(t => t.name));
+        const remoteDefs = new Map(
+            (await remote.execute(`SELECT name, sql FROM sqlite_master WHERE type = 'table'`)).rows.map(r => [r.name, r.sql])
+        );
+        for (const t of remoteCounts.keys()) {
+            if (targetTables.has(t) || !remoteDefs.get(t)) continue;
+            target.exec(ifNotExists(remoteDefs.get(t), 'TABLE'));
+            tablasConservadas.push(t);
+        }
+
+        for (const { name } of getLocalTables(target)) {
+            if (name === '__drizzle_migrations' || !remoteCounts.has(name)) continue;
+
+            const remoteInfo = (await remote.execute(`PRAGMA table_info(${quoteId(name)})`)).rows;
+            // Columnas que la nube tiene y esta versión no: se agregan (nombre y tipo) para conservar sus datos
+            const targetCols = new Set(localColumns(target, name).map(c => c.name));
+            for (const r of remoteInfo) {
+                if (targetCols.has(r.name)) continue;
+                target.exec(`ALTER TABLE ${quoteId(name)} ADD COLUMN ${quoteId(r.name)}${r.type ? ` ${r.type}` : ''}`);
+                columnasConservadas.push(`${name}.${r.name}`);
+            }
+            const remoteCols = new Set(remoteInfo.map(r => r.name));
+            const cols = localColumns(target, name).map(c => c.name).filter(c => remoteCols.has(c));
+            if (!cols.includes('id')) continue;
+
+            const insert = target.prepare(
+                `INSERT INTO ${quoteId(name)} (${cols.map(quoteId).join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`
+            );
+            target.exec('BEGIN');
+            try {
+                // Las migraciones pueden haber sembrado filas por defecto: la copia de la nube manda
+                target.exec(`DELETE FROM ${quoteId(name)}`);
+                let lastId = null;
+                let copiados = 0;
+                for (;;) {
+                    const page = await remote.execute({
+                        sql: `SELECT ${cols.map(quoteId).join(', ')} FROM ${quoteId(name)}` +
+                            (lastId === null ? '' : ' WHERE id > ?') + ` ORDER BY id LIMIT ${RESTORE_PAGE_SIZE}`,
+                        args: lastId === null ? [] : [lastId]
+                    });
+                    for (const row of page.rows) insert.run(...cols.map(c => toLocalValue(row[c])));
+                    copiados += page.rows.length;
+                    if (page.rows.length < RESTORE_PAGE_SIZE) break;
+                    lastId = page.rows[page.rows.length - 1].id;
+                }
+                target.exec('COMMIT');
+                tablas.push({ tabla: name, registros: copiados });
+                totalRegistros += copiados;
+            } catch (err) {
+                target.exec('ROLLBACK');
+                throw new Error(`Error copiando la tabla ${name}: ${err.message}`);
+            }
+        }
+    } finally {
+        target.exec('PRAGMA foreign_keys = ON');
+        for (const t of triggers) target.exec(t.sql);
+    }
+
+    // Identidad heredada: la sincronización continúa con la misma copia, empezando por una carga completa
+    ensureLocalStateTable(target);
+    setLocalState(target, 'instancia_id', copia.meta.instancia_id || crypto.randomUUID());
+    setLocalState(target, 'requiere_carga_completa', '1');
+    setLocalState(target, 'restaurada_desde_nube', new Date().toISOString());
+
+    // Validaciones
+    const integridad = checkLocalIntegrity(target);
+    if (!integridad.ok) {
+        throw new Error(`La base restaurada no pasó la verificación de integridad: ${integridad.errores.join('; ')}`);
+    }
+    const diferencias = tablas
+        .map(t => ({ ...t, local: countLocal(target, t.tabla), nube: remoteCounts.get(t.tabla) }))
+        .filter(t => t.local !== t.nube);
+    if (diferencias.length) {
+        throw new Error('Los registros copiados no coinciden con la nube en: ' +
+            diferencias.map(d => `${d.tabla} (copiados ${d.local}, nube ${d.nube})`).join(', '));
+    }
+    const triggersFinales = target.prepare(`SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger'`).get().n;
+    if (Number(triggersFinales) !== triggers.length) {
+        throw new Error(`No se restauraron todos los triggers (${triggersFinales} de ${triggers.length}).`);
+    }
+    if (integridad.fkViolaciones > 0) {
+        log(`Aviso: ${integridad.fkViolaciones} referencia(s) huérfanas en la copia restaurada`);
+    }
+    if (tablasConservadas.length || columnasConservadas.length) {
+        log(`Conservado de la nube (no existe en esta versión): ${[...tablasConservadas, ...columnasConservadas].join(', ')}`);
+    }
+
+    return {
+        instanciaId: getLocalState(target, 'instancia_id'),
+        lastSyncNube: copia.meta.last_sync || null,
+        tablasConservadas,
+        columnasConservadas,
+        tablas,
+        totalRegistros,
+        fkViolaciones: integridad.fkViolaciones,
+        triggers: Number(triggersFinales)
+    };
 }
 
 // ── Orquestación ──────────────────────────────────────────────────────────────
@@ -625,7 +859,7 @@ export async function seedRemote(local, remote, { instanciaId, force = false, ti
     for (const { name } of tables) {
         const rows = local.prepare(`SELECT * FROM ${quoteId(name)}`).all();
         if (rows.length === 0) continue;
-        await upsertBatch(remote, name, rows);
+        await upsertBatch(remote, name, rows, { local });
         totalRows += rows.length;
         tablesCopied.push({ table: name, count: rows.length });
     }
@@ -680,6 +914,11 @@ export async function incrementalRemote(local, remote, { instanciaId, timestamp,
 
     const tables = getLocalTables(local);
     if (remoteMeta.ultima_migracion !== getLocalSchemaVersion(local)) {
+        // Esquema distinto al de la última subida: si la nube tiene columnas que esta base no tiene,
+        // subir filas las vaciaría → carga completa (que se bloquea con conflicto 'columnas')
+        if ((await remoteExtraColumns(local, remote, tables.map(t => t.name))).length > 0) {
+            return { needsSeed: true, reason: 'remote_columns' };
+        }
         const schema = await reconcileRemoteSchema(local, remote, tables);
         if (schema.columnasAgregadas.length) log(`Columnas agregadas en la nube: ${schema.columnasAgregadas.join(', ')}`);
     }
@@ -691,8 +930,10 @@ export async function incrementalRemote(local, remote, { instanciaId, timestamp,
         commitChanges(local, pending.maxId);
     }
 
-    // Verificación: tablas tocadas en este ciclo, o todas si toca la verificación periódica
-    const toVerify = verifyAll ? tables.map(t => t.name) : push.tablas;
+    // Verificación: tablas tocadas en este ciclo, o todas si toca la verificación periódica o si hubo que
+    // eliminar filas obsoletas por choques de claves únicas (podrían tener dependientes en otras tablas)
+    const verificarTodo = verifyAll || push.conflictosResueltos > 0;
+    const toVerify = verificarTodo ? tables.map(t => t.name) : push.tablas;
     let verificacion = { ok: true, diferencias: [], reparadas: [], conservadas: [] };
     if (toVerify.length) {
         const v = await verifyRemote(local, remote, toVerify);

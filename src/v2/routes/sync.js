@@ -46,4 +46,8 @@ router.post('/seed', syncController.runSeed);
 // Sincronizar ahora
 router.post('/now', syncController.syncNow);
 
+// Restauración desde la nube: resumen y preparación de un archivo validado (no reemplaza la base en uso)
+router.get('/restore/preview', syncController.restorePreview);
+router.post('/restore/prepare', syncController.restorePrepare);
+
 export default router;
