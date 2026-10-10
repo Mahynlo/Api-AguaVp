@@ -12,6 +12,9 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import {
+    incrementalRemote,
+    readPendingChanges,
+    disableChangeTracking,
     seedRemote,
     getOrCreateInstanciaId,
     readRemoteMeta,
@@ -29,6 +32,9 @@ const SCHEMA = `
     CREATE TABLE pagos (id INTEGER PRIMARY KEY AUTOINCREMENT,
         factura_id INTEGER REFERENCES facturas(id), monto NUMERIC NOT NULL);
     CREATE TABLE rutas_puntos (id INTEGER PRIMARY KEY AUTOINCREMENT, ruta_id INTEGER NOT NULL, orden INTEGER NOT NULL);
+    CREATE TABLE rangos_tarifas (id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tarifa_id INTEGER NOT NULL REFERENCES tarifas(id) ON DELETE CASCADE, precio NUMERIC);
+    CREATE TABLE sesiones (id INTEGER PRIMARY KEY AUTOINCREMENT, token TEXT);
     CREATE INDEX idx_pagos_factura ON pagos(factura_id);
     CREATE TRIGGER actualizar_saldo_factura AFTER INSERT ON pagos FOR EACH ROW
     BEGIN UPDATE facturas SET saldo_pendiente = ROUND(saldo_pendiente - NEW.monto, 2) WHERE id = NEW.factura_id; END;
@@ -43,6 +49,8 @@ function newLocal() {
 function fillLocal(db, clientes = 3) {
     db.exec(`INSERT INTO usuarios (nombre) VALUES ('admin')`);
     db.exec(`INSERT INTO tarifas (nombre) VALUES ('Domestica')`);
+    db.exec(`INSERT INTO rangos_tarifas (tarifa_id, precio) VALUES (1, 10), (1, 20)`);
+    db.exec(`INSERT INTO sesiones (token) VALUES ('secreto')`);
     for (let i = 1; i <= clientes; i++) {
         db.prepare(`INSERT INTO clientes (nombre, tarifa_id) VALUES (?, 1)`).run(`Cliente ${i}`);
         db.prepare(`INSERT INTO facturas (cliente_id, total, saldo_pendiente) VALUES (?, 100, 100)`).run(i);
@@ -213,5 +221,127 @@ describe('tursoSyncCore — protección de la copia en la nube', () => {
         assert.equal(res.success, true);
         // La tabla de metadatos de la base descargada no se re-sube como dato
         assert.equal((await readRemoteMeta(remote)).instancia_id, id);
+    });
+});
+
+describe('tursoSyncCore — registro de cambios, verificación e integridad', () => {
+    let dir;
+    let remote;
+    let local;
+    let id;
+
+    const remoteRow = async (table, rowId) =>
+        (await remote.execute({ sql: `SELECT * FROM "${table}" WHERE id = ?`, args: [rowId] })).rows[0];
+
+    // Remoto que falla ante cualquier llamada: prueba que no se usa la red
+    const sinRed = new Proxy({}, { get: () => () => { throw new Error('llamada de red inesperada'); } });
+
+    beforeEach(async () => {
+        dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aguavp-sync2-'));
+        remote = createClient({ url: 'file:' + path.join(dir, 'nube.db').split(path.sep).join('/') });
+        local = newLocal();
+        fillLocal(local, 3);
+        id = getOrCreateInstanciaId(local);
+        await seedRemote(local, remote, { instanciaId: id, timestamp: ts() });
+    });
+
+    afterEach(() => {
+        remote.close();
+        try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); } catch (_) {}
+    });
+
+    it('tablas de sesiones/tokens no se suben a la nube ni registran cambios', async () => {
+        const tablas = (await remote.execute(`SELECT name FROM sqlite_master WHERE type = 'table'`)).rows.map(r => r.name);
+        assert.ok(!tablas.includes('sesiones'));
+        local.exec(`INSERT INTO sesiones (token) VALUES ('otro')`);
+        assert.equal(readPendingChanges(local).total, 0);
+    });
+
+    it('sin cambios locales no hay llamadas de red', async () => {
+        const res = await incrementalRemote(local, sinRed, { instanciaId: id, timestamp: ts() });
+        assert.equal(res.reason, 'no_local_changes');
+    });
+
+    it('altas, ediciones y borrados de cualquier tabla llegan a la nube y el registro se vacía', async () => {
+        local.exec(`INSERT INTO clientes (nombre, tarifa_id) VALUES ('Nuevo', 1)`);
+        local.exec(`UPDATE tarifas SET nombre = 'Comercial' WHERE id = 1`);
+        local.exec(`UPDATE rutas_puntos SET orden = 9 WHERE id = 2`);
+        local.exec(`DELETE FROM rutas_puntos WHERE id = 3`);
+        assert.ok(readPendingChanges(local).total >= 4);
+
+        const res = await incrementalRemote(local, remote, { instanciaId: id, timestamp: ts() });
+
+        assert.equal(res.success, true);
+        assert.equal((await remoteRow('clientes', 4)).nombre, 'Nuevo');
+        assert.equal((await remoteRow('tarifas', 1)).nombre, 'Comercial');
+        assert.equal(Number((await remoteRow('rutas_puntos', 2)).orden), 9);
+        assert.equal(await remoteRow('rutas_puntos', 3), undefined);
+        assert.equal(res.verificacion.ok, true);
+        assert.equal(readPendingChanges(local).total, 0);
+        assert.equal(Number(local.prepare('SELECT COUNT(*) AS n FROM sync_cambios').get().n), 0);
+    });
+
+    it('cambios hechos por triggers de negocio y borrados en cascada también se suben', async () => {
+        // El trigger de negocio descuenta el saldo de la factura al insertar el pago
+        local.exec(`INSERT INTO pagos (factura_id, monto) VALUES (1, 10)`);
+        local.exec(`INSERT INTO tarifas (nombre) VALUES ('Temporal')`);
+        local.exec(`INSERT INTO rangos_tarifas (tarifa_id, precio) VALUES (2, 5)`);
+        await incrementalRemote(local, remote, { instanciaId: id, timestamp: ts() });
+        // ON DELETE CASCADE borra los rangos de la tarifa
+        local.exec(`DELETE FROM tarifas WHERE id = 2`);
+
+        await incrementalRemote(local, remote, { instanciaId: id, timestamp: ts() });
+
+        assert.equal(Number((await remoteRow('facturas', 1)).saldo_pendiente), 50);
+        assert.equal(await remoteRow('tarifas', 2), undefined);
+        const rangos = (await remote.execute('SELECT COUNT(*) AS n FROM rangos_tarifas WHERE tarifa_id = 2')).rows[0].n;
+        assert.equal(Number(rangos), 0);
+    });
+
+    it('verificación completa repara una tabla desincronizada', async () => {
+        await remote.execute('DELETE FROM rutas_puntos WHERE id = 1');
+        const res = await incrementalRemote(local, remote, { instanciaId: id, timestamp: ts(), verifyAll: true });
+        assert.equal(res.verificacion.ok, true);
+        assert.deepEqual(res.verificacion.reparadas, ['rutas_puntos']);
+        assert.ok(await remoteRow('rutas_puntos', 1));
+    });
+
+    it('la reparación NO borra registros extra de la nube en tablas protegidas', async () => {
+        await remote.execute(`INSERT INTO clientes (id, nombre, tarifa_id) VALUES (50, 'Solo en la nube', 1)`);
+        const res = await incrementalRemote(local, remote, { instanciaId: id, timestamp: ts(), verifyAll: true });
+        assert.equal(res.verificacion.ok, false);
+        assert.deepEqual(res.verificacion.conservadas.map(c => c.tabla), ['clientes']);
+        assert.ok(await remoteRow('clientes', 50), 'el registro se conserva');
+    });
+
+    it('nube de otra base o tabla nueva sin registro de cambios → requiere carga completa', async () => {
+        local.exec(`INSERT INTO clientes (nombre, tarifa_id) VALUES ('X', 1)`);
+        const otra = await incrementalRemote(local, remote, { instanciaId: 'otra-base', timestamp: ts() });
+        assert.deepEqual([otra.needsSeed, otra.reason], [true, 'remote_identity']);
+
+        local.exec(`CREATE TABLE inventario (id INTEGER PRIMARY KEY, nombre TEXT)`);
+        const nueva = await incrementalRemote(local, remote, { instanciaId: id, timestamp: ts() });
+        assert.deepEqual([nueva.needsSeed, nueva.reason], [true, 'tracking_installed']);
+    });
+
+    it('al desvincular se quitan solo los triggers de registro', () => {
+        disableChangeTracking(local);
+        const n = local.prepare(`SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger' AND name LIKE '_sync_%'`).get().n;
+        assert.equal(Number(n), 0);
+        assert.ok(local.prepare(`SELECT 1 AS ok FROM sqlite_master WHERE name = 'actualizar_saldo_factura'`).get());
+    });
+
+    it('una base local dañada (quick_check) nunca se sube, ni forzando', async () => {
+        const danada = {
+            exec: (sql) => local.exec(sql),
+            prepare: (sql) => (/PRAGMA quick_check/i.test(sql)
+                ? { all: () => [{ quick_check: '*** in database main *** Page 5: btreeInitPage() returns error code 11' }] }
+                : local.prepare(sql))
+        };
+        await assert.rejects(
+            seedRemote(danada, remote, { instanciaId: id, force: true, timestamp: ts() }),
+            /integridad/
+        );
+        assert.equal(await remoteCount(remote, 'clientes'), 3);
     });
 });
