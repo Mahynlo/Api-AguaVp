@@ -2,7 +2,7 @@
 
 Especificación técnica del subsistema de copia de seguridad en Turso Cloud integrado en `@aguavp/api-server`.
 
-> Versión documentada: **1.0.11**. Guía operativa para usuarios/administradores: `AguaVP/docs/sincronizacion-turso-cloud.md` (app). Plan de mejoras: `AguaVP/docs/plan-sincronizacion-turso.md`.
+> Versión documentada: **1.0.12**. Guía operativa para usuarios/administradores: `AguaVP/docs/sincronizacion-turso-cloud.md` (app). Plan de mejoras: `AguaVP/docs/plan-sincronizacion-turso.md`.
 
 **Regla principal:** el SQLite local es el único escritor y ninguna operación puede dejar la nube con menos datos válidos de los que tenía.
 
@@ -36,7 +36,7 @@ App Electron (apiManager)                       Turso Cloud
 |---|---|---|---|
 | `sync_estado` (`clave`, `valor`) | Local | `instancia_id`, `last_sync`, `last_sync_url`, `cambios_cursor`, `requiere_carga_completa`, `ultima_verificacion_completa` | No |
 | `sync_cambios` (`id`, `tabla`, `registro_id`, `operacion` I/U/D) | Local | Registro de cambios pendientes de subir | No |
-| `_aguavp_sync_meta` (`clave`, `valor`) | Nube | `instancia_id`, `last_sync`, `ultima_migracion`, `conteos` (JSON) | No (solo se escribe en la nube) |
+| `_aguavp_sync_meta` (`clave`, `valor`) | Nube | `instancia_id`, `equipo_id`, `last_sync`, `ultima_migracion`, `conteos` (JSON) | No (solo se escribe en la nube) |
 
 * `LOCAL_ONLY_TABLES` = las tres anteriores. Se crean bajo demanda (`CREATE TABLE IF NOT EXISTS`), sin migración.
 * `EXCLUDED_TABLES` = `sesiones`, `refresh_tokens`, `tokens_revocados`, `password_recovery_tokens`: no se copian, no se registran y, si una copia anterior las subió, la carga semilla vacía sus filas en la nube. Motivo: credenciales de vida corta, innecesarias para restaurar, que además cambian en cada renovación de sesión (romperían el "cero red en reposo").
@@ -85,8 +85,9 @@ Se ejecuta cuando no hay `last_sync` para la URL actual, cuando `requiere_carga_
 3. **Guarda anti-sobrescritura** (`checkSeedSafety`):
    * `instancia`: la nube tiene un `instancia_id` distinto.
    * `conteo`: en alguna `GUARD_TABLES` la nube tiene **más** registros que la local.
+   * `equipo`: misma base (`instancia_id`) pero la nube la escribió otra computadora (`equipo_id`). Se omite si la base local tiene `tomar_control_equipo = 1` (la pone `restoreRemoteInto`: restaurar en una computadora la convierte en la que respalda). El `equipoId` lo envía la app (`tursoEquipoId` / `configure`); por defecto, el nombre del equipo.
    * `columnas`: la nube tiene columnas que la base local no tiene (`remoteExtraColumns`); un `INSERT OR REPLACE` las dejaría en NULL. Ocurre si la base local se recreó con un esquema que no incluye columnas de migraciones antiguas. El incremental también lo detecta cuando cambia la versión de esquema (`needsSeed: 'remote_columns'`).
-   * Con motivos y sin `force` → **no se toca la nube**; devuelve `{ success: false, conflict: true, motivos, comparacion }`.
+   * Con motivos y sin `force` → **no se toca la nube**; devuelve `{ success: false, conflict: true, motivos, comparacion, eliminaria }`. `eliminaria` (`remoteRowsMissingLocally`) lista por tabla el total y hasta 20 ids que un reemplazo forzado borraría de la nube.
    * Una nube sin `_aguavp_sync_meta` (copias anteriores a 1.0.7) se adopta si pasa la regla de conteos.
 4. **Registro de cambios** activado y cursor de inicio = `MAX(sync_cambios.id)`, **antes** de leer los datos: lo que cambie durante la copia queda para el siguiente incremental (re-subir es idempotente).
 5. **Esquema remoto** (`reconcileRemoteSchema`): crea tablas faltantes; agrega con `ALTER TABLE … ADD COLUMN "col" TIPO` las columnas que falten; índices y vistas best-effort.
@@ -177,3 +178,27 @@ Con `node:test` (no Jest), usando `node:sqlite` en memoria como base local y un 
 * `src/test/unit/core-triggers.test.js`: `CORE_TRIGGERS` igual a las migraciones y comportamiento (estado "Parcial"/"Pagado", rechazo de sobrepago, historial al asignar/retirar medidor).
 
 Las suites `node:test` aparecen como fallidas si se ejecutan con Jest (`npm test`); usar su script.
+
+---
+
+## 10. Cambios de 1.0.12: contenido, equipos y registro
+
+### Verificación por contenido (`verifyContent` / `repairContent`)
+* Calcula un hash (SHA-1) de cada fila con las columnas comunes a local y nube, paginando la nube por `id` (1000 filas), y reporta por tabla `distintas`, `soloLocal` y `soloNube`. Valores normalizados: BLOB → hex, `bigint` → número.
+* Se usa: después de cada **carga semilla** (toda la copia), en la **verificación diaria** del incremental (`verifyAll`, todas las tablas) y en la **restauración** (la base restaurada debe ser idéntica a la nube; si no, se cancela).
+* `repairContent` re-sube las filas distintas o faltantes (`upsertBatch`) y borra en la nube las que solo existen allí, **excepto** en `GUARD_TABLES` (se conservan y se reportan en `conservadas`).
+* Las tablas tocadas en un ciclo normal siguen con la verificación rápida (`COUNT` + `MAX(id)`); la verificación por contenido corre una vez al día o cuando hubo que resolver choques de claves únicas.
+
+### Incremental (`incrementalRemote`) — comprobaciones añadidas
+1. En la verificación diaria ejecuta `checkLocalIntegrity`; si `quick_check` falla, devuelve `{ success: false, error, integridad }` y **no sube nada**.
+2. Si `_aguavp_sync_meta.equipo_id` es de otra computadora → `needsSeed: 'other_device'` → la carga semilla se bloquea con el motivo `equipo`.
+3. Devuelve `fkViolaciones` en la verificación diaria.
+
+### Estado (`GET /status`) — campos añadidos
+`ultimaSincronizacionCorrecta` (persistida en `sync_estado.ultima_sync_ok`), `fallosConsecutivos`, `fkViolaciones`, `equipoId`; `conflicto.eliminaria`; `verificacion.tipo` (`conteo` | `contenido`).
+
+### Registro de mensajes
+`setLogger(fn)` en `tursoSyncService.js`: además de la consola, cada mensaje se envía a `fn(nivel, mensaje)` (`info` | `warn` | `error`). `api-module.js` lo conecta al evento `sync-log` (`{ nivel, mensaje }`), que la app de escritorio manda a su visor de logs.
+
+### Pruebas
+`npm run test:sync`: 46 pruebas. Nuevas: otra computadora bloqueada; toma de control tras restaurar; lista de eliminación; reparación de campos cambiados/vaciados que la verificación rápida no ve; verificación diaria con base dañada; restauración verificada por contenido.

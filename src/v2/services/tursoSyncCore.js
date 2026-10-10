@@ -347,15 +347,21 @@ export async function writeRemoteMeta(remote, values) {
     await remote.batch(statements, 'write');
 }
 
-/** Metadatos a guardar en la nube tras una sincronización correcta. */
-export function buildRemoteMeta(local, instanciaId, lastSync) {
+/**
+ * Metadatos a guardar en la nube tras una sincronización correcta.
+ * `equipo_id` identifica la computadora que escribe (no viaja dentro de la base): si otra computadora con
+ * la misma base empieza a escribir en la misma copia, se detecta (ver checkSeedSafety / incrementalRemote).
+ */
+export function buildRemoteMeta(local, instanciaId, lastSync, equipoId = null) {
     const conteos = Object.fromEntries(GUARD_TABLES.map(t => [t, countLocal(local, t)]));
-    return {
+    const meta = {
         instancia_id: instanciaId,
         last_sync: lastSync,
         ultima_migracion: getLocalSchemaVersion(local),
         conteos: JSON.stringify(conteos)
     };
+    if (equipoId) meta.equipo_id = equipoId;
+    return meta;
 }
 
 // ── Guarda anti-sobrescritura ─────────────────────────────────────────────────
@@ -364,7 +370,7 @@ export function buildRemoteMeta(local, instanciaId, lastSync) {
  * Determina si es seguro reemplazar el contenido de la nube con la base local.
  * @returns {Promise<{ seguro: boolean, motivos: Array, comparacion: Array, remoteMeta: Object }>}
  */
-export async function checkSeedSafety(local, remote, instanciaId) {
+export async function checkSeedSafety(local, remote, instanciaId, { equipoId = null, tomarControl = false } = {}) {
     const remoteMeta = await readRemoteMeta(remote);
     const existing = await remoteTableNames(remote);
     const motivos = [];
@@ -373,6 +379,13 @@ export async function checkSeedSafety(local, remote, instanciaId) {
         motivos.push({
             tipo: 'instancia',
             mensaje: 'La copia en la nube pertenece a otra base de datos (otra instalación o una base nueva).'
+        });
+    } else if (remoteMeta.equipo_id && equipoId && remoteMeta.equipo_id !== equipoId && !tomarControl) {
+        motivos.push({
+            tipo: 'equipo',
+            mensaje: `Otra computadora escribió en esta copia de la nube (última sincronización: ${remoteMeta.last_sync || 'desconocida'}). ` +
+                'Si esa computadora sigue en uso, no continúes: las dos mezclarían sus datos en la nube. ' +
+                'Si esta computadora la reemplaza, confirma para que esta pase a ser la que respalda.'
         });
     }
 
@@ -402,7 +415,28 @@ export async function checkSeedSafety(local, remote, instanciaId) {
         });
     }
 
-    return { seguro: motivos.length === 0, motivos, comparacion, remoteMeta, columnasSoloNube };
+    const seguro = motivos.length === 0;
+    // Si hay conflicto, calcular exactamente qué se eliminaría de la nube con un reemplazo forzado
+    const eliminaria = seguro ? [] : await remoteRowsMissingLocally(local, remote, getLocalTables(local).map(t => t.name), existing);
+
+    return { seguro, motivos, comparacion, remoteMeta, columnasSoloNube, eliminaria };
+}
+
+/**
+ * Registros que existen en la nube y no en la base local (los que un reemplazo forzado eliminaría).
+ * @returns {Promise<Array<{ tabla, total, ids: number[] }>>} ids: hasta 20 por tabla
+ */
+export async function remoteRowsMissingLocally(local, remote, tableNames, existing = null) {
+    const names = existing || await remoteTableNames(remote);
+    const out = [];
+    for (const t of tableNames) {
+        if (!names.has(t) || !hasIdColumn(local, t)) continue;
+        const localIds = new Set(local.prepare(`SELECT id FROM ${quoteId(t)}`).all().map(r => String(r.id)));
+        const faltan = (await remote.execute(`SELECT id FROM ${quoteId(t)} ORDER BY id`)).rows
+            .map(r => r.id).filter(id => !localIds.has(String(id)));
+        if (faltan.length) out.push({ tabla: t, total: faltan.length, ids: faltan.slice(0, 20).map(Number) });
+    }
+    return out;
 }
 
 /**
@@ -648,6 +682,111 @@ export async function repairTables(local, remote, diferencias) {
     return { reparadas, conservadas };
 }
 
+// ── Verificación por contenido ────────────────────────────────────────────────
+
+const CONTENT_PAGE_SIZE = 1000;
+
+/** Valor normalizado para comparar local (better-sqlite3/node:sqlite) y nube (libsql). */
+const normalizeValue = (v) => {
+    if (v === null || v === undefined) return null;
+    if (v instanceof ArrayBuffer) return `hex:${Buffer.from(v).toString('hex')}`;
+    if (ArrayBuffer.isView(v)) return `hex:${Buffer.from(v.buffer, v.byteOffset, v.byteLength).toString('hex')}`;
+    if (typeof v === 'bigint') return Number(v);
+    return v;
+};
+const rowHash = (row, cols) =>
+    crypto.createHash('sha1').update(JSON.stringify(cols.map(c => normalizeValue(row[c])))).digest('base64');
+
+/**
+ * Compara el CONTENIDO de cada tabla, fila por fila (hash de las columnas comunes), entre local y nube.
+ * Detecta lo que COUNT/MAX(id) no ve: campos cambiados o vaciados. Descarga las filas de la nube por páginas.
+ * @returns {Promise<{ ok: boolean, diferencias: Array<{ tabla, distintas: number[], soloLocal: number[], soloNube: number[] }>, filas: number }>}
+ */
+export async function verifyContent(local, remote, tableNames) {
+    const existing = await remoteTableNames(remote);
+    const diferencias = [];
+    let filas = 0;
+
+    for (const t of tableNames) {
+        if (!localTableExists(local, t) || !hasIdColumn(local, t)) continue;
+        if (!existing.has(t)) {
+            const ids = local.prepare(`SELECT id FROM ${quoteId(t)}`).all().map(r => Number(r.id));
+            if (ids.length) diferencias.push({ tabla: t, distintas: [], soloLocal: ids, soloNube: [] });
+            continue;
+        }
+        const remoteCols = new Set((await remote.execute(`PRAGMA table_info(${quoteId(t)})`)).rows.map(r => r.name));
+        const cols = localColumns(local, t).map(c => c.name).filter(c => remoteCols.has(c));
+        const select = cols.map(quoteId).join(', ');
+
+        const locales = new Map(
+            local.prepare(`SELECT ${select} FROM ${quoteId(t)}`).all().map(r => [String(r.id), rowHash(r, cols)])
+        );
+        const distintas = [];
+        const soloNube = [];
+        const vistos = new Set();
+        let lastId = null;
+        for (;;) {
+            const page = await remote.execute({
+                sql: `SELECT ${select} FROM ${quoteId(t)}` + (lastId === null ? '' : ' WHERE id > ?') +
+                    ` ORDER BY id LIMIT ${CONTENT_PAGE_SIZE}`,
+                args: lastId === null ? [] : [lastId]
+            });
+            for (const r of page.rows) {
+                const key = String(r.id);
+                vistos.add(key);
+                const h = locales.get(key);
+                if (h === undefined) soloNube.push(Number(r.id));
+                else if (h !== rowHash(r, cols)) distintas.push(Number(r.id));
+            }
+            filas += page.rows.length;
+            if (page.rows.length < CONTENT_PAGE_SIZE) break;
+            lastId = page.rows[page.rows.length - 1].id;
+        }
+        const soloLocal = [...locales.keys()].filter(k => !vistos.has(k)).map(Number);
+        if (distintas.length || soloNube.length || soloLocal.length) {
+            diferencias.push({ tabla: t, distintas, soloLocal, soloNube });
+        }
+    }
+    return { ok: diferencias.length === 0, diferencias, filas };
+}
+
+/**
+ * Corrige en la nube las diferencias de contenido: re-sube las filas distintas o faltantes y borra las que
+ * solo existen en la nube, EXCEPTO en tablas protegidas (se conservan y se reportan).
+ */
+export async function repairContent(local, remote, diferencias) {
+    const order = getLocalTables(local).map(t => t.name);
+    const byTable = new Map(diferencias.map(d => [d.tabla, d]));
+    const targets = order.filter(t => byTable.has(t));
+    const reparadas = [];
+    const conservadas = [];
+
+    for (const t of targets) {
+        const ids = [...byTable.get(t).distintas, ...byTable.get(t).soloLocal];
+        for (const chunk of chunks(ids, ID_CHUNK_SIZE)) {
+            const rows = local.prepare(
+                `SELECT * FROM ${quoteId(t)} WHERE id IN (${chunk.map(() => '?').join(', ')})`
+            ).all(...chunk);
+            await upsertBatch(remote, t, rows, { local });
+        }
+    }
+    for (const t of [...targets].reverse()) {
+        const { soloNube } = byTable.get(t);
+        if (soloNube.length && GUARD_TABLES.includes(t)) {
+            conservadas.push({ tabla: t, ids: soloNube.slice(0, 20), total: soloNube.length });
+        } else {
+            for (const chunk of chunks(soloNube, ID_CHUNK_SIZE)) {
+                await remote.execute({
+                    sql: `DELETE FROM ${quoteId(t)} WHERE id IN (${chunk.map(() => '?').join(', ')})`,
+                    args: chunk
+                });
+            }
+        }
+        reparadas.push(t);
+    }
+    return { reparadas, conservadas };
+}
+
 // ── Restauración desde la nube ────────────────────────────────────────────────
 
 const RESTORE_PAGE_SIZE = 1000;
@@ -770,6 +909,8 @@ export async function restoreRemoteInto(target, remote, { log = () => {} } = {})
     setLocalState(target, 'instancia_id', copia.meta.instancia_id || crypto.randomUUID());
     setLocalState(target, 'requiere_carga_completa', '1');
     setLocalState(target, 'restaurada_desde_nube', new Date().toISOString());
+    // Restaurar en esta computadora la convierte en la que respalda esta copia (ver motivo 'equipo')
+    setLocalState(target, 'tomar_control_equipo', '1');
 
     // Validaciones
     const integridad = checkLocalIntegrity(target);
@@ -782,6 +923,12 @@ export async function restoreRemoteInto(target, remote, { log = () => {} } = {})
     if (diferencias.length) {
         throw new Error('Los registros copiados no coinciden con la nube en: ' +
             diferencias.map(d => `${d.tabla} (copiados ${d.local}, nube ${d.nube})`).join(', '));
+    }
+    // Contenido: cada fila restaurada debe ser idéntica a la de la nube (columnas comunes)
+    const contenido = await verifyContent(target, remote, tablas.map(t => t.tabla));
+    if (!contenido.ok) {
+        throw new Error('El contenido restaurado no coincide con la nube en: ' +
+            contenido.diferencias.map(d => `${d.tabla} (${d.distintas.length} distintas, ${d.soloNube.length} faltantes, ${d.soloLocal.length} sobrantes)`).join(', '));
     }
     const triggersFinales = target.prepare(`SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger'`).get().n;
     if (Number(triggersFinales) !== triggers.length) {
@@ -802,7 +949,8 @@ export async function restoreRemoteInto(target, remote, { log = () => {} } = {})
         tablas,
         totalRegistros,
         fkViolaciones: integridad.fkViolaciones,
-        triggers: Number(triggersFinales)
+        triggers: Number(triggersFinales),
+        filasVerificadas: contenido.filas
     };
 }
 
@@ -813,13 +961,14 @@ export async function restoreRemoteInto(target, remote, { log = () => {} } = {})
  *
  * @param {Object} opts
  * @param {string}  opts.instanciaId - id de la base local (getOrCreateInstanciaId)
+ * @param {string}  [opts.equipoId]  - id de esta computadora (detecta otra computadora escribiendo en la copia)
  * @param {boolean} [opts.force]     - omite la guarda anti-sobrescritura (confirmación explícita del admin).
  *                                     Nunca omite la verificación de integridad.
  * @param {string}  opts.timestamp   - marca de inicio (se guarda como last_sync)
  * @param {Function} [opts.log]
- * @returns {Promise<Object>} { success, conflict?, motivos?, comparacion?, totalRows, pruned, tablesCopied, schema, verificacion }
+ * @returns {Promise<Object>} { success, conflict?, motivos?, comparacion?, eliminaria?, totalRows, pruned, tablesCopied, schema, verificacion }
  */
-export async function seedRemote(local, remote, { instanciaId, force = false, timestamp, log = () => {} }) {
+export async function seedRemote(local, remote, { instanciaId, equipoId = null, force = false, timestamp, log = () => {} }) {
     const integridad = checkLocalIntegrity(local);
     if (!integridad.ok) {
         throw new Error(`La base local no pasó la verificación de integridad (${integridad.errores.join('; ')}). ` +
@@ -829,17 +978,21 @@ export async function seedRemote(local, remote, { instanciaId, force = false, ti
         log(`Aviso: ${integridad.fkViolaciones} referencia(s) huérfanas en la base local (foreign_key_check)`);
     }
 
-    const safety = await checkSeedSafety(local, remote, instanciaId);
+    ensureLocalStateTable(local);
+    const tomarControl = getLocalState(local, 'tomar_control_equipo') === '1';
+    const safety = await checkSeedSafety(local, remote, instanciaId, { equipoId, tomarControl });
     if (!safety.seguro && !force) {
         return {
             success: false,
             conflict: true,
             motivos: safety.motivos,
-            comparacion: safety.comparacion
+            comparacion: safety.comparacion,
+            eliminaria: safety.eliminaria
         };
     }
     if (!safety.seguro && force) {
-        log(`Reemplazo forzado de la nube: ${safety.motivos.map(m => m.tipo).join(', ')}`);
+        log(`Reemplazo forzado de la nube: ${safety.motivos.map(m => m.tipo).join(', ')}; se eliminan de la nube: ` +
+            (safety.eliminaria.map(e => `${e.tabla} (${e.total})`).join(', ') || 'nada'));
     }
 
     // El registro de cambios se activa ANTES de leer los datos: lo que cambie durante la copia
@@ -870,10 +1023,13 @@ export async function seedRemote(local, remote, { instanciaId, force = false, ti
         pruned += await pruneRemoteRows(local, remote, name);
     }
 
-    await writeRemoteMeta(remote, buildRemoteMeta(local, instanciaId, timestamp));
+    await writeRemoteMeta(remote, buildRemoteMeta(local, instanciaId, timestamp, equipoId));
     commitChanges(local, cursorInicio);
+    setLocalState(local, 'tomar_control_equipo', '0');
 
-    const verificacion = await verifyRemote(local, remote, tables.map(t => t.name));
+    // Verificación por contenido de toda la copia recién subida
+    const v = await verifyContent(local, remote, tables.map(t => t.name));
+    const verificacion = { ok: v.ok, diferencias: v.diferencias, filas: v.filas, tipo: 'contenido', reparadas: [], conservadas: [] };
 
     return {
         success: true, totalRows, pruned, tablesCopied, schema, timestamp,
@@ -886,15 +1042,17 @@ export async function seedRemote(local, remote, { instanciaId, force = false, ti
  *
  * @param {Object} opts
  * @param {string}  opts.instanciaId
+ * @param {string}  [opts.equipoId]
  * @param {string}  opts.timestamp
- * @param {boolean} [opts.verifyAll=false] - verificar todas las tablas (verificación periódica)
+ * @param {boolean} [opts.verifyAll=false] - verificación periódica: integridad local + CONTENIDO de todas las tablas
  * @param {Function} [opts.log]
  * @returns {Promise<Object>}
- *   { needsSeed: true, reason }                         → la nube no corresponde / faltan triggers: carga completa
- *   { success: true, syncedCount: 0, reason: 'no_local_changes' } → sin llamadas de red
- *   { success: true, syncedCount, upserted, deleted, verificacion }
+ *   { needsSeed: true, reason }                                    → carga completa protegida
+ *   { success: true, syncedCount: 0, reason: 'no_local_changes' }  → sin llamadas de red
+ *   { success: true, syncedCount, upserted, deleted, verificacion, fkViolaciones? }
+ *   { success: false, error, integridad }                          → base local dañada: no se sube nada
  */
-export async function incrementalRemote(local, remote, { instanciaId, timestamp, verifyAll = false, log = () => {} }) {
+export async function incrementalRemote(local, remote, { instanciaId, equipoId = null, timestamp, verifyAll = false, log = () => {} }) {
     const tracking = ensureChangeTracking(local);
     if (tracking.created.length > 0) {
         // Tablas sin registro de cambios hasta ahora (primera vez o tabla nueva): sus cambios previos
@@ -907,9 +1065,26 @@ export async function incrementalRemote(local, remote, { instanciaId, timestamp,
         return { success: true, syncedCount: 0, reason: 'no_local_changes', timestamp };
     }
 
+    // Verificación periódica: nunca subir desde una base local dañada
+    let integridad = null;
+    if (verifyAll) {
+        integridad = checkLocalIntegrity(local);
+        if (!integridad.ok) {
+            return {
+                success: false,
+                error: `La base local no pasó la verificación de integridad (${integridad.errores.join('; ')}). No se sube nada a la nube.`,
+                integridad
+            };
+        }
+    }
+
     const remoteMeta = await readRemoteMeta(remote);
     if (remoteMeta.instancia_id !== instanciaId) {
         return { needsSeed: true, reason: 'remote_identity' };
+    }
+    if (remoteMeta.equipo_id && equipoId && remoteMeta.equipo_id !== equipoId) {
+        // Otra computadora escribió en esta copia: la carga completa se bloquea con el motivo 'equipo'
+        return { needsSeed: true, reason: 'other_device' };
     }
 
     const tables = getLocalTables(local);
@@ -923,36 +1098,55 @@ export async function incrementalRemote(local, remote, { instanciaId, timestamp,
         if (schema.columnasAgregadas.length) log(`Columnas agregadas en la nube: ${schema.columnasAgregadas.join(', ')}`);
     }
 
-    let push = { upserted: 0, deleted: 0, tablas: [] };
+    let push = { upserted: 0, deleted: 0, tablas: [], conflictosResueltos: 0 };
     if (pending.total > 0) {
         await dropAllRemoteTriggers(remote);
         push = await pushChanges(local, remote, pending.porTabla);
         commitChanges(local, pending.maxId);
     }
 
-    // Verificación: tablas tocadas en este ciclo, o todas si toca la verificación periódica o si hubo que
-    // eliminar filas obsoletas por choques de claves únicas (podrían tener dependientes en otras tablas)
-    const verificarTodo = verifyAll || push.conflictosResueltos > 0;
-    const toVerify = verificarTodo ? tables.map(t => t.name) : push.tablas;
-    let verificacion = { ok: true, diferencias: [], reparadas: [], conservadas: [] };
-    if (toVerify.length) {
-        const v = await verifyRemote(local, remote, toVerify);
-        verificacion = { ...verificacion, ...v };
+    let verificacion = { ok: true, diferencias: [], reparadas: [], conservadas: [], tipo: 'ninguna' };
+    // Tablas con cambios registrados durante este ciclo: se suben en el siguiente, no se "reparan" ahora
+    const recientes = () => readPendingChanges(local).porTabla;
+
+    if (verifyAll || push.conflictosResueltos > 0) {
+        // Contenido de TODAS las tablas, fila por fila (detecta campos cambiados o vaciados)
+        const nombres = tables.map(t => t.name);
+        const v = await verifyContent(local, remote, nombres);
+        verificacion = { ...verificacion, ...v, tipo: 'contenido' };
         if (!v.ok) {
-            // No reparar tablas con cambios nuevos registrados durante este ciclo: el próximo ciclo los sube
-            const recientes = readPendingChanges(local).porTabla;
-            const aReparar = v.diferencias.filter(d => !recientes.has(d.tabla));
+            const pendientes = recientes();
+            const aReparar = v.diferencias.filter(d => !pendientes.has(d.tabla));
+            if (aReparar.length) {
+                const rep = await repairContent(local, remote, aReparar);
+                log(`Reparación de la copia (contenido): ${rep.reparadas.join(', ') || 'ninguna'}` +
+                    (rep.conservadas.length ? `; conservadas en la nube: ${rep.conservadas.map(c => `${c.tabla} (${c.total})`).join(', ')}` : ''));
+                const again = await verifyContent(local, remote, aReparar.map(d => d.tabla));
+                const restantes = [...v.diferencias.filter(d => !aReparar.includes(d)), ...again.diferencias];
+                verificacion = {
+                    ok: restantes.length === 0, diferencias: restantes, filas: v.filas, tipo: 'contenido',
+                    reparadas: rep.reparadas, conservadas: rep.conservadas
+                };
+            }
+        }
+    } else if (push.tablas.length) {
+        // Tablas tocadas en este ciclo: verificación rápida por cantidad e id máximo
+        const v = await verifyRemote(local, remote, push.tablas);
+        verificacion = { ...verificacion, ...v, tipo: 'conteo' };
+        if (!v.ok) {
+            const pendientes = recientes();
+            const aReparar = v.diferencias.filter(d => !pendientes.has(d.tabla));
             if (aReparar.length) {
                 const rep = await repairTables(local, remote, aReparar);
                 log(`Reparación de la copia: ${rep.reparadas.join(', ') || 'ninguna'}` +
                     (rep.conservadas.length ? `; conservadas en la nube: ${rep.conservadas.map(c => c.tabla).join(', ')}` : ''));
-                const again = await verifyRemote(local, remote, toVerify);
-                verificacion = { ...again, reparadas: rep.reparadas, conservadas: rep.conservadas };
+                const again = await verifyRemote(local, remote, push.tablas);
+                verificacion = { ...again, tipo: 'conteo', reparadas: rep.reparadas, conservadas: rep.conservadas };
             }
         }
     }
 
-    await writeRemoteMeta(remote, buildRemoteMeta(local, instanciaId, timestamp));
+    await writeRemoteMeta(remote, buildRemoteMeta(local, instanciaId, timestamp, equipoId));
 
     return {
         success: true,
@@ -960,6 +1154,7 @@ export async function incrementalRemote(local, remote, { instanciaId, timestamp,
         upserted: push.upserted,
         deleted: push.deleted,
         verificacion,
+        fkViolaciones: integridad ? integridad.fkViolaciones : undefined,
         timestamp
     };
 }

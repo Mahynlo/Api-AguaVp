@@ -542,3 +542,101 @@ describe('tursoSyncCore — nube con llaves foráneas activas (como Turso)', () 
         assert.equal(res.verificacion.ok, true);
     });
 });
+
+describe('tursoSyncCore — equipos, vista previa de eliminación y verificación por contenido', () => {
+    let dir;
+    let remote;
+    let local;
+    let id;
+
+    const remoteValue = async (sql) => (await remote.execute(sql)).rows[0];
+
+    beforeEach(async () => {
+        dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aguavp-p1-'));
+        remote = createClient({ url: 'file:' + path.join(dir, 'nube.db').split(path.sep).join('/') });
+        local = newLocal();
+        fillLocal(local, 3);
+        id = getOrCreateInstanciaId(local);
+        await seedRemote(local, remote, { instanciaId: id, equipoId: 'PC-A', timestamp: ts() });
+    });
+
+    afterEach(() => {
+        remote.close();
+        try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); } catch (_) {}
+    });
+
+    it('otra computadora con la misma base no puede escribir en la copia sin confirmación', async () => {
+        local.exec(`UPDATE clientes SET nombre = 'Desde PC-B' WHERE id = 1`);
+        const inc = await incrementalRemote(local, remote, { instanciaId: id, equipoId: 'PC-B', timestamp: ts() });
+        assert.deepEqual([inc.needsSeed, inc.reason], [true, 'other_device']);
+
+        const seed = await seedRemote(local, remote, { instanciaId: id, equipoId: 'PC-B', timestamp: ts() });
+        assert.equal(seed.conflict, true);
+        assert.deepEqual(seed.motivos.map(m => m.tipo), ['equipo']);
+        assert.equal((await remoteValue('SELECT nombre FROM clientes WHERE id = 1')).nombre, 'Cliente 1', 'la nube no cambió');
+    });
+
+    it('una base restaurada desde la nube toma el control en su computadora; la anterior queda bloqueada', async () => {
+        const enPcB = newLocal();
+        await restoreRemoteInto(enPcB, remote);
+        const seedB = await seedRemote(enPcB, remote, { instanciaId: getOrCreateInstanciaId(enPcB), equipoId: 'PC-B', timestamp: ts() });
+        assert.equal(seedB.success, true);
+        assert.equal((await readRemoteMeta(remote)).equipo_id, 'PC-B');
+
+        // PC-A sigue en uso y hace un cambio: no puede subirlo
+        local.exec(`UPDATE clientes SET nombre = 'Desde PC-A' WHERE id = 2`);
+        const incA = await incrementalRemote(local, remote, { instanciaId: id, equipoId: 'PC-A', timestamp: ts() });
+        assert.equal(incA.reason, 'other_device');
+        const seedA = await seedRemote(local, remote, { instanciaId: id, equipoId: 'PC-A', timestamp: ts() });
+        assert.deepEqual(seedA.motivos.map(m => m.tipo), ['equipo']);
+    });
+
+    it('el conflicto lista exactamente qué registros se eliminarían de la nube', async () => {
+        const vieja = newLocal();
+        fillLocal(vieja, 1);
+        const seed = await seedRemote(vieja, remote, { instanciaId: id, equipoId: 'PC-A', timestamp: ts() });
+        assert.equal(seed.conflict, true);
+        const clientes = seed.eliminaria.find(e => e.tabla === 'clientes');
+        assert.deepEqual([clientes.total, clientes.ids], [2, [2, 3]]);
+        assert.ok(seed.eliminaria.some(e => e.tabla === 'pagos' && e.total === 2));
+    });
+
+    it('la verificación diaria detecta y repara campos cambiados o vaciados en la nube', async () => {
+        await remote.execute('UPDATE user_permission_overrides SET updated_by = NULL');
+        await remote.execute(`UPDATE clientes SET nombre = 'alterado' WHERE id = 3`);
+
+        // La verificación rápida (cantidades) no lo ve
+        local.exec(`UPDATE tarifas SET nombre = 'x' WHERE id = 1`);
+        const rapida = await incrementalRemote(local, remote, { instanciaId: id, equipoId: 'PC-A', timestamp: ts() });
+        assert.equal(rapida.verificacion.tipo, 'conteo');
+        assert.equal(rapida.verificacion.ok, true);
+
+        const diaria = await incrementalRemote(local, remote, { instanciaId: id, equipoId: 'PC-A', timestamp: ts(), verifyAll: true });
+        assert.equal(diaria.verificacion.tipo, 'contenido');
+        assert.equal(diaria.verificacion.ok, true);
+        assert.deepEqual(diaria.verificacion.reparadas.sort(), ['clientes', 'user_permission_overrides']);
+        assert.equal(Number((await remoteValue('SELECT updated_by AS u FROM user_permission_overrides')).u), 1);
+        assert.equal((await remoteValue('SELECT nombre FROM clientes WHERE id = 3')).nombre, 'Cliente 3');
+        assert.equal(diaria.fkViolaciones, 0);
+    });
+
+    it('la verificación diaria no sube nada si la base local está dañada', async () => {
+        local.exec(`UPDATE clientes SET nombre = 'no debe subir' WHERE id = 1`);
+        const danada = {
+            exec: (sql) => local.exec(sql),
+            prepare: (sql) => (/PRAGMA quick_check/i.test(sql)
+                ? { all: () => [{ quick_check: 'row 3 missing from index' }] }
+                : local.prepare(sql))
+        };
+        const res = await incrementalRemote(danada, remote, { instanciaId: id, equipoId: 'PC-A', timestamp: ts(), verifyAll: true });
+        assert.equal(res.success, false);
+        assert.match(res.error, /integridad/);
+        assert.equal((await remoteValue('SELECT nombre FROM clientes WHERE id = 1')).nombre, 'Cliente 1');
+    });
+
+    it('la restauración verifica el contenido fila por fila', async () => {
+        const restaurada = newLocal();
+        const res = await restoreRemoteInto(restaurada, remote);
+        assert.ok(res.filasVerificadas >= res.totalRegistros);
+    });
+});

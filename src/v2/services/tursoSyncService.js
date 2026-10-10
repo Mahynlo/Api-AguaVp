@@ -19,6 +19,7 @@
 import { createClient } from '@libsql/client';
 import Database from 'better-sqlite3';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { sqlite } from '../../database/db-sqlite.js';
@@ -47,7 +48,9 @@ let syncConfig = {
     tursoUrl: process.env.TURSO_DATABASE_URL || '',
     tursoToken: process.env.TURSO_AUTH_TOKEN || '',
     autoSync: true,
-    syncIntervalMs: 15 * 60 * 1000 // 15 minutos (optimizado para cuota 3GB)
+    syncIntervalMs: 15 * 60 * 1000, // 15 minutos (optimizado para cuota 3GB)
+    // Identifica a ESTA computadora (la app lo genera y lo guarda fuera de la base de datos)
+    equipoId: os.hostname()
 };
 
 let syncState = {
@@ -55,13 +58,36 @@ let syncState = {
     lastSyncSuccess: null,
     lastError: null,
     totalRecordsSynced: 0,
-    conflicto: null,     // { motivos, comparacion, fecha } cuando la carga semilla fue bloqueada
-    verificacion: null   // { ok, fecha, diferencias, reparadas, conservadas } de la última verificación
+    conflicto: null,     // { motivos, comparacion, eliminaria, fecha } cuando la carga semilla fue bloqueada
+    verificacion: null,  // { ok, fecha, diferencias, reparadas, conservadas, tipo } de la última verificación
+    fallosConsecutivos: 0,
+    fkViolaciones: null  // referencias huérfanas en la base local (última comprobación)
 };
 
 let syncTimer = null;
 
-const log = (msg) => console.log(`[TursoSync] ${msg}`);
+// Registro: consola + registrador externo (la app de escritorio lo conecta a su visor de logs)
+let externalLogger = null;
+export function setLogger(fn) {
+    externalLogger = typeof fn === 'function' ? fn : null;
+}
+const emit = (nivel, msg) => {
+    try { if (externalLogger) externalLogger(nivel, `[TursoSync] ${msg}`); } catch (_) {}
+};
+const log = (msg) => { console.log(`[TursoSync] ${msg}`); emit('info', msg); };
+const logWarn = (msg) => { console.warn(`[TursoSync] ${msg}`); emit('warn', msg); };
+const logError = (msg, err) => { console.error(`[TursoSync] ${msg}`, err || ''); emit('error', `${msg}${err?.message ? `: ${err.message}` : ''}`); };
+
+function registrarExito() {
+    syncState.lastSyncSuccess = true;
+    syncState.fallosConsecutivos = 0;
+    try { setLocalState(sqlite, 'ultima_sync_ok', new Date().toISOString()); } catch (_) {}
+}
+function registrarFallo(mensaje) {
+    syncState.lastSyncSuccess = false;
+    syncState.lastError = mensaje;
+    syncState.fallosConsecutivos += 1;
+}
 
 // ── Estado persistente ────────────────────────────────────────────────────────
 
@@ -91,6 +117,15 @@ function readLastSyncSafe() {
     }
 }
 
+function readStateSafe(clave) {
+    try {
+        ensureLocalStateTable(sqlite);
+        return getLocalState(sqlite, clave);
+    } catch (_) {
+        return null;
+    }
+}
+
 function pendingChangesSafe() {
     try {
         return readPendingChanges(sqlite).total;
@@ -109,7 +144,7 @@ function registrarVerificacion(verificacion, fecha, completa) {
     syncState.verificacion = { ...verificacion, fecha, completa };
     if (completa && verificacion.ok) setLocalState(sqlite, 'ultima_verificacion_completa', fecha);
     if (!verificacion.ok) {
-        log(`⚠️ Verificación con diferencias en: ${verificacion.diferencias.map(d => d.tabla).join(', ')}`);
+        logWarn(`⚠️ Verificación con diferencias en: ${verificacion.diferencias.map(d => d.tabla).join(', ')}`);
     }
 }
 
@@ -145,6 +180,7 @@ export function configure(config = {}) {
     if (config.tursoToken !== undefined) syncConfig.tursoToken = (config.tursoToken || '').trim();
     if (config.autoSync !== undefined) syncConfig.autoSync = Boolean(config.autoSync);
     if (config.syncIntervalMs) syncConfig.syncIntervalMs = Number(config.syncIntervalMs);
+    if (config.equipoId) syncConfig.equipoId = String(config.equipoId);
 
     // Reiniciar timer previo
     if (syncTimer) {
@@ -170,12 +206,13 @@ export function configure(config = {}) {
             if (syncConfig.autoSync) {
                 syncTimer = setInterval(() => {
                     syncIncremental().catch(err => {
-                        console.warn('[TursoSync] Error en sync automático (silencioso):', err.message);
+                        registrarFallo(err.message);
+                        logWarn(`Error en sincronización automática: ${err.message}`);
                     });
                 }, syncConfig.syncIntervalMs);
             }
         } catch (err) {
-            console.error('[TursoSync] Error inicializando cliente Turso:', err.message);
+            logError('Error inicializando cliente Turso', err);
             tursoClient = null;
         }
     } else {
@@ -186,7 +223,7 @@ export function configure(config = {}) {
             disableChangeTracking(sqlite);
             setLocalState(sqlite, 'requiere_carga_completa', '1');
         } catch (err) {
-            console.warn('[TursoSync] Aviso al desactivar el registro de cambios:', err.message);
+            logWarn(`Aviso al desactivar el registro de cambios: ${err.message}`);
         }
         log('Modo local puro — sin credenciales de Turso configuradas');
     }
@@ -209,7 +246,11 @@ export function getStatus() {
         totalRecordsSynced: syncState.totalRecordsSynced,
         conflicto: syncState.conflicto,
         verificacion: syncState.verificacion,
-        cambiosPendientes: tursoClient ? pendingChangesSafe() : null
+        cambiosPendientes: tursoClient ? pendingChangesSafe() : null,
+        ultimaSincronizacionCorrecta: readStateSafe('ultima_sync_ok'),
+        fallosConsecutivos: syncState.fallosConsecutivos,
+        fkViolaciones: syncState.fkViolaciones,
+        equipoId: syncConfig.equipoId
     };
 }
 
@@ -241,6 +282,7 @@ export async function seedDatabase({ force = false } = {}) {
         const instanciaId = getOrCreateInstanciaId(sqlite);
         const result = await seedRemote(sqlite, tursoClient, {
             instanciaId,
+            equipoId: syncConfig.equipoId,
             force,
             timestamp: seedStartTime,
             log
@@ -250,12 +292,12 @@ export async function seedDatabase({ force = false } = {}) {
             syncState.conflicto = {
                 motivos: result.motivos,
                 comparacion: result.comparacion,
+                eliminaria: result.eliminaria,
                 fecha: seedStartTime
             };
-            syncState.lastSyncSuccess = false;
-            syncState.lastError = 'Carga semilla bloqueada para proteger la copia en la nube. ' +
-                result.motivos.map(m => m.mensaje).join(' ');
-            console.warn(`[TursoSync] ⛔ ${syncState.lastError}`);
+            registrarFallo('Carga semilla bloqueada para proteger la copia en la nube. ' +
+                result.motivos.map(m => m.mensaje).join(' '));
+            logWarn(`⛔ ${syncState.lastError}`);
             return result;
         }
 
@@ -263,15 +305,15 @@ export async function seedDatabase({ force = false } = {}) {
         setLocalState(sqlite, 'requiere_carga_completa', '0');
         registrarVerificacion(result.verificacion, seedStartTime, true);
         syncState.conflicto = null;
-        syncState.lastSyncSuccess = true;
+        syncState.fkViolaciones = result.fkViolaciones ?? null;
+        registrarExito();
         syncState.totalRecordsSynced += result.totalRows;
 
         log(`✅ Carga semilla completada. Registros copiados: ${result.totalRows}, eliminados en la nube: ${result.pruned}`);
         return result;
     } catch (error) {
-        syncState.lastSyncSuccess = false;
-        syncState.lastError = error.message;
-        console.error('[TursoSync] ❌ Error en carga semilla:', error);
+        registrarFallo(error.message);
+        logError('❌ Error en carga semilla', error);
         throw error;
     } finally {
         syncState.inProgress = false;
@@ -303,15 +345,23 @@ export async function syncIncremental() {
         const instanciaId = getOrCreateInstanciaId(sqlite);
         result = await incrementalRemote(sqlite, tursoClient, {
             instanciaId,
+            equipoId: syncConfig.equipoId,
             timestamp: syncStartTime,
             verifyAll,
             log
         });
 
+        if (result.success === false) {
+            registrarFallo(result.error);
+            logError(result.error);
+            return result;
+        }
+
         if (!result.needsSeed) {
             saveLastSync(syncStartTime);
             registrarVerificacion(result.verificacion, syncStartTime, verifyAll);
-            syncState.lastSyncSuccess = true;
+            if (result.fkViolaciones !== undefined) syncState.fkViolaciones = result.fkViolaciones;
+            registrarExito();
             syncState.totalRecordsSynced += result.syncedCount || 0;
             if (result.syncedCount) {
                 log(`Sincronización incremental exitosa (${result.upserted} subidos, ${result.deleted} eliminados)`);
@@ -319,9 +369,8 @@ export async function syncIncremental() {
             return result;
         }
     } catch (error) {
-        syncState.lastSyncSuccess = false;
-        syncState.lastError = error.message;
-        console.error('[TursoSync] Error durante sync incremental:', error);
+        registrarFallo(error.message);
+        logError('Error durante sincronización incremental', error);
         return {
             success: false,
             error: error.message
@@ -334,6 +383,7 @@ export async function syncIncremental() {
     const motivos = {
         remote_identity: 'La nube no corresponde a esta base local',
         remote_columns: 'La nube tiene columnas que esta base no tiene',
+        other_device: 'Otra computadora escribió en esta copia de la nube',
         tracking_installed: 'Registro de cambios recién activado'
     };
     log(`${motivos[result.reason] || result.reason} — se ejecuta carga semilla protegida`);
@@ -402,7 +452,7 @@ export async function prepareRestore() {
             try { target.close(); } catch (_) {}
         }
         fs.rmSync(archivo, { force: true });
-        console.error('[TursoSync] ❌ Error preparando la restauración:', error);
+        logError('❌ Error preparando la restauración', error);
         throw error;
     } finally {
         syncState.inProgress = false;
@@ -416,5 +466,6 @@ export default {
     seedDatabase,
     syncIncremental,
     describeCloudCopy,
-    prepareRestore
+    prepareRestore,
+    setLogger
 };

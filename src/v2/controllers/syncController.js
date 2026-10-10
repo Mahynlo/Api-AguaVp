@@ -15,7 +15,8 @@ function conflictResponse(result) {
         conflict: true,
         error: 'Sincronización bloqueada para proteger la copia en la nube',
         motivos: result.motivos,
-        comparacion: result.comparacion
+        comparacion: result.comparacion,
+        eliminaria: result.eliminaria || []
     };
 }
 
@@ -69,14 +70,15 @@ export async function testConnection(req, res) {
  * Actualizar configuración dinámica en caliente
  */
 export async function configure(req, res) {
-    const { tursoUrl, tursoToken, autoSync, syncIntervalMs } = req.body;
+    const { tursoUrl, tursoToken, autoSync, syncIntervalMs, equipoId } = req.body;
 
     try {
         const status = syncService.configure({
             tursoUrl,
             tursoToken,
             autoSync,
-            syncIntervalMs
+            syncIntervalMs,
+            equipoId
         });
 
         res.json({

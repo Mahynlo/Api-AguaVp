@@ -52,6 +52,7 @@ class AguaVPServer extends EventEmitter {
             tursoAuthToken: config.tursoAuthToken || process.env.TURSO_AUTH_TOKEN || '',
             tursoAutoSync: config.tursoAutoSync !== false,
             tursoSyncIntervalMs: config.tursoSyncIntervalMs || 15 * 60 * 1000,
+            tursoEquipoId: config.tursoEquipoId || '',
 
             // Otras opciones
             ...config
@@ -274,6 +275,10 @@ class AguaVPServer extends EventEmitter {
             //    proceso.env.DB_PATH correcto ya se estableció antes de la primera carga.
             const { default: server } = await import('./server.js');
 
+            // Mensajes de la sincronización con Turso → evento 'sync-log' ({ nivel, mensaje }) para la app
+            const { setLogger: setSyncLogger } = await import('./v2/services/tursoSyncService.js');
+            setSyncLogger((nivel, mensaje) => this.emit('sync-log', { nivel, mensaje }));
+
             // 5. Iniciar servidor Express
             return new Promise((resolve, reject) => {
                 this.serverInstance = server.listen(this.config.port, (err) => {
@@ -301,7 +306,8 @@ class AguaVPServer extends EventEmitter {
                                     tursoUrl: this.config.tursoDatabaseUrl,
                                     tursoToken: this.config.tursoAuthToken,
                                     autoSync: this.config.tursoAutoSync,
-                                    syncIntervalMs: this.config.tursoSyncIntervalMs
+                                    syncIntervalMs: this.config.tursoSyncIntervalMs,
+                                    equipoId: this.config.tursoEquipoId || undefined
                                 });
                                 this.emit('log', '☁️ Sincronización en la Nube (Turso Cloud) activada');
                             }).catch(err => {
