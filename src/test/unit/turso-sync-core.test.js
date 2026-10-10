@@ -640,3 +640,100 @@ describe('tursoSyncCore — equipos, vista previa de eliminación y verificació
         assert.ok(res.filasVerificadas >= res.totalRegistros);
     });
 });
+
+// Referencias "hacia adelante": la fila apunta a otra de la misma tabla con id mayor, o a una tabla
+// que se sube después (facturas.convenio_id → convenios_pago, pagos.parcialidad_id → parcialidades_convenio).
+const SCHEMA_FK = `
+    CREATE TABLE usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT NOT NULL,
+        eliminado_por INTEGER REFERENCES usuarios(id));
+    CREATE TABLE clientes (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT NOT NULL);
+    CREATE TABLE facturas (id INTEGER PRIMARY KEY AUTOINCREMENT, cliente_id INTEGER REFERENCES clientes(id),
+        total NUMERIC NOT NULL, convenio_id INTEGER REFERENCES convenios_pago(id));
+    CREATE TABLE pagos (id INTEGER PRIMARY KEY AUTOINCREMENT, factura_id INTEGER REFERENCES facturas(id),
+        monto NUMERIC NOT NULL, parcialidad_id INTEGER REFERENCES parcialidades_convenio(id));
+    CREATE TABLE convenios_pago (id INTEGER PRIMARY KEY AUTOINCREMENT, cliente_id INTEGER NOT NULL REFERENCES clientes(id));
+    CREATE TABLE parcialidades_convenio (id INTEGER PRIMARY KEY AUTOINCREMENT,
+        convenio_id INTEGER NOT NULL REFERENCES convenios_pago(id), monto NUMERIC NOT NULL);
+`;
+
+describe('tursoSyncCore — referencias hacia adelante con la nube vacía y llaves foráneas activas', () => {
+    let dir;
+    let remote;
+    let local;
+    let id;
+
+    const val = async (sql) => (await remote.execute(sql)).rows[0];
+
+    beforeEach(async () => {
+        dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aguavp-fwd-'));
+        remote = createClient({ url: 'file:' + path.join(dir, 'nube.db').split(path.sep).join('/') });
+        await remote.execute('PRAGMA foreign_keys = ON');
+        local = new DatabaseSync(':memory:');
+        local.exec(SCHEMA_FK);
+        local.exec(`INSERT INTO usuarios (nombre) VALUES ('admin'), ('operador')`);
+        local.exec(`UPDATE usuarios SET eliminado_por = 2 WHERE id = 1`);
+        local.exec(`INSERT INTO clientes (nombre) VALUES ('Cliente 1')`);
+        local.exec(`INSERT INTO convenios_pago (cliente_id) VALUES (1)`);
+        local.exec(`INSERT INTO parcialidades_convenio (convenio_id, monto) VALUES (1, 50)`);
+        local.exec(`INSERT INTO facturas (cliente_id, total, convenio_id) VALUES (1, 100, 1)`);
+        local.exec(`INSERT INTO pagos (factura_id, monto, parcialidad_id) VALUES (1, 50, 1)`);
+        id = getOrCreateInstanciaId(local);
+    });
+
+    afterEach(() => {
+        remote.close();
+        try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); } catch (_) {}
+    });
+
+    it('la primera carga en una nube vacía sube todo y conserva las referencias', async () => {
+        const res = await seedRemote(local, remote, { instanciaId: id, timestamp: ts() });
+
+        assert.equal(res.success, true);
+        assert.equal(res.verificacion.ok, true);
+        assert.equal(Number((await val('SELECT eliminado_por AS v FROM usuarios WHERE id = 1')).v), 2);
+        assert.equal(Number((await val('SELECT convenio_id AS v FROM facturas WHERE id = 1')).v), 1);
+        assert.equal(Number((await val('SELECT parcialidad_id AS v FROM pagos WHERE id = 1')).v), 1);
+        assert.equal((await remote.execute('PRAGMA foreign_key_check')).rows.length, 0);
+    });
+
+    it('el ciclo incremental sube un convenio nuevo y la factura que lo usa en el mismo ciclo', async () => {
+        await seedRemote(local, remote, { instanciaId: id, timestamp: ts() });
+        local.exec(`INSERT INTO facturas (cliente_id, total) VALUES (1, 80)`);
+        local.exec(`INSERT INTO convenios_pago (cliente_id) VALUES (1)`);
+        local.exec(`INSERT INTO parcialidades_convenio (convenio_id, monto) VALUES (2, 40)`);
+        local.exec(`UPDATE facturas SET convenio_id = 2 WHERE id = 2`);
+        local.exec(`INSERT INTO pagos (factura_id, monto, parcialidad_id) VALUES (2, 40, 2)`);
+
+        const res = await incrementalRemote(local, remote, { instanciaId: id, timestamp: ts() });
+
+        assert.equal(res.success, true);
+        assert.equal(Number((await val('SELECT convenio_id AS v FROM facturas WHERE id = 2')).v), 2);
+        assert.equal(Number((await val('SELECT parcialidad_id AS v FROM pagos WHERE id = 2')).v), 2);
+        assert.equal((await remote.execute('PRAGMA foreign_key_check')).rows.length, 0);
+    });
+
+    it('quitar la referencia y borrar el convenio en el mismo ciclo deja la nube igual que la local', async () => {
+        await seedRemote(local, remote, { instanciaId: id, timestamp: ts() });
+        local.exec(`UPDATE pagos SET parcialidad_id = NULL WHERE id = 1`);
+        local.exec(`UPDATE facturas SET convenio_id = NULL WHERE id = 1`);
+        local.exec(`DELETE FROM parcialidades_convenio WHERE id = 1`);
+        local.exec(`DELETE FROM convenios_pago WHERE id = 1`);
+
+        const res = await incrementalRemote(local, remote, { instanciaId: id, timestamp: ts(), verifyAll: true });
+
+        assert.equal(res.success, true);
+        assert.equal(res.verificacion.ok, true);
+        assert.equal((await val('SELECT convenio_id AS v FROM facturas WHERE id = 1')).v, null);
+        assert.equal(Number((await val('SELECT COUNT(*) AS v FROM convenios_pago')).v), 0);
+    });
+
+    it('la verificación diaria repara una referencia hacia adelante vaciada en la nube', async () => {
+        await seedRemote(local, remote, { instanciaId: id, timestamp: ts() });
+        await remote.execute('UPDATE usuarios SET eliminado_por = NULL WHERE id = 1');
+
+        const res = await incrementalRemote(local, remote, { instanciaId: id, timestamp: ts(), verifyAll: true });
+
+        assert.equal(res.verificacion.ok, true);
+        assert.equal(Number((await val('SELECT eliminado_por AS v FROM usuarios WHERE id = 1')).v), 2);
+    });
+});

@@ -294,6 +294,7 @@ export function commitChanges(local, maxId) {
 export async function pushChanges(local, remote, porTabla, stats = { conflictosResueltos: 0 }) {
     const tables = getLocalTables(local).map(t => t.name).filter(t => porTabla.has(t));
     const deletesByTable = new Map();
+    const uploader = createUploader(local, remote, { stats });
     let upserted = 0;
     let deleted = 0;
 
@@ -305,11 +306,12 @@ export async function pushChanges(local, remote, porTabla, stats = { conflictosR
                 `SELECT * FROM ${quoteId(table)} WHERE id IN (${chunk.map(() => '?').join(', ')})`
             ).all(...chunk);
             rows.forEach(r => found.add(String(r.id)));
-            upserted += await upsertBatch(remote, table, rows, { local, stats });
+            upserted += await uploader.upsert(table, rows);
         }
         const missing = ids.filter(id => !found.has(String(id)));
         if (missing.length) deletesByTable.set(table, missing);
     }
+    await uploader.finish();
 
     for (const table of [...tables].reverse()) {
         const ids = deletesByTable.get(table);
@@ -556,16 +558,20 @@ function uniqueKeys(local, table) {
  * @param {Object} [opts.local] - base local (para conocer los índices UNIQUE al resolver choques)
  * @param {{ conflictosResueltos: number }} [opts.stats]
  */
-export async function upsertBatch(remote, tableName, rows, { local = null, stats = null } = {}) {
+export async function upsertBatch(remote, tableName, rows, { local = null, stats = null, defer = [] } = {}) {
     if (!rows || rows.length === 0) return 0;
     const columns = Object.keys(rows[0]);
     const table = quoteId(tableName);
+    // Columnas diferidas (ver deferredFkColumns): NULL en filas nuevas y sin tocar en las existentes;
+    // su valor se escribe en el segundo paso (applyDeferredColumns).
+    const deferred = new Set(columns.includes('id') ? defer : []);
     const insertCols = `(${columns.map(quoteId).join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`;
-    const updates = columns.filter(c => c !== 'id').map(c => `${quoteId(c)} = excluded.${quoteId(c)}`);
+    const updates = columns.filter(c => c !== 'id' && !deferred.has(c)).map(c => `${quoteId(c)} = excluded.${quoteId(c)}`);
     const sql = !columns.includes('id')
         ? `INSERT OR REPLACE INTO ${table} ${insertCols}`
         : `INSERT INTO ${table} ${insertCols} ON CONFLICT(id) DO ${updates.length ? `UPDATE SET ${updates.join(', ')}` : 'NOTHING'}`;
     const argsOf = (row) => columns.map(c => {
+        if (deferred.has(c)) return null;
         const val = row[c];
         if (typeof val === 'boolean') return val ? 1 : 0;
         if (val === undefined) return null;
@@ -597,6 +603,74 @@ export async function upsertBatch(remote, tableName, rows, { local = null, stats
         }
     }
     return rows.length;
+}
+
+/**
+ * Columnas con llave foránea que se suben en un segundo paso: las que apuntan a la MISMA tabla
+ * (p. ej. `usuarios.eliminado_por` hacia un usuario con id mayor) o a una tabla que se sube DESPUÉS
+ * (`facturas.convenio_id` → `convenios_pago`, `pagos.parcialidad_id` → `parcialidades_convenio`).
+ * Turso valida cada fila al insertarla: con la nube vacía, o con el registro referido creado en el
+ * mismo ciclo, la fila referida todavía no existe. Solo columnas que admiten NULL.
+ * @param {string[]} order - tablas en el orden de subida
+ * @returns {Map<string, string[]>} tabla → columnas diferidas
+ */
+export function deferredFkColumns(local, order) {
+    const pos = new Map(order.map((t, i) => [t, i]));
+    const out = new Map();
+    for (const table of order) {
+        const nullable = new Set(localColumns(local, table).filter(c => !c.notnull && !c.pk).map(c => c.name));
+        const cols = new Set();
+        for (const fk of local.prepare(`PRAGMA foreign_key_list(${quoteId(table)})`).all()) {
+            const p = pos.get(fk.table);
+            if (p !== undefined && p >= pos.get(table) && nullable.has(fk.from)) cols.add(fk.from);
+        }
+        if (cols.size) out.set(table, [...cols]);
+    }
+    return out;
+}
+
+/** Segundo paso: escribe en la nube el valor local de las columnas diferidas de `rows`. */
+async function applyDeferredColumns(remote, tableName, rows, cols) {
+    const table = quoteId(tableName);
+    const tieneValor = (r) => cols.some(c => r[c] !== null && r[c] !== undefined);
+    const conValor = rows.filter(tieneValor);
+    const sinValor = rows.filter(r => !tieneValor(r)).map(r => r.id);
+
+    const sql = `UPDATE ${table} SET ${cols.map(c => `${quoteId(c)} = ?`).join(', ')} WHERE id = ?`;
+    for (const chunk of chunks(conValor, UPSERT_BATCH_SIZE)) {
+        await remote.batch(chunk.map(r => ({ sql, args: [...cols.map(c => r[c] ?? null), r.id] })), 'write');
+    }
+    // Filas que en local no tienen referencia: vaciar solo las que en la nube todavía la tengan
+    for (const chunk of chunks(sinValor, ID_CHUNK_SIZE)) {
+        await remote.execute({
+            sql: `UPDATE ${table} SET ${cols.map(c => `${quoteId(c)} = NULL`).join(', ')} ` +
+                `WHERE id IN (${chunk.map(() => '?').join(', ')}) AND (${cols.map(c => `${quoteId(c)} IS NOT NULL`).join(' OR ')})`,
+            args: chunk
+        });
+    }
+}
+
+/**
+ * Sube filas de varias tablas, en orden de dependencias, en dos pasos: `upsert()` por tabla con las
+ * referencias diferidas pendientes y `finish()` para escribirlas cuando todas las filas ya existen en la nube.
+ * Llamar a `finish()` ANTES de borrar filas en la nube.
+ */
+function createUploader(local, remote, { stats = null } = {}) {
+    const deferred = deferredFkColumns(local, getLocalTables(local).map(t => t.name));
+    const pending = [];
+    return {
+        async upsert(table, rows) {
+            const cols = deferred.get(table) || [];
+            const n = await upsertBatch(remote, table, rows, { local, stats, defer: cols });
+            if (cols.length && rows.length && 'id' in rows[0]) {
+                pending.push({ table, cols, rows: rows.map(r => Object.fromEntries(['id', ...cols].map(c => [c, r[c]]))) });
+            }
+            return n;
+        },
+        async finish() {
+            for (const p of pending.splice(0)) await applyDeferredColumns(remote, p.table, p.rows, p.cols);
+        }
+    };
 }
 
 /**
@@ -666,10 +740,12 @@ export async function repairTables(local, remote, diferencias) {
     const reparadas = [];
     const conservadas = [];
 
+    const uploader = createUploader(local, remote);
     for (const t of targets) {
         const rows = local.prepare(`SELECT * FROM ${quoteId(t)}`).all();
-        await upsertBatch(remote, t, rows, { local });
+        await uploader.upsert(t, rows);
     }
+    await uploader.finish();
     for (const t of [...targets].reverse()) {
         const d = byTable.get(t);
         if (GUARD_TABLES.includes(t) && d.nube.n > d.local.n) {
@@ -761,15 +837,17 @@ export async function repairContent(local, remote, diferencias) {
     const reparadas = [];
     const conservadas = [];
 
+    const uploader = createUploader(local, remote);
     for (const t of targets) {
         const ids = [...byTable.get(t).distintas, ...byTable.get(t).soloLocal];
         for (const chunk of chunks(ids, ID_CHUNK_SIZE)) {
             const rows = local.prepare(
                 `SELECT * FROM ${quoteId(t)} WHERE id IN (${chunk.map(() => '?').join(', ')})`
             ).all(...chunk);
-            await upsertBatch(remote, t, rows, { local });
+            await uploader.upsert(t, rows);
         }
     }
+    await uploader.finish();
     for (const t of [...targets].reverse()) {
         const { soloNube } = byTable.get(t);
         if (soloNube.length && GUARD_TABLES.includes(t)) {
@@ -1009,13 +1087,16 @@ export async function seedRemote(local, remote, { instanciaId, equipoId = null, 
 
     let totalRows = 0;
     const tablesCopied = [];
+    const uploader = createUploader(local, remote);
     for (const { name } of tables) {
         const rows = local.prepare(`SELECT * FROM ${quoteId(name)}`).all();
         if (rows.length === 0) continue;
-        await upsertBatch(remote, name, rows, { local });
+        await uploader.upsert(name, rows);
         totalRows += rows.length;
         tablesCopied.push({ table: name, count: rows.length });
     }
+    // Referencias hacia adelante (misma tabla o tabla posterior), con todas las filas ya en la nube
+    await uploader.finish();
 
     // Borrar lo que ya no existe en local, de hijos a padres
     let pruned = 0;

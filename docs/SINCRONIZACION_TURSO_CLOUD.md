@@ -2,7 +2,7 @@
 
 Especificación técnica del subsistema de copia de seguridad en Turso Cloud integrado en `@aguavp/api-server`.
 
-> Versión documentada: **1.0.12**. Guía operativa para usuarios/administradores: `AguaVP/docs/sincronizacion-turso-cloud.md` (app). Plan de mejoras: `AguaVP/docs/plan-sincronizacion-turso.md`.
+> Versión documentada: **1.0.13**. Guía operativa para usuarios/administradores: `AguaVP/docs/sincronizacion-turso-cloud.md` (app). Plan de mejoras: `AguaVP/docs/plan-sincronizacion-turso.md`.
 
 **Regla principal:** el SQLite local es el único escritor y ninguna operación puede dejar la nube con menos datos válidos de los que tenía.
 
@@ -95,6 +95,8 @@ Se ejecuta cuando no hay `last_sync` para la URL actual, cuando `requiere_carga_
 7. **Copia** en orden de dependencias (`TABLE_SYNC_ORDER`, luego el resto alfabético) con `upsertBatch` en lotes atómicos de 100.
 
 > **`upsertBatch` actualiza en su lugar** (`INSERT … ON CONFLICT(id) DO UPDATE`). Hasta 1.0.10 usaba `INSERT OR REPLACE`, que SQLite ejecuta como borrar + insertar; Turso aplica las llaves foráneas a ese borrado, así que subir un usuario vaciaba `user_permission_overrides.updated_by` (ON DELETE SET NULL) y borraba sus permisos individuales, subir una tarifa borraba sus `rangos_tarifas`, una ruta sus `rutas_puntos` y el catálogo de permisos los permisos de roles (ON DELETE CASCADE). Si un lote choca con otro índice UNIQUE (p. ej. intercambio de `orden` en una ruta), se reintenta fila por fila y se borran en la nube solo las filas obsoletas que ocupan esa clave con otro id; en ese caso el ciclo verifica todas las tablas.
+
+> **Referencias hacia adelante (1.0.13).** Turso valida cada llave foránea al insertar la fila. Las columnas que apuntan a la misma tabla (`usuarios.eliminado_por`) o a una tabla que se sube después (`facturas.convenio_id` → `convenios_pago`, `pagos.parcialidad_id` → `parcialidades_convenio`) se calculan con `deferredFkColumns` (solo columnas que admiten NULL). `createUploader` las sube en dos pasos: `upsert()` las deja en NULL en filas nuevas y sin tocar en las existentes, y `finish()` escribe su valor local cuando todas las filas ya existen; `finish()` siempre va antes de borrar filas en la nube. Lo usan `seedRemote`, `pushChanges`, `repairTables` y `repairContent`. Hasta 1.0.12 la carga completa en una nube vacía fallaba con `FOREIGN KEY constraint failed`.
 8. **Borrado por diferencia** (`pruneRemoteRows`), de hijas a padres: solo los `id` que ya no existen en local. **Nunca `DELETE FROM tabla` completo** (salvo tablas excluidas).
 9. **Metadatos remotos**, `commitChanges(cursor de inicio)`, `last_sync`, `requiere_carga_completa = 0`.
 10. **Verificación** de todas las tablas (`verifyRemote`), registrada como verificación completa.
