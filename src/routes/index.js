@@ -7,20 +7,16 @@
 import express from 'express';
 import { getVersionsInfo, getCurrentVersion } from '../config/versions.js';
 
-// Importar rutas
-// import v1Routes from '../v1/index.js'; // DESACTIVADO TEMPORALMENTE
-import v2Routes from '../v2/index.js'; // Nueva v2
-import healthRoutes from '../v1/routes/health.js';
+import v2Routes from '../v2/index.js';
+import healthRoutes from './health.js';
 
 const router = express.Router();
 
-// Health Check (sin versión para compatibilidad)
+// Health Check (sin versión)
 router.use('/health', healthRoutes);
 
-// Versión 1 de la API - DESACTIVADA TEMPORALMENTE
-// router.use('/v1', v1Routes);
-
-// Ruta de información para v1 desactivada
+// La v1 fue retirada (su código queda en el tag git `v1-final`).
+// Se responde 503 para que clientes antiguos reciban un mensaje claro.
 router.use('/v1', (req, res) => {
   res.status(503).json({
     error: "API v1 temporalmente desactivada",
@@ -69,8 +65,6 @@ router.get('/', (req, res) => {
       versions: getVersionsInfo(),
       endpoints: {
         [currentVersion]: `/api/${currentVersion}`,
-        'v1': '/api/v1',
-        'v2': '/api/v2', // Nueva v2
         health: '/api/health',
         versions: '/api/versions',
         documentation: '/api-docs'

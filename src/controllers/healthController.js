@@ -13,44 +13,21 @@
  * - getSystemInfo: Información del sistema
  */
 
-//const db = require('../database/db');
-//const os = require('os');
-
-import db from "../database/db"
-import os from "os"
+import dbTurso from '../database/db-sqlite.js';
+import os from 'os';
 
 /**
  * Health Check completo de la API
  * ⚠️ PROTEGIDO: Requiere API Key + JWT Token
  * Devuelve información sensible del sistema
  */
-const checkHealth = (req, res) => {
+const checkHealth = async (req, res) => {
   const startTime = Date.now();
-  
-  // Verificar base de datos
-  db.get("SELECT 1", (err) => {
+
+  try {
+    // Verificar base de datos
+    await dbTurso.execute("SELECT 1");
     const responseTime = Date.now() - startTime;
-    
-    // Obtener estadísticas de WebSocket si están disponibles
-    const wsStats = req.app.get('io') ? req.app.get('io').getConnectionStats() : null;
-    
-    if (err) {
-      return res.status(503).json({
-        status: 'ERROR',
-        timestamp: new Date().toISOString(),
-        responseTime: `${responseTime}ms`,
-        services: {
-          api: 'UP',
-          database: 'DOWN',
-          websocket: wsStats ? 'UP' : 'DOWN'
-        },
-        websocket: wsStats,
-        error: {
-          database: err.message
-        },
-        system: getSystemInfo()
-      });
-    }
 
     res.status(200).json({
       status: 'OK',
@@ -59,13 +36,28 @@ const checkHealth = (req, res) => {
       version: process.env.npm_package_version || '1.0.0',
       services: {
         api: 'UP',
-        database: 'UP',
-        websocket: wsStats ? 'UP' : 'DOWN'
+        database: 'UP'
       },
-      websocket: wsStats,
       system: getSystemInfo()
     });
-  });
+
+  } catch (err) {
+    const responseTime = Date.now() - startTime;
+
+    return res.status(503).json({
+      status: 'ERROR',
+      timestamp: new Date().toISOString(),
+      responseTime: `${responseTime}ms`,
+      services: {
+        api: 'UP',
+        database: 'DOWN'
+      },
+      error: {
+        database: err.message
+      },
+      system: getSystemInfo()
+    });
+  }
 };
 
 /**
@@ -86,50 +78,44 @@ const checkSimpleHealth = (req, res) => {
  * ⚠️ PROTEGIDO: Requiere API Key + JWT Token
  * Devuelve información sobre estructura de BD
  */
-const checkDatabase = (req, res) => {
+const checkDatabase = async (req, res) => {
   const startTime = Date.now();
-  
-  // Verificar conexión básica
-  db.get("SELECT 1 as test", (err, row) => {
-    const responseTime = Date.now() - startTime;
-    
-    if (err) {
-      return res.status(503).json({
-        status: 'ERROR',
-        service: 'database',
-        timestamp: new Date().toISOString(),
-        responseTime: `${responseTime}ms`,
-        error: err.message
-      });
-    }
+
+  try {
+    // Verificar conexión básica
+    await dbTurso.execute("SELECT 1 as test");
 
     // Verificar que las tablas principales existan
-    db.all(`
-      SELECT name FROM sqlite_master 
-      WHERE type='table' 
-      AND name IN ('clientes', 'medidores', 'lecturas', 'facturas', 'pagos', 'usuarios')
-    `, (err, tables) => {
-      
-      if (err) {
-        return res.status(503).json({
-          status: 'ERROR',
-          service: 'database',
-          timestamp: new Date().toISOString(),
-          responseTime: `${responseTime}ms`,
-          error: err.message
-        });
-      }
-
-      res.status(200).json({
-        status: 'OK',
-        service: 'database',
-        timestamp: new Date().toISOString(),
-        responseTime: `${responseTime}ms`,
-        tables: tables.map(t => t.name),
-        tablesCount: tables.length
-      });
+    // Nota: sqlite_master es compatible en Turso/LibSQL
+    const tablesResult = await dbTurso.execute({
+      sql: `SELECT name FROM sqlite_master 
+            WHERE type='table' 
+            AND name IN ('clientes', 'medidores', 'lecturas', 'facturas', 'pagos', 'usuarios')`,
+      args: []
     });
-  });
+
+    const tables = tablesResult.rows;
+    const responseTime = Date.now() - startTime;
+
+    res.status(200).json({
+      status: 'OK',
+      service: 'database',
+      timestamp: new Date().toISOString(),
+      responseTime: `${responseTime}ms`,
+      tables: tables.map(t => t.name),
+      tablesCount: tables.length
+    });
+
+  } catch (err) {
+    const responseTime = Date.now() - startTime;
+    return res.status(503).json({
+      status: 'ERROR',
+      service: 'database',
+      timestamp: new Date().toISOString(),
+      responseTime: `${responseTime}ms`,
+      error: err.message
+    });
+  }
 };
 
 /**
@@ -137,7 +123,7 @@ const checkDatabase = (req, res) => {
  */
 const getSystemInfo = () => {
   const memUsage = process.memoryUsage();
-  
+
   return {
     platform: os.platform(),
     arch: os.arch(),
@@ -174,7 +160,7 @@ const getSystemDetails = (req, res) => {
   });
 };
 
-module.exports = {
+export default {
   checkHealth,
   checkSimpleHealth,
   checkDatabase,

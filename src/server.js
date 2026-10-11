@@ -5,8 +5,8 @@
  * 
  * Descripción:
  * - Este archivo configura el servidor Express y las rutas de la API.
- * - Establece la conexión con el servidor WebSocket.
- * - Configura los middlewares y las rutas de la API.
+ * - Configura los middlewares, SSE (notificaciones en tiempo real),
+ *   los cron jobs y la documentación Swagger.
  * 
  * Funciones:
  * - Carga las variables de entorno desde un archivo .env.
@@ -18,9 +18,7 @@
  * - Se utiliza dotenv para cargar las variables de entorno.
  * - Se utiliza express para crear el servidor.
  * - Se utiliza cors para permitir el acceso desde diferentes dominios.
- * - Se utiliza socket.io para establecer la conexión WebSocket.
- * - Se utiliza sqlite3 para interactuar con la base de datos SQLite.
- * - Se utiliza bcryptjs para cifrar las contraseñas.
+ * - La conexión a la base de datos vive en database/db-sqlite.js (better-sqlite3).
  * 
  */
 
@@ -30,9 +28,6 @@ import 'dotenv/config';
 import express from 'express';
 import http from 'http';
 import cors from 'cors';
-import { Server } from 'socket.io';
-// import setupSocket from './v1/sockets/socket.js'; // DESACTIVADO TEMPORALMENTE
-// import SocketManager from './v1/sockets/enhanced/socketManager.js'; // DESACTIVADO TEMPORALMENTE
 import SSEManager from './v2/sse/sseManager.js';
 import SSENotificationManager from './v2/sse/notificationManager.js';
 import routes from './routes/index.js';
@@ -80,18 +75,12 @@ const swaggerOptions = {
       }
     }
   },
-  apis: ['./src/v2/routes/*.js'], // Cambiado a v2 - v1 desactivada temporalmente
+  apis: ['./src/v2/routes/*.js'],
 };
 
 
 const app = express();
 const server = http.createServer(app);
-
-const io = new Server(server, {
-  cors: {
-    origin: '*', // ⚠️ Para producción se debe restringir esto
-  }
-});
 
 // Configurar Express para confiar en proxies (Render, Nginx, etc.)
 // Esto permite que Express use correctamente los headers X-Forwarded-*
@@ -103,19 +92,13 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Inicializar Socket Manager mejorado (v1) - DESACTIVADO TEMPORALMENTE
-// const socketManager = new SocketManager();
-
-// Inicializar SSE Manager (v2)
+// Inicializar SSE Manager
 const sseManager = new SSEManager();
 const sseNotificationManager = new SSENotificationManager(sseManager);
 
 // Hacer disponible los objetos en toda la aplicación
-app.set('io', io);
-// app.set('socketManager', socketManager); // DESACTIVADO TEMPORALMENTE
-app.set('sseManager', sseManager); // Activo para v2
-
-app.set('notificationManager', sseNotificationManager); // Activo para v2
+app.set('sseManager', sseManager);
+app.set('notificationManager', sseNotificationManager);
 
 // Inicializar Cron Jobs
 setDeudoresNotificationManager(sseNotificationManager);
@@ -131,7 +114,7 @@ app.use('/api', routes);
 
 const swaggerSpec = swaggerJsdoc(swaggerOptions);
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
-  customSiteTitle: 'API Agua Potable v2.0 (v1 Desactivada)',
+  customSiteTitle: 'API Agua Potable v2.0',
   customfavIcon: './public/assets/images/icon.png',
   customCss: `
     .swagger-ui .topbar { background-color: #198754; }
@@ -150,14 +133,8 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
 }));
 
 
-// WebSocket - Sistema desactivado temporalmente (v1)
-// setupSocket(io);  // Sistema básico para compatibilidad - DESACTIVADO
-// socketManager.initialize(io);  // Sistema mejorado con autenticación y roles - DESACTIVADO
-
 console.log('🚀 Sistemas inicializados:');
-console.log('   - WebSockets (v1): ❌ DESACTIVADO TEMPORALMENTE');
 console.log('   - SSE (v2): ✅ ACTIVO');
-console.log('   - API v1: ❌ DESACTIVADA TEMPORALMENTE');
 console.log('   - API v2: ✅ ACTIVA');
 console.log('   - Cron Deudores: ✅ ACTIVO (Diario 3:00 AM)');
 

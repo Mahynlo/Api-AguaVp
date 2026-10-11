@@ -14,18 +14,19 @@
  * - GET /health/system - Información del sistema
  */
 
-const express = require('express');
+import express from 'express';
+import healthController from '../controllers/healthController.js';
+import appKeyMiddleware from '../v2/middlewares/appKeyMiddleware.js';
+import authMiddleware from '../v2/middlewares/authMiddleware.js';
+
 const router = express.Router();
-const healthController = require('../controllers/healthController');
-const appKeyMiddleware = require('../middlewares/appKeyMiddleware');
-const authMiddleware = require('../middlewares/authMiddleware');
 
 /**
  * @swagger
  * /health:
  *   get:
  *     summary: Health check completo de la API (Protegido)
- *     description: Verifica el estado de todos los servicios (API, Base de Datos, WebSocket). Requiere autenticación.
+ *     description: Verifica el estado de todos los servicios (API y Base de Datos). Requiere autenticación.
  *     tags: [Health Check]
  *     security:
  *       - ApiKeyAuth: []
@@ -57,9 +58,6 @@ const authMiddleware = require('../middlewares/authMiddleware');
  *                       type: string
  *                       example: "UP"
  *                     database:
- *                       type: string
- *                       example: "UP"
- *                     websocket:
  *                       type: string
  *                       example: "UP"
  *       401:
@@ -212,4 +210,4 @@ router.get('/database', appKeyMiddleware, authMiddleware, healthController.check
  */
 router.get('/system', appKeyMiddleware, authMiddleware, healthController.getSystemDetails);
 
-module.exports = router;
+export default router;

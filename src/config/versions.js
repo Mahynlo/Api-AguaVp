@@ -10,40 +10,13 @@
  */
 
 const versions = {
-  current: 'v2', // Cambiado a v2 como versión actual
+  current: 'v2',
   available: {
-    v1: {
-      version: '1.0.0',
-      status: 'disabled', // Cambiado de 'stable' a 'disabled'
-      releaseDate: '2025-01-30',
-      description: 'Primera versión estable de la API - TEMPORALMENTE DESACTIVADA',
-      features: [
-        'Gestión de clientes',
-        'Gestión de medidores',
-        'Control de lecturas',
-        'Sistema de facturación',
-        'Gestión de pagos',
-        'Sistema de tarifas',
-        'Rutas de lectura',
-        'Autenticación JWT',
-        'WebSocket support',
-        'Health check endpoints'
-      ],
-      endpoints: {
-        base: '/api/v1',
-        documentation: '/api-docs',
-        health: '/api/health'
-      },
-      breaking_changes: [],
-      deprecated: true, // Marcada como deprecated
-      support_until: null,
-      note: "TEMPORALMENTE DESACTIVADA - Usar v2"
-    },
     v2: {
       version: '2.0.0',
       status: 'stable',
       releaseDate: '2025-08-16',
-      description: 'Segunda versión con SSE y migración a Turso',
+      description: 'API con SQLite local (better-sqlite3 + Drizzle), SSE y sincronización con Turso Cloud',
       features: [
         'Gestión de clientes',
         'Gestión de medidores',
@@ -54,7 +27,7 @@ const versions = {
         'Rutas de lectura',
         'Autenticación JWT',
         'Server-Sent Events (SSE)',
-        'Turso Database (@libsql/client)',
+        'Sincronización con Turso Cloud',
         'Health check endpoints',
         'Real-time notifications via SSE'
       ],
@@ -64,28 +37,14 @@ const versions = {
         health: '/api/health',
         events: '/api/v2/events'
       },
-      breaking_changes: ['WebSockets reemplazados por SSE', 'Migración de SQLite3 a Turso'],
+      breaking_changes: ['WebSockets reemplazados por SSE'],
       deprecated: false,
       support_until: null
     }
   },
-  deprecated: [],
-  planned: {
-    v3: {
-      version: '3.0.0',
-      status: 'planned',
-      expected_release: '2025-12-01',
-      description: 'Tercera versión con mejoras de performance y nuevas funcionalidades',
-      planned_features: [
-        'GraphQL support',
-        'Real-time notifications',
-        'Advanced reporting',
-        'Multi-tenant support',
-        'Enhanced security',
-        'Caching layer'
-      ]
-    }
-  }
+  // v1 retirada: su código se conserva en el tag git "v1-final"
+  deprecated: ['v1'],
+  planned: {}
 };
 
 /**
