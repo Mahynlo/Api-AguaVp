@@ -33,14 +33,10 @@
     "dev": "nodemon src/index.js",
     "start": "node src/index.js",
     "test:password": "node src/utils/testPasswordValidator.js",
-    "migrate": "node src/database/migrations/runMigration.js",
+    "migrate": "node scripts/migrate.js",
     "db:pull": "drizzle-kit pull",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
-    "db:push": "drizzle-kit push",
-    "db:studio": "drizzle-kit studio",
-    "db:triggers": "node src/database/migrations/applyTriggers.js",
-    "build": "esbuild src/index.js --bundle --platform=node --outfile=dist/server.cjs --format=cjs"
+    "db:studio": "drizzle-kit studio"
   },
   "keywords": [],
   "author": "Mahinalo Softwere Solutions",
@@ -66,7 +62,6 @@
   },
   "devDependencies": {
     "drizzle-kit": "^0.31.8",
-    "esbuild": "^0.27.2",
     "jest": "^30.0.5",
     "nodemon": "^3.1.10",
     "supertest": "^7.1.4"
