@@ -15,11 +15,11 @@ import sqlite3 from 'sqlite3';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-// Para obtener __dirname en ES Modules
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// Para obtener __dirname en ES Modules (DESACTIVADO PARA BUILD CJS)
+// const __filename = fileURLToPath(import.meta.url);
+// const __dirname = path.dirname(__filename);
 
-const dbPath = path.join(__dirname, 'app.db');
+const dbPath = path.join(process.cwd(), 'src/database/app.db');
 
 const db = new (sqlite3.verbose()).Database(dbPath, (err) => {
     if (err) {
@@ -39,7 +39,9 @@ CREATE TABLE IF NOT EXISTS clientes (
     telefono TEXT NOT NULL,
     ciudad TEXT NOT NULL,
     correo TEXT,
-    estado_cliente TEXT NOT NULL DEFAULT 'Activo',
+    estado_cliente TEXT NOT NULL CHECK (
+        estado_cliente IN ('Activo','Inactivo','Suspendido','Eliminado')
+    ) DEFAULT 'Activo',
     tarifa_id INTEGER REFERENCES tarifas(id), -- 🔹 Tarifa asignada
     modificado_por INTEGER REFERENCES usuarios(id),
     fecha_creacion DATETIME DEFAULT (datetime('now')),
@@ -56,7 +58,9 @@ CREATE TABLE IF NOT EXISTS medidores (
     fecha_instalacion DATE,
     latitud NUMERIC,
     longitud NUMERIC,
-    estado_medidor TEXT NOT NULL CHECK (estado_medidor IN ('Activo', 'Inactivo', 'Retirado','No instalado')),
+    estado_medidor TEXT NOT NULL CHECK (
+        estado_medidor IN ('Activo', 'Inactivo', 'Retirado', 'No instalado')
+    ) DEFAULT 'Activo',
     fecha_creacion DATETIME DEFAULT (datetime('now'))
 );
 
@@ -75,7 +79,7 @@ CREATE TABLE IF NOT EXISTS cliente_medidor_historial (
 CREATE TRIGGER IF NOT EXISTS cerrar_historial_asignacion_anterior
 BEFORE UPDATE OF cliente_id ON medidores
 FOR EACH ROW
-WHEN OLD.cliente_id IS NOT NULL AND NEW.cliente_id != OLD.cliente_id
+WHEN OLD.cliente_id IS NOT NULL AND (NEW.cliente_id IS NULL OR NEW.cliente_id != OLD.cliente_id)
 BEGIN
   UPDATE cliente_medidor_historial
   SET fecha_fin = date('now')
@@ -86,7 +90,7 @@ END;
 CREATE TRIGGER IF NOT EXISTS registrar_historial_asignacion
 AFTER UPDATE OF cliente_id ON medidores
 FOR EACH ROW
-WHEN NEW.cliente_id IS NOT NULL AND NEW.cliente_id != OLD.cliente_id
+WHEN NEW.cliente_id IS NOT NULL AND (OLD.cliente_id IS NULL OR NEW.cliente_id != OLD.cliente_id)
 BEGIN
   INSERT INTO cliente_medidor_historial (cliente_id, medidor_id, fecha_inicio)
   VALUES (NEW.cliente_id, NEW.id, date('now'));
@@ -101,6 +105,9 @@ CREATE TABLE IF NOT EXISTS usuarios (
     contraseña TEXT NOT NULL,
     username TEXT NOT NULL UNIQUE,
     rol TEXT NOT NULL CHECK (rol IN ('superadmin', 'administrador', 'operador')),
+    estado_usuario TEXT NOT NULL CHECK (
+        estado_usuario IN ('Activo', 'Inactivo', 'Bloqueado')
+    ) DEFAULT 'Activo',
     fecha_creacion DATETIME DEFAULT (datetime('now'))
 );
 
@@ -112,6 +119,9 @@ CREATE TABLE IF NOT EXISTS tarifas (
     descripcion TEXT NOT NULL,
     fecha_inicio DATE NOT NULL,
     fecha_fin DATE CHECK (fecha_fin IS NULL OR fecha_fin > fecha_inicio),
+    estado_tarifa TEXT NOT NULL CHECK (
+        estado_tarifa IN ('Activo', 'Inactivo')
+    ) DEFAULT 'Activo',
     modificado_por INTEGER REFERENCES usuarios(id),
     fecha_creacion DATETIME DEFAULT (datetime('now'))
     
@@ -162,7 +172,7 @@ CREATE TABLE IF NOT EXISTS facturas (
     fecha_vencimiento DATE NOT NULL,
     total NUMERIC NOT NULL,
     saldo_pendiente NUMERIC NOT NULL DEFAULT 0,
-    estado TEXT NOT NULL CHECK (estado IN ('Pagado', 'Pendiente', 'Vencida')),
+    estado TEXT NOT NULL CHECK (estado IN ('Pagado', 'Pendiente', 'Parcial', 'Vencida', 'En Convenio')),
     modificado_por INTEGER REFERENCES usuarios(id),
     fecha_creacion DATETIME DEFAULT (datetime('now'))
 );

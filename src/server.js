@@ -40,7 +40,9 @@ import routes from './routes/index.js';
 import swaggerUi from 'swagger-ui-express';
 import swaggerJsdoc from 'swagger-jsdoc';
 
-// Configuración de Swagger
+
+import { initDeudoresJob, setNotificationManager as setDeudoresNotificationManager } from './jobs/procesarDeudores.js';
+import { initConveniosJob, setNotificationManager as setConveniosNotificationManager } from './jobs/verificarConvenios.js';
 const swaggerOptions = {
   definition: {
     openapi: '3.0.0',
@@ -91,10 +93,15 @@ const io = new Server(server, {
   }
 });
 
+// Configurar Express para confiar en proxies (Render, Nginx, etc.)
+// Esto permite que Express use correctamente los headers X-Forwarded-*
+// Usar número específico de proxies en lugar de 'true' para mayor seguridad
+app.set('trust proxy', 1); // Confiar en 1 nivel de proxy (e.g., Nginx, Render)
+
 // Middlewares
 app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Inicializar Socket Manager mejorado (v1) - DESACTIVADO TEMPORALMENTE
 // const socketManager = new SocketManager();
@@ -107,7 +114,16 @@ const sseNotificationManager = new SSENotificationManager(sseManager);
 app.set('io', io);
 // app.set('socketManager', socketManager); // DESACTIVADO TEMPORALMENTE
 app.set('sseManager', sseManager); // Activo para v2
+
 app.set('notificationManager', sseNotificationManager); // Activo para v2
+
+// Inicializar Cron Jobs
+setDeudoresNotificationManager(sseNotificationManager);
+initDeudoresJob();
+
+setConveniosNotificationManager(sseNotificationManager);
+initConveniosJob();
+console.log('[Cron] Job de Convenios activado — verificación periódica de parcialidades');
 
 // Rutas
 app.use('/api', routes);
@@ -143,5 +159,6 @@ console.log('   - WebSockets (v1): ❌ DESACTIVADO TEMPORALMENTE');
 console.log('   - SSE (v2): ✅ ACTIVO');
 console.log('   - API v1: ❌ DESACTIVADA TEMPORALMENTE');
 console.log('   - API v2: ✅ ACTIVA');
+console.log('   - Cron Deudores: ✅ ACTIVO (Diario 3:00 AM)');
 
 export default server;

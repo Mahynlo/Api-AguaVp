@@ -41,6 +41,12 @@ import facturasRoutes from './routes/facturas.js';
 import pagosRoutes from './routes/pagos.js';
 import rutasRoutes from './routes/rutas.js';
 import eventsRoutes from './routes/events.js'; // Nueva ruta para SSE
+import dashboardRoutes from './routes/dashboard.js'; // Nueva ruta para Dashboard
+import reportsRoutes from './routes/reports.js'; // Nueva ruta para Reportes
+import deudoresRoutes from './routes/deudores.js'; // Nueva ruta para Deudores
+import oauthRoutes from './routes/oauthRoutes.js'; // Rutas OAuth 2.0
+import usersRoutes from './routes/users.js'; // Nueva ruta Gestión Usuarios
+import syncRoutes from './routes/sync.js'; // Sincronización Turso Cloud
 
 const router = express.Router();
 
@@ -48,13 +54,15 @@ const router = express.Router();
 router.get('/', (req, res) => {
   try {
     const versionInfo = getVersionInfo('v2');
-    
-    res.json({ 
+
+    res.json({
       version: 'v2',
       message: 'API de Agua Potable - Versión 2.0 🚰 (SSE + Turso)',
       info: versionInfo,
       endpoints: {
+        oauth: '/api/v2/oauth', // Nuevo endpoint OAuth
         auth: '/api/v2/auth',
+        users: '/api/v2/users', // Nuevo endpoint Gestión Usuarios
         clientes: '/api/v2/clientes',
         medidores: '/api/v2/medidores',
         lecturas: '/api/v2/lecturas',
@@ -63,7 +71,10 @@ router.get('/', (req, res) => {
         tarifas: '/api/v2/tarifas',
         rutas: '/api/v2/rutas',
         app: '/api/v2/app',
-        events: '/api/v2/events' // Nuevo endpoint SSE
+        events: '/api/v2/events', // Nuevo endpoint SSE
+        dashboard: '/api/v2/dashboard', // Nuevo endpoint Dashboard
+        reports: '/api/v2/reports', // Nuevo endpoint Reportes
+        deudores: '/api/v2/deudores' // Nuevo endpoint Deudores
       },
       documentation: '/api-docs',
       health: '/api/health',
@@ -75,7 +86,7 @@ router.get('/', (req, res) => {
       timestamp: new Date().toISOString()
     });
   } catch (error) {
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Error al obtener información de la versión',
       message: error.message,
       version: 'v2'
@@ -86,6 +97,7 @@ router.get('/', (req, res) => {
 // Rutas agrupadas de la v2
 router.use('/app', appRoutes);           // Rutas específicas de la app
 router.use('/auth', authRoutes);         // Autenticación
+router.use('/users', usersRoutes);       // Gestión de Usuarios
 router.use('/clientes', clientesRoutes); // Clientes
 router.use('/medidores', medidoresRoutes); // Medidores
 router.use('/tarifas', tarifasRoutes);   // Tarifas
@@ -94,6 +106,11 @@ router.use('/facturas', facturasRoutes); // Facturas
 router.use('/pagos', pagosRoutes);       // Pagos
 router.use('/rutas', rutasRoutes);       // Rutas de medidores
 router.use('/events', eventsRoutes);     // Nuevo: Server-Sent Events
+router.use('/dashboard', dashboardRoutes); // Nuevo: Dashboard
+router.use('/reports', reportsRoutes);     // Nuevo: Reportes
+router.use('/deudores', deudoresRoutes);     // Nuevo: Deudores
+router.use('/oauth', oauthRoutes);           // Nuevo: OAuth 2.0
+router.use('/sync', syncRoutes);             // Sincronización Turso Cloud
 
 // Exporta el router de la v2
 export default router;

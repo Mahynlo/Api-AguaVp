@@ -13,8 +13,11 @@
  * - getSystemInfo: Información del sistema
  */
 
-const db = require('../database/db');
-const os = require('os');
+//const db = require('../database/db');
+//const os = require('os');
+
+import db from "../database/db"
+import os from "os"
 
 /**
  * Health Check completo de la API

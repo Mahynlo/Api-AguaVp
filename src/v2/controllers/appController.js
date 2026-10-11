@@ -14,7 +14,7 @@
 
 import jwt from "jsonwebtoken";
 import { v4 as uuidv4 } from "uuid";
-import dbTurso from "../../database/db-turso.js";
+import dbTurso from "../../database/db-sqlite.js";
 
 const SECRET_APP_KEY = process.env.SECRET_APP_KEY; // secret para firmar el token
 const APPKEY_INICIAL = process.env.APPKEY_INICIAL; // token inicial para registrar la app
@@ -36,24 +36,36 @@ const appController = {
             }
 
             const nuevoAppId = uuidv4();
-            const nuevoToken = jwt.sign({ app_id: nuevoAppId }, SECRET_APP_KEY, { expiresIn: "365d" });
+            const nuevoToken = jwt.sign({ app_id: nuevoAppId }, SECRET_APP_KEY, { expiresIn: "90d" });
 
             console.log("Nuevo App ID:", nuevoAppId);
-            console.log("Nuevo Token:", nuevoToken);
+            console.log("Token generado exitosamente - Expira en 90 días");
             console.log("IP de registro:", req.ip);
             console.log("Body recibido:", req.body);
             console.log("Nombre de la app:", req.body?.nombre || "Sin nombre");
 
             const ip = req.headers["x-forwarded-for"] || req.ip; // Obtener la IP del cliente si está detrás de un proxy
 
+            // OAuth fields
+            const { nombre, scopes, redirect_uris, client_secret } = req.body || {};
+            const defaultScopes = "read:reports"; // Default scope if none provided
+
             const query = `
-                INSERT INTO apps (app_id, token, nombre, ip_registro)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO apps (app_id, token, nombre, ip_registro, scopes, client_secret, redirect_uris)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             `;
 
             await dbTurso.execute({
                 sql: query,
-                args: [nuevoAppId, nuevoToken, req.body?.nombre || null, ip]
+                args: [
+                    nuevoAppId,
+                    nuevoToken,
+                    nombre || null,
+                    ip,
+                    scopes || defaultScopes,
+                    client_secret || null,
+                    redirect_uris || null
+                ]
             });
 
             return res.status(201).json({
@@ -86,9 +98,9 @@ const appController = {
                     return res.status(403).json({ error: "Token inválido o expirado" });
                 }
 
-                const nuevoToken = jwt.sign({ app_id: decoded.app_id }, SECRET_APP_KEY, { expiresIn: "365d" });
+                const nuevoToken = jwt.sign({ app_id: decoded.app_id }, SECRET_APP_KEY, { expiresIn: "90d" });
 
-                console.log("Nuevo Token:", nuevoToken);
+                console.log("Token renovado exitosamente - Expira en 90 días");
 
                 const query = `
                     UPDATE apps
@@ -130,7 +142,7 @@ const appController = {
                 realtime: "Server-Sent Events (SSE)",
                 features: [
                     "Gestión de clientes",
-                    "Gestión de medidores", 
+                    "Gestión de medidores",
                     "Control de lecturas",
                     "Sistema de facturación",
                     "Gestión de pagos",
@@ -160,7 +172,7 @@ const appController = {
             // Verificar conexión a base de datos
             let dbStatus = 'OK';
             let dbError = null;
-            
+
             try {
                 await dbTurso.execute({ sql: 'SELECT 1 as test' });
             } catch (error) {
@@ -191,9 +203,9 @@ const appController = {
             });
         } catch (error) {
             console.error('Error verificando estado v2:', error);
-            res.status(500).json({ 
+            res.status(500).json({
                 status: 'ERROR',
-                error: "Error al verificar estado de la aplicación" 
+                error: "Error al verificar estado de la aplicación"
             });
         }
     }

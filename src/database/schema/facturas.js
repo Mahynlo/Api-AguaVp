@@ -1,0 +1,39 @@
+// src/database/schema/facturas.js
+import { sqliteTable, integer, text, real, numeric } from 'drizzle-orm/sqlite-core';
+import { sql } from 'drizzle-orm';
+import { clientes } from './clientes.js';
+import { lecturas } from './lecturas.js';
+import { tarifas } from './tarifas.js';
+import { usuarios } from './usuarios.js';
+
+export const facturas = sqliteTable('facturas', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  cliente_id: integer('cliente_id').references(() => clientes.id),
+  lectura_id: integer('lectura_id').references(() => lecturas.id),
+  tarifa_id: integer('tarifa_id').references(() => tarifas.id),
+  convenio_id: integer('convenio_id'), // Vincula factura con convenio de pago
+  fecha_emision: text('fecha_emision').notNull(),
+  fecha_vencimiento: text('fecha_vencimiento').notNull(),
+  total: numeric('total').notNull(),
+  saldo_pendiente: numeric('saldo_pendiente').notNull().default(0),
+  estado: text('estado', { enum: ['Pagado', 'Pendiente', 'Parcial', 'Vencida', 'En Convenio'] }).notNull(),
+  modificado_por: integer('modificado_por').references(() => usuarios.id),
+  cargo_saldo_anterior: numeric('cargo_saldo_anterior').notNull().default(0),
+  fecha_creacion: text('fecha_creacion').default(sql`(datetime('now'))`),
+});
+
+export const pagos = sqliteTable('pagos', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  factura_id: integer('factura_id').references(() => facturas.id),
+  parcialidad_id: integer('parcialidad_id'), // Vincula pago con parcialidad de convenio
+  fecha_pago: text('fecha_pago').notNull(),
+  monto: numeric('monto').notNull(),
+  cantidad_entregada: numeric('cantidad_entregada'),
+  cambio: numeric('cambio'),
+  metodo_pago: text('metodo_pago', {
+    enum: ['Efectivo', 'Transferencia', 'Tarjeta', 'Cheque']
+  }).notNull(),
+  comentario: text('comentario'),
+  modificado_por: integer('modificado_por').references(() => usuarios.id),
+  fecha_creacion: text('fecha_creacion').default(sql`(datetime('now'))`),
+});

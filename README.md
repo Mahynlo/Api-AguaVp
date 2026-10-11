@@ -87,7 +87,7 @@ api-AguaVP/
 ### Características
 - Arquitectura modular avanzada (MVC + SSE)
 - Server-Sent Events (SSE) para notificaciones en tiempo real
-- Base de datos distribuida Turso DB (@libsql/client)
+- Base de datos operativa: **SQLite local** (better-sqlite3 + Drizzle). Turso Cloud (@libsql/client) se usa solo como **copia de respaldo de un solo sentido** — ver [docs/SINCRONIZACION_TURSO_CLOUD.md](docs/SINCRONIZACION_TURSO_CLOUD.md)
 - Seguridad multicapa: JWT + AppKey, roles y middlewares
 - Compatibilidad y migración progresiva desde v1
 

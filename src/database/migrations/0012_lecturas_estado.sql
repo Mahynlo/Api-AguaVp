@@ -1,0 +1,1 @@
+ALTER TABLE `lecturas` ADD `estado` text DEFAULT 'pendiente';
