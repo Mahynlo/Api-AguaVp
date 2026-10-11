@@ -1,4 +1,6 @@
 import db, { sqlite } from '../../database/db-sqlite.js';
+import { nowDate } from '../../utils/timezone.js';
+import { condicionesClientes, COLUMNAS_ADEUDO_CLIENTE } from './filtrosListado.js';
 
 function serviceError(message, status) {
     const err = new Error(message);
@@ -7,7 +9,7 @@ function serviceError(message, status) {
 }
 
 function mapCliente(c) {
-    return { id: Number(c.id), numero_predio: c.numero_predio || null, nombre: c.nombre, direccion: c.direccion, telefono: c.telefono, ciudad: c.ciudad, correo: c.correo, estado_cliente: c.estado_cliente, tarifa_id: c.tarifa_id ? Number(c.tarifa_id) : null, tarifa_nombre: c.tarifa_nombre || null, modificado_por: c.modificado_por ? Number(c.modificado_por) : null, fecha_creacion: c.fecha_creacion, fecha_eliminacion: c.fecha_eliminacion || null, razon_eliminacion: c.razon_eliminacion || null };
+    return { id: Number(c.id), numero_predio: c.numero_predio || null, nombre: c.nombre, direccion: c.direccion, telefono: c.telefono, ciudad: c.ciudad, correo: c.correo, estado_cliente: c.estado_cliente, tarifa_id: c.tarifa_id ? Number(c.tarifa_id) : null, tarifa_nombre: c.tarifa_nombre || null, adeudo_total: c.adeudo_total != null ? Number(c.adeudo_total) : 0, facturas_vencidas: c.facturas_vencidas != null ? Number(c.facturas_vencidas) : 0, modificado_por: c.modificado_por ? Number(c.modificado_por) : null, fecha_creacion: c.fecha_creacion, fecha_eliminacion: c.fecha_eliminacion || null, razon_eliminacion: c.razon_eliminacion || null };
 }
 
 async function insertarHistorial(tabla, operacion, registroId, modificadoPor, cambios) {
@@ -58,46 +60,36 @@ export async function registrarCliente(datos, usuarioId) {
 
 const ORDER_CLAUSES = {
     numero_predio: `CASE WHEN c.numero_predio IS NULL OR c.numero_predio = '' THEN 1 ELSE 0 END, LENGTH(c.numero_predio) ASC, c.numero_predio ASC, c.nombre ASC`,
+    adeudo: `adeudo_total DESC, c.nombre ASC`,
     default: `c.nombre ASC`
 };
 
-export async function obtenerClientes({ page, limit, search, ciudad, estado, estado_cliente, numero_predio, orderBy } = {}) {
+export async function obtenerClientes(query = {}) {
+    const { page, limit, search, ciudad, estado, estado_cliente, numero_predio, orderBy, tarifa_id, medidor, ruta_id, pago } = query;
     const estadoFiltro = estado || estado_cliente;
     const incluirEliminados = estadoFiltro === 'All' || estadoFiltro === 'Eliminado';
-    const hayPaginacion = page || limit || search || ciudad || numero_predio;
+    const hayPaginacion = page || limit || search || ciudad || numero_predio || tarifa_id || medidor || ruta_id || pago;
     const orderClause = ORDER_CLAUSES[orderBy] || ORDER_CLAUSES.default;
-    const baseData = `SELECT c.*, t.nombre as tarifa_nombre FROM clientes c LEFT JOIN tarifas t ON c.tarifa_id = t.id`;
+    const hoy = nowDate();
+    // Adeudo total y facturas vencidas de cada cliente (el SELECT usa `hoy` como primer argumento)
+    const baseData = `SELECT c.*, t.nombre as tarifa_nombre, ${COLUMNAS_ADEUDO_CLIENTE} FROM clientes c LEFT JOIN tarifas t ON c.tarifa_id = t.id`;
 
     if (!hayPaginacion) {
         const sqlQuery = `${baseData} ${incluirEliminados ? "" : "WHERE c.estado_cliente != 'Eliminado'"} ORDER BY ${orderClause}`;
-        const result = await db.execute({ sql: sqlQuery });
+        const result = await db.execute({ sql: sqlQuery, args: [hoy] });
         return result.rows.map(mapCliente);
     }
 
     const pageNum = parseInt(page) || 1;
     const limitNum = parseInt(limit) || 50;
     const offset = (pageNum - 1) * limitNum;
-    const conditions = [];
-    const args = [];
-
-    if (search) {
-        const t = `%${search.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()}%`;
-        conditions.push(`(unaccent(c.nombre) LIKE ? OR unaccent(c.telefono) LIKE ? OR unaccent(c.correo) LIKE ? OR unaccent(c.ciudad) LIKE ? OR unaccent(c.numero_predio) LIKE ? OR unaccent(c.direccion) LIKE ?)`);
-        args.push(t, t, t, t, t, t);
-    }
-    if (numero_predio) { conditions.push(`c.numero_predio = ?`); args.push(numero_predio.toString().toUpperCase()); }
-    if (ciudad && ciudad !== 'All') { conditions.push(`c.ciudad = ?`); args.push(ciudad); }
-    if (estadoFiltro && estadoFiltro !== 'All') {
-        conditions.push(`c.estado_cliente = ?`);
-        args.push(estadoFiltro);
-    } else if (!incluirEliminados) {
-        conditions.push(`c.estado_cliente != 'Eliminado'`);
-    }
+    // Filtros (búsqueda, ciudad, estado, tarifa, medidor, ruta, situación de pago): filtrosListado.js
+    const { conditions, args } = condicionesClientes(query, hoy);
 
     const where = conditions.length ? ' WHERE ' + conditions.join(' AND ') : '';
     const [countResult, dataResult] = await Promise.all([
         db.execute({ sql: `SELECT COUNT(*) as total FROM clientes c${where}`, args }),
-        db.execute({ sql: `${baseData}${where} ORDER BY ${orderClause} LIMIT ? OFFSET ?`, args: [...args, limitNum, offset] })
+        db.execute({ sql: `${baseData}${where} ORDER BY ${orderClause} LIMIT ? OFFSET ?`, args: [hoy, ...args, limitNum, offset] })
     ]);
 
     return { data: dataResult.rows.map(mapCliente), pagination: { total: Number(countResult.rows[0].total), page: pageNum, limit: limitNum, totalPages: Math.ceil(Number(countResult.rows[0].total) / limitNum) } };

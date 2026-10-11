@@ -1,4 +1,5 @@
 import db from "../../database/db-sqlite.js";
+import { condicionesMedidores } from './filtrosListado.js';
 
 function serviceError(message, status) {
     const err = new Error(message);
@@ -36,9 +37,11 @@ export async function registrarMedidor(datos, usuarioId) {
 }
 
 export async function obtenerMedidores(query = {}) {
-    const { page, limit, search, estado, ubicacion, cliente_id, cliente_nombre, numero_predio, asignacion, incluirEliminados, ciudad } = query;
+    const { page, limit, search, estado, ubicacion, cliente_id, cliente_nombre, numero_predio, asignacion, incluirEliminados, ciudad,
+        marca, ruta_id, gps, anio_instalacion } = query;
     const incluirEliminadosBool = incluirEliminados === 'true' || incluirEliminados === true;
-    const hayPaginacion = page || limit || search || estado || ubicacion || cliente_id || cliente_nombre || numero_predio || asignacion || ciudad;
+    const hayPaginacion = page || limit || search || estado || ubicacion || cliente_id || cliente_nombre || numero_predio || asignacion || ciudad ||
+        marca || ruta_id || gps || anio_instalacion;
 
     const baseSelect = `SELECT m.*, 
                         COALESCE(c.id, c_hist.id) AS cliente_id,
@@ -74,32 +77,8 @@ export async function obtenerMedidores(query = {}) {
     const limitNum = parseInt(limit) || 60;
     const offset = (pageNum - 1) * limitNum;
 
-    const conditions = [];
-    const args = [];
-
-    if (!incluirEliminadosBool) {
-        conditions.push(`m.fecha_eliminacion IS NULL`);
-    }
-
-    if (search) {
-        const t = `%${search.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()}%`;
-        conditions.push(`(unaccent(m.numero_serie) LIKE ? OR unaccent(m.marca) LIKE ? OR unaccent(m.modelo) LIKE ? OR unaccent(m.ubicacion) LIKE ? OR unaccent(c.nombre) LIKE ? OR unaccent(c.numero_predio) LIKE ?)`);
-        args.push(t, t, t, t, t, t);
-    }
-    if (estado && estado !== 'All') {
-        if (estado === 'Cortado') { conditions.push(`m.estado_servicio = ?`); args.push(estado); }
-        else if (estado === 'Activo') { conditions.push(`(m.estado_medidor = ? AND m.estado_servicio = 'Activo')`); args.push('Activo'); }
-        else { conditions.push(`m.estado_medidor = ?`); args.push(estado); }
-    }
-    if (ubicacion && ubicacion !== 'All') { conditions.push(`m.ubicacion LIKE ?`); args.push(`%${ubicacion}%`); }
-    if (cliente_id && cliente_id !== 'All') { conditions.push(`m.cliente_id = ?`); args.push(cliente_id); }
-    if (cliente_nombre) { conditions.push(`c.nombre LIKE ?`); args.push(`%${cliente_nombre}%`); }
-    if (numero_predio) { conditions.push(`c.numero_predio LIKE ?`); args.push(`%${numero_predio}%`); }
-    if (ciudad && ciudad !== 'All') { conditions.push(`c.ciudad = ?`); args.push(ciudad); }
-    if (asignacion && asignacion !== 'All') {
-        if (asignacion === 'asignados') conditions.push(`m.cliente_id IS NOT NULL`);
-        else if (asignacion === 'sin_asignar' || asignacion === 'no_asignados') conditions.push(`m.cliente_id IS NULL`);
-    }
+    // Filtros (búsqueda, estado, ubicación, marca, ruta, GPS, año, asignación…): filtrosListado.js
+    const { conditions, args } = condicionesMedidores(query);
 
     const where = conditions.length > 0 ? ' WHERE ' + conditions.join(' AND ') : '';
 
