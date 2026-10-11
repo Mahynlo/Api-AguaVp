@@ -396,6 +396,7 @@ export async function obtenerLecturasPorCliente(cliente_id, periodo) {
     });
     if (!medidoresResult.rows.length) throw Object.assign(serviceError('Cliente no tiene medidores asignados', 404), { cliente: { id: Number(cliente.id), nombre: cliente.nombre } });
 
+    const medidores = medidoresResult.rows.map(m => Number(m.id));
     const placeholders = medidores.map(() => '?').join(',');
     const args = [...medidores, cliente_id, cliente_id, cliente_id];
     let sql = `SELECT 

@@ -19,6 +19,9 @@ jobs:
       - name: Instalar dependencias
         run: npm install --no-fund --no-audit
 
+      - name: Lint
+        run: npm run lint
+
       - name: Pruebas
         run: npm test
 
