@@ -1,11 +1,6 @@
 import db from "../../database/db-sqlite.js";
 import bcrypt from "bcryptjs";
-
-function serviceError(message, status) {
-    const err = new Error(message);
-    err.status = status;
-    return err;
-}
+import { crearError } from "../../utils/errores.js";
 
 const SELECT_CAMPOS = `id, nombre, correo, username, rol, estado_usuario, fecha_creacion, ultimo_acceso, fecha_eliminacion, eliminado_por, razon_eliminacion`;
 
@@ -36,13 +31,19 @@ export async function obtenerUsuarios({ estado, rol, busqueda, actorRole } = {})
 
 export async function obtenerUsuarioPorId(id) {
     const result = await db.execute({ sql: `SELECT ${SELECT_CAMPOS} FROM usuarios WHERE id = ?`, args: [id] });
-    if (result.rows.length === 0) throw serviceError("Usuario no encontrado", 404);
+    if (result.rows.length === 0) throw crearError("Usuario no encontrado", 404);
     return { ...result.rows[0], id: Number(result.rows[0].id) };
+}
+
+/** Devuelve { id, rol } del usuario o null si no existe. */
+export async function obtenerRolUsuario(id) {
+    const result = await db.execute({ sql: 'SELECT id, rol FROM usuarios WHERE id = ?', args: [id] });
+    return result.rows[0] ?? null;
 }
 
 export async function crearUsuario({ correo, nombre, contrasena, username, rol }) {
     const check = await db.execute({ sql: `SELECT id FROM usuarios WHERE correo = ? OR username = ?`, args: [correo, username] });
-    if (check.rows.length > 0) throw serviceError("Usuario ya existe", 409);
+    if (check.rows.length > 0) throw crearError("Usuario ya existe", 409);
 
     const hashedPassword = await bcrypt.hash(contrasena, 10);
     await db.execute({
@@ -53,7 +54,7 @@ export async function crearUsuario({ correo, nombre, contrasena, username, rol }
 
 export async function actualizarUsuario(id, { nombre, correo, rol, contrasena }) {
     const check = await db.execute({ sql: `SELECT id FROM usuarios WHERE id = ?`, args: [id] });
-    if (check.rows.length === 0) throw serviceError("Usuario no encontrado", 404);
+    if (check.rows.length === 0) throw crearError("Usuario no encontrado", 404);
 
     const updates = [];
     const args = [];
@@ -66,14 +67,14 @@ export async function actualizarUsuario(id, { nombre, correo, rol, contrasena })
         args.push(await bcrypt.hash(contrasena, 10));
     }
 
-    if (updates.length === 0) throw serviceError("Nada que actualizar", 400);
+    if (updates.length === 0) throw crearError("Nada que actualizar", 400);
 
     args.push(id);
     await db.execute({ sql: `UPDATE usuarios SET ${updates.join(", ")} WHERE id = ?`, args });
 }
 
 export async function eliminarUsuario(id, eliminadoPor, razon) {
-    if (Number(id) === Number(eliminadoPor)) throw serviceError("No puedes eliminarte a ti mismo", 400);
+    if (Number(id) === Number(eliminadoPor)) throw crearError("No puedes eliminarte a ti mismo", 400);
 
     await db.execute({
         sql: `UPDATE usuarios SET estado_usuario = 'Eliminado', fecha_eliminacion = datetime('now'), eliminado_por = ?, razon_eliminacion = ? WHERE id = ?`,
@@ -106,7 +107,7 @@ export async function purgarUsuario(id) {
         await db.execute({ sql: `DELETE FROM usuarios WHERE id = ?`, args: [id] });
     } catch (error) {
         if (error.message && (error.message.includes('FOREIGN KEY') || error.code === 'SQLITE_CONSTRAINT_FOREIGNKEY')) {
-            throw serviceError("No se puede eliminar definitivamente este usuario porque tiene historial o registros de auditoría asociados en el sistema (por ejemplo, facturas creadas, lecturas registradas, etc.). Se recomienda mantenerlo desactivado en la papelera.", 409);
+            throw crearError("No se puede eliminar definitivamente este usuario porque tiene historial o registros de auditoría asociados en el sistema (por ejemplo, facturas creadas, lecturas registradas, etc.). Se recomienda mantenerlo desactivado en la papelera.", 409);
         }
         throw error;
     }
