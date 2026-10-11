@@ -40,8 +40,10 @@ npm run dev                 # http://localhost:3000  ·  Swagger en /api-docs
 |---|---|
 | `npm run dev` / `npm start` | Servidor standalone (con / sin nodemon) |
 | `npm run migrate` | Aplica migraciones pendientes a la base local |
-| `npm test` | Pruebas `node:test` (unitarias y de triggers/sincronización) |
-| `npm run test:v2` · `npm run test:sync` | Subconjuntos de pruebas |
+| `npm test` | Pruebas `node:test`: unitarias, triggers/sincronización y HTTP contra la app real (`test/http/`) |
+| `npm run test:http` · `npm run test:v2` · `npm run test:sync` | Subconjuntos de pruebas |
+| `npm run lint` | ESLint (errores reales, sin imponer estilo) |
+| `node scripts/dev/comparar-versiones/index.mjs` | Compara respuestas y tablas entre HEAD y el código actual |
 | `npm run test:jest` | Suites Jest antiguas (varias desactualizadas) |
 | `npm run db:generate` | Genera una migración desde `src/database/schema` |
 | `npm run db:studio` | Drizzle Studio sobre la base local |
@@ -60,10 +62,10 @@ api-AguaVP/
 │   ├── api-module.js   # AguaVPServer (entrada del paquete)
 │   ├── server.js       # App Express
 │   ├── database/       # Conexión, migrador, esquema y migraciones
-│   ├── v2/             # Rutas, validadores, middlewares, controladores, servicios, SSE
+│   ├── v2/             # Rutas, documentación Swagger (openapi/), validadores, middlewares, controladores, servicios, SSE
 │   ├── routes/ · controllers/   # Router raíz y health check
 │   ├── jobs/ · utils/ · config/
-├── test/               # unit/, integration/, manual/
+├── test/               # unit/, http/, helpers/ (node:test) · integration/ (Jest antiguo) · manual/
 ├── scripts/            # migrate.js y utilidades de desarrollo (dev/)
 └── docs/               # Documentación
 ```

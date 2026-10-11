@@ -1,7 +1,7 @@
 # Documentación
 
 ## Empezar aquí
-- [arquitectura.md](arquitectura.md): estructura del código, arranque embebido en Electron, rutas, seguridad, SSE y jobs.
+- [arquitectura.md](arquitectura.md): estructura del código, estructura estándar de un módulo, cómo verificar que un cambio no altera el comportamiento, arranque embebido en Electron, rutas, seguridad, SSE y jobs.
 - [base-de-datos.md](base-de-datos.md): conexión, cómo funcionan las migraciones y cómo crear una nueva.
 - [SINCRONIZACION_TURSO_CLOUD.md](SINCRONIZACION_TURSO_CLOUD.md): especificación de la copia espejo en Turso Cloud.
 

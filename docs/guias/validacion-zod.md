@@ -294,8 +294,8 @@ async function crearCliente(req, res) {
 ## 📚 Recursos
 
 - [Documentación Zod](https://zod.dev/)
-- [Validación de Contraseñas](./passwordValidator.js)
-- [Middlewares Auth](../middlewares/)
+- [Validación de Contraseñas](../../src/utils/passwordValidator.js)
+- [Middlewares Auth](../../src/v2/middlewares/)
 
 ---
 
@@ -369,7 +369,7 @@ describe('Cliente Validator', () => {
 ## 📞 Soporte
 
 Para dudas o problemas con validaciones:
-- Revisar [validationMiddleware.js](./validationMiddleware.js)
+- Revisar [validationMiddleware.js](../../src/v2/validators/validationMiddleware.js)
 - Consultar ejemplos en cada validador
 - Ver logs de errores en desarrollo
 
