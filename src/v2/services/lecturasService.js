@@ -332,7 +332,7 @@ export async function generarFacturasParaLecturasSinFactura({ periodo, ruta_id, 
         } catch (error) {
             console.error(`Error procesando lectura ${lectura.lectura_id}:`, error);
             resultados.facturas_fallidas++;
-            resultados.detalles.push({ lectura_id: Number(lectura.lectura_id), cliente_nombre: lectura.cliente_nombre, error: 'Error interno al procesar', estado: 'fallida' });
+            resultados.detalles.push({ lectura_id: Number(lectura.lectura_id), cliente_nombre: lectura.cliente_nombre, error: error.message || 'Error interno al procesar', estado: 'fallida' });
         }
     }
 

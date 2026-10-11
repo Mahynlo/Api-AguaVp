@@ -1,5 +1,6 @@
-import db from '../../database/db-sqlite.js';
+import db, { sqlite } from '../../database/db-sqlite.js';
 import { nowDate } from '../../utils/timezone.js';
+import { agregarRangosTarifa, reemplazarRangosTarifa } from './tarifasRangos.js';
 
 function serviceError(message, status) {
     const err = new Error(message);
@@ -9,34 +10,6 @@ function serviceError(message, status) {
 
 function mapRango(r) {
     return { id: Number(r.id), tarifa_id: Number(r.tarifa_id ?? 0), consumo_min: Number(r.consumo_min), consumo_max: r.consumo_max ? Number(r.consumo_max) : null, precio_por_m3: Number(r.precio_por_m3) };
-}
-
-function validarRangos(rangos) {
-    for (const r of rangos) {
-        if (r.consumo_min == null || r.precio_por_m3 == null || r.consumo_min < 0 || r.precio_por_m3 < 0 || (r.consumo_max != null && r.consumo_max < 0)) {
-            return 'Los valores de consumo y precio no pueden ser negativos o nulos (error-BK)';
-        }
-        if (r.consumo_max != null && r.consumo_min >= r.consumo_max) {
-            return `El consumo mínimo (${r.consumo_min}) debe ser menor que el consumo máximo (${r.consumo_max}) (error-BK)`;
-        }
-    }
-    const ordenados = [...rangos].sort((a, b) => a.consumo_min - b.consumo_min);
-    const claves = new Set();
-    for (let i = 0; i < ordenados.length; i++) {
-        const clave = `${ordenados[i].consumo_min}-${ordenados[i].consumo_max}`;
-        if (claves.has(clave)) return `Ya existe un rango duplicado en la solicitud: [${clave}] (error-BK)`;
-        claves.add(clave);
-        for (let j = 0; j < ordenados.length; j++) {
-            if (i !== j && ordenados[i].consumo_min === ordenados[j].consumo_max) {
-                return `El consumo mínimo (${ordenados[i].consumo_min}) no puede ser igual al consumo máximo (${ordenados[j].consumo_max}) de otro rango (error-BK)`;
-            }
-        }
-        const sig = ordenados[i + 1];
-        if (sig && ordenados[i].consumo_max != null && ordenados[i].consumo_max + 1 < sig.consumo_min) {
-            return `Hay un hueco entre los rangos [${ordenados[i].consumo_min}-${ordenados[i].consumo_max}] y [${sig.consumo_min}-${sig.consumo_max}] (error-BK)`;
-        }
-    }
-    return null;
 }
 
 export async function registrarTarifa({ nombre, descripcion, fecha_inicio, fecha_fin }, usuarioId) {
@@ -49,15 +22,8 @@ export async function registrarTarifa({ nombre, descripcion, fecha_inicio, fecha
 }
 
 export async function registrarRangosTarifa(tarifa_id, rangos) {
-    const error = validarRangos(rangos);
-    if (error) throw serviceError(error, 400);
-
-    const exists = await db.execute({ sql: `SELECT id FROM tarifas WHERE id = ?`, args: [tarifa_id] });
-    if (!exists.rows.length) throw serviceError('Tarifa no encontrada', 404);
-
-    for (const { consumo_min, consumo_max, precio_por_m3 } of rangos) {
-        await db.execute({ sql: `INSERT INTO rangos_tarifas (tarifa_id, consumo_min, consumo_max, precio_por_m3) VALUES (?, ?, ?, ?)`, args: [tarifa_id, consumo_min, consumo_max ?? null, precio_por_m3] });
-    }
+    // Valida los nuevos junto con los que ya tiene la tarifa y guarda todo o nada (tarifasRangos.js)
+    return agregarRangosTarifa(sqlite, Number(tarifa_id), rangos);
 }
 
 export async function obtenerTodasLasTarifas({ page, limit, search } = {}) {
@@ -106,28 +72,8 @@ export async function modificarTarifa(id, { nombre, descripcion, fecha_inicio, f
 }
 
 export async function modificarRangosTarifa(tarifa_id, rangos) {
-    for (const r of rangos) {
-        if (r.consumo_min < 0 || (r.consumo_max != null && r.consumo_max < 0) || r.precio_por_m3 < 0) throw serviceError('Los valores no pueden ser negativos (error-BK)', 400);
-        if (r.consumo_max != null && r.consumo_min >= r.consumo_max) throw serviceError('El consumo mínimo debe ser menor que el máximo (error-BK)', 400);
-    }
-    for (let i = 0; i < rangos.length; i++) {
-        for (let j = i + 1; j < rangos.length; j++) {
-            const a = rangos[i], b = rangos[j];
-            if (a.consumo_min === b.consumo_min && a.consumo_max === b.consumo_max) throw serviceError(`Rango duplicado [${a.consumo_min}-${a.consumo_max}] en el lote (error-BK)`, 400);
-            if (a.consumo_min === b.consumo_max || a.consumo_max === b.consumo_min) throw serviceError(`No se permite que un mínimo sea igual al máximo de otro rango (error-BK)`, 400);
-        }
-    }
-
-    const exists = await db.execute({ sql: `SELECT id FROM tarifas WHERE id = ?`, args: [tarifa_id] });
-    if (!exists.rows.length) throw serviceError('Tarifa no encontrada', 404);
-
-    for (const { id, consumo_min, consumo_max, precio_por_m3 } of rangos) {
-        if (id != null) {
-            await db.execute({ sql: `UPDATE rangos_tarifas SET consumo_min = ?, consumo_max = ?, precio_por_m3 = ? WHERE id = ? AND tarifa_id = ?`, args: [consumo_min, consumo_max ?? null, precio_por_m3, id, tarifa_id] });
-        } else {
-            await db.execute({ sql: `INSERT INTO rangos_tarifas (tarifa_id, consumo_min, consumo_max, precio_por_m3) VALUES (?, ?, ?, ?)`, args: [tarifa_id, consumo_min, consumo_max ?? null, precio_por_m3] });
-        }
-    }
+    // La lista recibida es la escala completa: actualiza, agrega y elimina los rangos quitados (tarifasRangos.js)
+    return reemplazarRangosTarifa(sqlite, Number(tarifa_id), rangos);
 }
 
 export async function obtenerTarifaPorId(id) {

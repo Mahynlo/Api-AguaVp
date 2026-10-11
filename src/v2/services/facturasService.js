@@ -56,7 +56,12 @@ export async function generarFactura({ lectura_id, cliente_id, tarifa_id, consum
     if (!(await db.execute({ sql: `SELECT id FROM lecturas WHERE id = ?`, args: [lectura_id] })).rows.length)
         throw serviceError('La lectura no existe', 404);
 
-    const { total } = await calcularTarifaDesdeDB(consumo_m3, tarifa_id, db);
+    let total;
+    try {
+        ({ total } = await calcularTarifaDesdeDB(consumo_m3, tarifa_id, db));
+    } catch (e) {
+        throw serviceError(e.message, 422);
+    }
     const diasVencimiento = await getDiasVencimiento();
     const fecha_vencimiento = calcularVencimiento(diasVencimiento, fechaEmision);
 

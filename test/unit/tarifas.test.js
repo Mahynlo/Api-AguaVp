@@ -1,6 +1,8 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
+import { calcularTarifa as calcularTarifaReal, validarRangosTarifa } from '../../src/utils/tarifaUtils.js';
+import { agregarRangosTarifa, reemplazarRangosTarifa } from '../../src/v2/services/tarifasRangos.js';
 
 describe('Suite de Verificación: Módulo Integral de Tarifas, Rangos Escalonados y Facturación', () => {
     let db;
@@ -626,6 +628,139 @@ describe('Suite de Verificación: Módulo Integral de Tarifas, Rangos Escalonado
 
             const clientesDespues = db.prepare(`SELECT COUNT(*) as c FROM clientes WHERE tarifa_id = 1`).get().c;
             assert.strictEqual(clientesDespues, 2);
+        });
+    });
+});
+
+// ── Código real (no copias): validación única, cálculo protegido y escritura de rangos ──
+const DOMESTICA = [
+    { consumo_min: 0, consumo_max: 15, precio_por_m3: 100 },
+    { consumo_min: 16, consumo_max: 30, precio_por_m3: 6.5 },
+    { consumo_min: 31, consumo_max: 40, precio_por_m3: 7.5 },
+    { consumo_min: 41, consumo_max: 60, precio_por_m3: 9 },
+    { consumo_min: 61, consumo_max: 80, precio_por_m3: 11 },
+    { consumo_min: 81, consumo_max: 100, precio_por_m3: 13.5 },
+    { consumo_min: 101, consumo_max: 120, precio_por_m3: 15 }
+];
+
+describe('Tarifas — código real: validación, cálculo y edición de rangos', () => {
+    describe('validarRangosTarifa', () => {
+        it('acepta la escala Doméstica real y una con último rango abierto', () => {
+            assert.equal(validarRangosTarifa(DOMESTICA), null);
+            assert.equal(validarRangosTarifa([{ consumo_min: 0, consumo_max: 10, precio_por_m3: 100 }, { consumo_min: 11, consumo_max: null, precio_por_m3: 12 }]), null);
+        });
+
+        it('rechaza rangos encimados, huecos y un primer rango que no empieza en 0', () => {
+            assert.match(validarRangosTarifa([{ consumo_min: 0, consumo_max: 15, precio_por_m3: 100 }, { consumo_min: 10, consumo_max: 30, precio_por_m3: 6.5 }]), /se enciman.*empezar en 16/);
+            assert.match(validarRangosTarifa([{ consumo_min: 0, consumo_max: 15, precio_por_m3: 100 }, { consumo_min: 20, consumo_max: 30, precio_por_m3: 6.5 }]), /hueco.*empezar en 16/);
+            assert.match(validarRangosTarifa([{ consumo_min: 1, consumo_max: 15, precio_por_m3: 100 }]), /empezar en 0/);
+        });
+
+        it('rechaza un rango abierto que no es el último, decimales, negativos y listas vacías', () => {
+            assert.match(validarRangosTarifa([{ consumo_min: 0, consumo_max: null, precio_por_m3: 100 }, { consumo_min: 16, consumo_max: 30, precio_por_m3: 6.5 }]), /Solo el último/);
+            assert.match(validarRangosTarifa([{ consumo_min: 0, consumo_max: 15.5, precio_por_m3: 100 }]), /entero/);
+            assert.match(validarRangosTarifa([{ consumo_min: 0, consumo_max: 15, precio_por_m3: -1 }]), /precio/);
+            assert.match(validarRangosTarifa([]), /al menos un rango/);
+        });
+    });
+
+    describe('calcularTarifa (lógica sin cambios, protegida ante rangos inválidos)', () => {
+        it('cobra igual que siempre con la escala Doméstica', () => {
+            const casos = { 0: 100, 15: 100, 16: 106.5, 20: 132.5, 30: 197.5, 31: 205, 45: 317.5, 120: 1242.5, 130: 1392.5 };
+            for (const [consumo, total] of Object.entries(casos)) assert.equal(calcularTarifaReal(Number(consumo), DOMESTICA), total, `${consumo} m³`);
+        });
+
+        it('no calcula con rangos mal configurados (antes daba $171.50, $15.50, −$195 o $1,000)', () => {
+            const invalidas = [
+                [{ consumo_min: 0, consumo_max: 15, precio_por_m3: 100 }, { consumo_min: 10, consumo_max: 30, precio_por_m3: 6.5 }],
+                [{ consumo_min: 0, consumo_max: 15, precio_por_m3: 100 }, { consumo_min: 20, consumo_max: 30, precio_por_m3: 6.5 }],
+                [{ consumo_min: 1, consumo_max: 15, precio_por_m3: 100 }, { consumo_min: 16, consumo_max: 30, precio_por_m3: 6.5 }]
+            ];
+            for (const rangos of invalidas) assert.throws(() => calcularTarifaReal(20, rangos), /rangos mal configurados/);
+        });
+    });
+
+    describe('agregarRangosTarifa / reemplazarRangosTarifa', () => {
+        let conn;
+        const rangos = () => conn.prepare('SELECT id, consumo_min, consumo_max, precio_por_m3 FROM rangos_tarifas WHERE tarifa_id = 1 ORDER BY consumo_min').all();
+        const historial = () => conn.prepare('SELECT rango_id, consumo_min, consumo_max, precio_anterior, precio_nuevo FROM historial_tarifas ORDER BY id').all();
+
+        beforeEach(() => {
+            conn = new DatabaseSync(':memory:');
+            conn.exec(`
+                CREATE TABLE tarifas (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT NOT NULL);
+                CREATE TABLE rangos_tarifas (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tarifa_id INTEGER NOT NULL REFERENCES tarifas(id) ON DELETE CASCADE,
+                    consumo_min INTEGER NOT NULL, consumo_max INTEGER, precio_por_m3 NUMERIC NOT NULL);
+                CREATE TABLE historial_tarifas (id INTEGER PRIMARY KEY AUTOINCREMENT, tarifa_id INTEGER REFERENCES tarifas(id),
+                    rango_id INTEGER REFERENCES rangos_tarifas(id), fecha_cambio TEXT DEFAULT (datetime('now')),
+                    consumo_min INTEGER, consumo_max INTEGER, precio_anterior NUMERIC, precio_nuevo NUMERIC NOT NULL);
+                PRAGMA foreign_keys = ON;
+                INSERT INTO tarifas (id, nombre) VALUES (1, 'Domestica'), (2, 'Comercial');
+            `);
+            agregarRangosTarifa(conn, 1, [
+                { consumo_min: 0, consumo_max: 15, precio_por_m3: 100 },
+                { consumo_min: 16, consumo_max: 30, precio_por_m3: 6.5 },
+                { consumo_min: 31, consumo_max: 40, precio_por_m3: 7.5 }
+            ]);
+        });
+
+        it('al registrar guarda los rangos y su precio inicial en el historial', () => {
+            assert.equal(rangos().length, 3);
+            assert.deepEqual(historial().map(h => [h.precio_anterior, h.precio_nuevo]), [[null, 100], [null, 6.5], [null, 7.5]]);
+        });
+
+        it('al agregar valida junto con los rangos que ya tiene la tarifa', () => {
+            assert.throws(() => agregarRangosTarifa(conn, 1, [{ consumo_min: 35, consumo_max: 50, precio_por_m3: 9 }]), /se enciman/);
+            assert.equal(rangos().length, 3);
+            agregarRangosTarifa(conn, 1, [{ consumo_min: 41, consumo_max: null, precio_por_m3: 9 }]);
+            assert.equal(rangos().length, 4);
+        });
+
+        it('ELIMINA el rango quitado en la pantalla (antes se quedaba en la base)', () => {
+            const [base, r2] = rangos();
+            // Se quita el tercer rango y el segundo pasa a ser el último abierto
+            const cambios = reemplazarRangosTarifa(conn, 1, [
+                { id: base.id, consumo_min: 0, consumo_max: 15, precio_por_m3: 100 },
+                { id: r2.id, consumo_min: 16, consumo_max: null, precio_por_m3: 6.5 }
+            ]);
+            assert.deepEqual(cambios, { agregados: 0, actualizados: 1, eliminados: 1 });
+            assert.deepEqual(rangos().map(r => [r.consumo_min, r.consumo_max]), [[0, 15], [16, null]]);
+            assert.equal(calcularTarifaReal(35, rangos()), 100 + 20 * 6.5);
+        });
+
+        it('registra en el historial el precio anterior y el nuevo, y conserva el historial de un rango eliminado', () => {
+            const [base, r2, r3] = rangos();
+            reemplazarRangosTarifa(conn, 1, [
+                { id: base.id, consumo_min: 0, consumo_max: 15, precio_por_m3: 110 },
+                { id: r2.id, consumo_min: 16, consumo_max: 30, precio_por_m3: 6.5 },
+                { id: r3.id, consumo_min: 31, consumo_max: 40, precio_por_m3: 7.5 }
+            ]);
+            const cambio = historial().at(-1);
+            assert.deepEqual([cambio.precio_anterior, cambio.precio_nuevo], [100, 110]);
+            assert.equal(historial().length, 4, 'los rangos sin cambios no se registran');
+
+            reemplazarRangosTarifa(conn, 1, [
+                { id: base.id, consumo_min: 0, consumo_max: 15, precio_por_m3: 110 },
+                { id: r2.id, consumo_min: 16, consumo_max: null, precio_por_m3: 6.5 }
+            ]);
+            const delEliminado = historial().filter(h => h.consumo_min === 31);
+            assert.equal(delEliminado.length, 1);
+            assert.equal(delEliminado[0].rango_id, null);
+        });
+
+        it('rechaza una escala inválida o un rango de otra tarifa sin modificar nada', () => {
+            const antes = rangos();
+            const [base, r2] = antes;
+            assert.throws(() => reemplazarRangosTarifa(conn, 1, [
+                { id: base.id, consumo_min: 0, consumo_max: 15, precio_por_m3: 100 },
+                { id: r2.id, consumo_min: 20, consumo_max: 30, precio_por_m3: 6.5 }
+            ]), /hueco/);
+            agregarRangosTarifa(conn, 2, [{ consumo_min: 0, consumo_max: null, precio_por_m3: 120 }]);
+            const ajeno = conn.prepare('SELECT id FROM rangos_tarifas WHERE tarifa_id = 2').get().id;
+            assert.throws(() => reemplazarRangosTarifa(conn, 1, [{ id: ajeno, consumo_min: 0, consumo_max: null, precio_por_m3: 1 }]), /no pertenece/);
+            assert.throws(() => reemplazarRangosTarifa(conn, 99, [{ consumo_min: 0, consumo_max: null, precio_por_m3: 1 }]), /no encontrada/);
+            assert.deepEqual(rangos(), antes);
         });
     });
 });

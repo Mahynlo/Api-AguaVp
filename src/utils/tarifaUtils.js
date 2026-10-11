@@ -30,6 +30,61 @@
  */
 
 /**
+ * Valida que los rangos de una tarifa formen una escala que el cálculo pueda cobrar sin ambigüedad.
+ * Se aplica al conjunto COMPLETO de rangos de la tarifa (al crear, al editar y antes de calcular).
+ *
+ * Reglas:
+ *  - consumo_min y consumo_max son enteros ≥ 0 y consumo_min < consumo_max; precio_por_m3 ≥ 0
+ *  - el primer rango empieza en 0 (es la cuota base fija)
+ *  - cada rango empieza justo después del anterior (sin huecos ni rangos encimados)
+ *  - solo el último rango puede no tener consumo máximo (abierto)
+ *
+ * @param {Array<{ consumo_min, consumo_max, precio_por_m3 }>} rangos
+ * @returns {string|null} mensaje del primer problema encontrado, o null si son válidos
+ */
+export const validarRangosTarifa = (rangos) => {
+    if (!Array.isArray(rangos) || rangos.length === 0) return 'La tarifa debe tener al menos un rango';
+
+    const lista = rangos.map(r => ({
+        consumo_min: r.consumo_min === '' || r.consumo_min == null ? NaN : Number(r.consumo_min),
+        consumo_max: r.consumo_max === '' || r.consumo_max == null ? null : Number(r.consumo_max),
+        precio_por_m3: r.precio_por_m3 === '' || r.precio_por_m3 == null ? NaN : Number(r.precio_por_m3)
+    }));
+    const texto = (r) => `[${r.consumo_min} - ${r.consumo_max ?? 'sin límite'}]`;
+
+    for (const r of lista) {
+        if (!Number.isInteger(r.consumo_min) || r.consumo_min < 0) {
+            return `El consumo mínimo de cada rango debe ser un número entero de 0 o más (rango ${texto(r)})`;
+        }
+        if (r.consumo_max !== null && (!Number.isInteger(r.consumo_max) || r.consumo_max <= r.consumo_min)) {
+            return `El consumo máximo debe ser un número entero mayor que el mínimo (rango ${texto(r)})`;
+        }
+        if (!Number.isFinite(r.precio_por_m3) || r.precio_por_m3 < 0) {
+            return `El precio debe ser un número de 0 o más (rango ${texto(r)})`;
+        }
+    }
+
+    const ordenados = [...lista].sort((a, b) => a.consumo_min - b.consumo_min);
+    if (ordenados[0].consumo_min !== 0) {
+        return `El primer rango debe empezar en 0 m³ (es la cuota base); empieza en ${ordenados[0].consumo_min}`;
+    }
+    for (let i = 0; i < ordenados.length - 1; i++) {
+        const actual = ordenados[i];
+        const siguiente = ordenados[i + 1];
+        if (actual.consumo_max === null) {
+            return `Solo el último rango puede quedar sin consumo máximo; el rango ${texto(actual)} tiene otros después`;
+        }
+        if (siguiente.consumo_min <= actual.consumo_max) {
+            return `Los rangos ${texto(actual)} y ${texto(siguiente)} se enciman: el siguiente debe empezar en ${actual.consumo_max + 1}`;
+        }
+        if (siguiente.consumo_min > actual.consumo_max + 1) {
+            return `Hay un hueco entre los rangos ${texto(actual)} y ${texto(siguiente)}: el siguiente debe empezar en ${actual.consumo_max + 1}`;
+        }
+    }
+    return null;
+};
+
+/**
  * Calcula el total a cobrar dado un consumo y los rangos de una tarifa.
  *
  * @param {number} consumo_m3  Consumo en metros cúbicos (puede ser decimal)
@@ -47,6 +102,11 @@ export const calcularTarifa = (consumo_m3, rangos) => {
     }
     if (consumo_m3 < 0) {
         throw new Error('El consumo no puede ser negativo');
+    }
+    // Con rangos mal configurados el cálculo daría montos incorrectos: no se cobra
+    const errorRangos = validarRangosTarifa(rangos);
+    if (errorRangos) {
+        throw new Error(`La tarifa tiene rangos mal configurados: ${errorRangos}. Corrígelos en Tarifas antes de facturar.`);
     }
 
     // Consumo 0 → solo se cobra la base
