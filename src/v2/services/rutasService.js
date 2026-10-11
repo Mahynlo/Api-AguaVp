@@ -9,6 +9,7 @@
  */
 
 import db from '../../database/db-sqlite.js';
+import { motivoNoRectificable } from './lecturasRectificacion.js';
 import { crearError } from '../../utils/errores.js';
 
 // Periodo a mostrar: el solicitado, o el mayor entre el mes actual y el último periodo con lecturas
@@ -450,6 +451,10 @@ export async function obtenerRutaConMedidores(ruta_id, periodoParam) {
             lp.vuelta_cero AS vuelta_cero_periodo,
             lp.estado AS estado_lectura_periodo,
             lp.fecha_lectura AS fecha_lectura_periodo,
+            -- Para saber si la lectura del período se puede rectificar (lecturasRectificacion.js):
+            (SELECT MIN(l_sig.periodo) FROM lecturas l_sig WHERE lp.id IS NOT NULL AND l_sig.medidor_id = m.id AND l_sig.periodo > lp.periodo) AS periodo_posterior_lectura,
+            (SELECT COALESCE(SUM(p.monto), 0) FROM pagos p WHERE p.factura_id = f_fac.id) AS pagado_factura_periodo,
+            f_fac.convenio_id AS convenio_factura_periodo,
             -- Lectura anterior de referencia (la última registrada ANTES de este período):
             (
                 SELECT l_ant.lectura_actual
@@ -563,6 +568,12 @@ export async function obtenerRutaConMedidores(ruta_id, periodoParam) {
                 vuelta_cero: r.vuelta_cero_periodo === 1,
                 lectura_id: r.lectura_id_periodo ? Number(r.lectura_id_periodo) : null,
                 estado_lectura: r.estado_lectura_periodo || (tieneLectura ? 'pendiente' : null),
+                // null si no hay lectura en el período; si la hay, si todavía se puede rectificar y por qué no
+                ...(() => {
+                    if (!tieneLectura) return { rectificable: null, motivo_no_rectificable: null };
+                    const motivo = motivoNoRectificable({ periodo, periodoPosterior: r.periodo_posterior_lectura, pagado: r.pagado_factura_periodo, convenioId: r.convenio_factura_periodo });
+                    return { rectificable: !motivo, motivo_no_rectificable: motivo };
+                })(),
                 periodo_consultado: periodo,
                 // Campos legacy compatibles:
                 lectura_anterior_disponible: lectAnteriorReferencia,

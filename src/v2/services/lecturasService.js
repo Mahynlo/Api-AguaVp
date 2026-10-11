@@ -1,6 +1,7 @@
-import db from '../../database/db-sqlite.js';
+import db, { sqlite } from '../../database/db-sqlite.js';
 import { calcularTarifaDesdeDB } from '../../utils/tarifaUtils.js';
 import { nowDate, calcularVencimiento } from '../../utils/timezone.js';
+import { estadoRectificacion } from './lecturasRectificacion.js';
 
 function serviceError(message, status) {
     const err = new Error(message);
@@ -165,6 +166,11 @@ export async function obtenerLecturas({ id } = {}) {
 }
 
 export async function modificarLectura(id, { medidor_id, lectura_actual, consumo_m3, fecha_lectura, periodo }, usuarioId) {
+    // Solo la lectura más reciente del medidor y con factura sin pagos (ver lecturasRectificacion.js)
+    const estado = estadoRectificacion(sqlite, id);
+    if (!estado) throw serviceError('Lectura no encontrada', 404);
+    if (estado.motivo) throw serviceError(estado.motivo, 409);
+
     const setClauses = [];
     const args = [];
     if (medidor_id !== undefined)    { setClauses.push('medidor_id = ?');    args.push(medidor_id); }
@@ -271,7 +277,8 @@ export async function generarFacturasParaLecturasSinFactura({ periodo, ruta_id, 
                 f.id as factura_existente_id, 
                 f.total as factura_existente_total, 
                 f.saldo_pendiente as factura_existente_saldo, 
-                f.estado as factura_existente_estado 
+                f.estado as factura_existente_estado, 
+                (SELECT MIN(s.periodo) FROM lecturas s WHERE s.medidor_id = l.medidor_id AND s.periodo > l.periodo) as periodo_posterior 
               FROM lecturas l 
               LEFT JOIN medidores m ON l.medidor_id = m.id 
               LEFT JOIN facturas f ON l.id = f.lectura_id 
@@ -301,6 +308,13 @@ export async function generarFacturasParaLecturasSinFactura({ periodo, ruta_id, 
                 if (totalPagado > 0) {
                     resultados.facturas_fallidas++;
                     resultados.detalles.push({ lectura_id: Number(lectura.lectura_id), factura_id: facturaExistenteId, cliente_nombre: lectura.cliente_nombre, medidor_numero: lectura.medidor_numero, error: `No se puede recalcular: la factura ya tiene pagos registrados (${totalPagado}).`, estado: 'fallida' });
+                    continue;
+                }
+
+                // Período cerrado para este medidor: ya tiene la lectura de un período posterior
+                if (lectura.periodo_posterior) {
+                    resultados.facturas_fallidas++;
+                    resultados.detalles.push({ lectura_id: Number(lectura.lectura_id), factura_id: facturaExistenteId, cliente_nombre: lectura.cliente_nombre, medidor_numero: lectura.medidor_numero, error: `No se puede recalcular: el medidor ya tiene la lectura de ${lectura.periodo_posterior} y el período ${periodo} quedó cerrado.`, estado: 'fallida' });
                     continue;
                 }
 
