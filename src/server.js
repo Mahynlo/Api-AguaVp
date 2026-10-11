@@ -27,6 +27,7 @@ import 'dotenv/config';
 
 import express from 'express';
 import http from 'http';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import cors from 'cors';
@@ -40,6 +41,23 @@ import swaggerJsdoc from 'swagger-jsdoc';
 
 import { initDeudoresJob, setNotificationManager as setDeudoresNotificationManager } from './jobs/procesarDeudores.js';
 import { initConveniosJob, setNotificationManager as setConveniosNotificationManager } from './jobs/verificarConvenios.js';
+// Archivos con comentarios @swagger: cada módulo tiene sus rutas en v2/routes/<modulo>.js y,
+// si su documentación está separada, en v2/openapi/<modulo>.js. Se ordenan por módulo para que
+// Swagger muestre las secciones en el mismo orden de siempre.
+// Rutas absolutas (con "/" para que glob funcione en Windows): con rutas relativas al cwd,
+// dentro de Electron no se encontraba ningún archivo y la documentación salía vacía.
+function archivosSwagger() {
+  const v2Dir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'v2');
+  return ['routes', 'openapi']
+    .flatMap((carpeta, prioridad) => {
+      const dir = path.join(v2Dir, carpeta);
+      if (!fs.existsSync(dir)) return [];
+      return fs.readdirSync(dir).filter(f => f.endsWith('.js')).map(f => ({ f, prioridad, ruta: path.join(dir, f) }));
+    })
+    .sort((a, b) => a.f.localeCompare(b.f, 'en') || a.prioridad - b.prioridad)
+    .map(a => a.ruta.split(path.sep).join('/'));
+}
+
 const swaggerOptions = {
   definition: {
     openapi: '3.0.0',
@@ -77,9 +95,7 @@ const swaggerOptions = {
       }
     }
   },
-  // Ruta absoluta (con "/" para que glob funcione en Windows): con una ruta relativa
-  // al cwd, dentro de Electron no se encontraba ningún archivo y la documentación salía vacía.
-  apis: [path.join(path.dirname(fileURLToPath(import.meta.url)), 'v2', 'routes', '*.js').split(path.sep).join('/')],
+  apis: archivosSwagger(),
 };
 
 

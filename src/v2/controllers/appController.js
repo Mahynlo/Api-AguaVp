@@ -1,15 +1,11 @@
 /**
- * Controlador de aplicación - V2
- * 
- * File: src/v2/controllers/appController.js
- * 
- * Descripción: Controlador para funcionalidades específicas de la aplicación
- * 
- * Cambios en V2:
- * - Integración con Turso
- * - Información sobre SSE
- * - Registro de aplicaciones migrado a Turso
- * - Recuperación de tokens migrado a Turso
+ * Controlador de /api/v2/app
+ *
+ * Registro de la aplicación cliente, recuperación de su token, versión y estado.
+ * El acceso a datos está en services/appService.js.
+ *
+ * Nota: los textos "Turso" de las respuestas se conservan tal cual por compatibilidad;
+ * la base real es SQLite local (better-sqlite3).
  */
 
 import jwt from "jsonwebtoken";
@@ -21,7 +17,7 @@ const SECRET_APP_KEY = process.env.SECRET_APP_KEY; // secret para firmar el toke
 const APPKEY_INICIAL = process.env.APPKEY_INICIAL; // token inicial para registrar la app
 
 const appController = {
-    // Registro inicial de aplicaciones - V2 con Turso
+    // Registro inicial de aplicaciones
     registrarApp: manejarErrores(async (req, res) => {
         const authHeader = req.headers["x-app-key"];
 
@@ -68,7 +64,7 @@ const appController = {
         });
     }, { mensaje: "Error al registrar la nueva app", log: 'Error al registrar app en Turso:', exponerMensaje: false, statusDelError: false }),
 
-    // Recuperación de token por expiración o pérdida - V2 con Turso  
+    // Recuperación de token por expiración o pérdida
     recuperarToken: async (req, res) => {
         try {
             const authHeader = req.headers["x-app-key"];

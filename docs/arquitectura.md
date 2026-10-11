@@ -27,11 +27,12 @@ src/
 ├── utils/                 # logger, errores, timezone, tarifaUtils, generateToken, passwordValidator
 └── v2/
     ├── index.js           # Router /api/v2
-    ├── routes/            # Endpoints por dominio (+ anotaciones Swagger)
+    ├── routes/            # Endpoints por dominio: URL + cadena de middlewares
     ├── validators/        # Esquemas Zod + middleware validate()
     ├── middlewares/       # appKeyMiddleware, authMiddleware, rateLimiter
     ├── controllers/       # Capa HTTP
-    ├── services/          # Lógica de negocio y acceso a datos
+    ├── services/          # Lógica de negocio y acceso a datos (reports/: un archivo por reporte)
+    ├── openapi/           # Documentación Swagger separada de las rutas (app, oauth, reports, rutas)
     ├── sse/               # Server-Sent Events (sseManager, notificationManager)
     └── config/
         └── permissions.js # Catálogo de permisos y permisos por rol
@@ -64,7 +65,7 @@ Eventos que emite `AguaVPServer`: `log`, `error`, `sync-log`, `api-log`, `starti
 | `/api/health`, `/api/health/database`, `/api/health/system` | Health check protegido (app key + JWT) |
 | `/api/v1/*` | Responde 503 (la v1 se retiró; su código está en el tag git `v1-final`) |
 | `/api/v2/*` | API activa (ver abajo) |
-| `/api-docs` | Swagger UI (generado de las anotaciones en `src/v2/routes/*.js`) |
+| `/api-docs` | Swagger UI (generado de las anotaciones en `src/v2/routes/*.js` y `src/v2/openapi/*.js`) |
 
 Módulos de `/api/v2`: `app`, `auth`, `users`, `clientes`, `medidores`, `tarifas`, `lecturas`, `facturas`, `pagos`, `rutas`, `events` (SSE), `dashboard`, `reports`, `deudores`, `oauth`, `sync`. Los contratos están en [endpoints/](endpoints/).
 
@@ -75,6 +76,38 @@ Ruta (v2/routes) → rateLimiter → appKeyMiddleware → authMiddleware → val
    → controller (v2/controllers) → service (v2/services) → db-sqlite.js
    → notificationManager (SSE) si hay que avisar a clientes conectados
 ```
+
+## Estructura de un módulo
+
+Estándar que siguen los módulos ya ordenados (`app`, `users`, `oauth`, `rutas`, `reports`, `deudores`: cortes y convenios). Para agregar o modificar un módulo, copia uno de ellos:
+
+| Archivo | Qué contiene | Qué no contiene |
+|---|---|---|
+| `v2/routes/<modulo>.js` | URL, middlewares y controller de cada endpoint | lógica, SQL |
+| `v2/openapi/<modulo>.js` | Comentarios `@swagger` (solo si son largos; si son cortos pueden quedar junto a la ruta) | código |
+| `v2/controllers/<modulo>Controller.js` | Leer `req`, validar entrada, logs, avisos SSE y forma de la respuesta | SQL, imports de `db-sqlite.js` |
+| `v2/services/<modulo>Service.js` | Reglas de negocio y consultas; lanza `crearError(msg, status)` | `req`/`res` |
+| `test/http/<modulo>.test.js` | Tests HTTP contra la app real con una base temporal | mocks de la base |
+
+En el controller, los errores de negocio lanzados por el service se responden con:
+
+```js
+} catch (error) {
+    if (esErrorDeNegocio(error)) return responderErrorDeNegocio(res, error); // status + { error, ...datos }
+    console.error('...', error);
+    res.status(500).json({ error: '...' });
+}
+```
+
+Swagger lee los archivos de `routes/` y `openapi/` ordenados por módulo (`archivosSwagger()` en `src/server.js`), así que mover la documentación de un módulo a `openapi/` no cambia lo que muestra `/api-docs`.
+
+Módulos todavía sin ordenar (SQL o lógica en archivos grandes): `facturas`, `pagos`, `lecturas`, `tarifas`, `clientes`, `medidores`. Son críticos para cobro; se ordenan solo con tests de caracterización previos.
+
+## Verificar que un cambio no altera el comportamiento
+
+1. `npm test`: incluye los tests HTTP de `test/http/` (usan `test/helpers/servidor-prueba.js` y los datos fijos de `test/helpers/datos-prueba.js`).
+2. `node scripts/dev/comparar-versiones/index.mjs [refA=HEAD] [refB=actual]`: ejecuta los mismos escenarios contra dos versiones del código y compara todas las respuestas y todas las tablas.
+3. `npm run lint`.
 
 ## Seguridad
 
