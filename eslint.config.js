@@ -7,11 +7,11 @@ import globals from 'globals';
 
 export default [
   {
-    ignores: ['node_modules/', 'dist/', 'pack_tgz/', 'src/database/migrations/'],
+    ignores: ['node_modules/', 'dist/', 'pack_tgz/', '.comparar/', 'src/database/migrations/'],
   },
   js.configs.recommended,
   {
-    files: ['**/*.js'],
+    files: ['**/*.js', '**/*.mjs'],
     languageOptions: {
       ecmaVersion: 2024,
       sourceType: 'module',

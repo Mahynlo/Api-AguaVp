@@ -43,6 +43,22 @@ export function crearError(mensaje, status, extra) {
 }
 
 /**
+ * ¿Es un error de negocio lanzado con crearError (tiene status HTTP)?
+ * Los errores inesperados (SQLite, programación…) no tienen status.
+ */
+export function esErrorDeNegocio(err) {
+    return Boolean(err?.status);
+}
+
+/**
+ * Responde un error de negocio como { error: mensaje, ...datos } con su status.
+ * `datos` son los campos extra de crearError(mensaje, status, { datos: {...} }).
+ */
+export function responderErrorDeNegocio(res, err) {
+    return res.status(err.status).json({ error: err.message, ...err.datos });
+}
+
+/**
  * Envuelve un handler (req, res, next) async y responde los errores con un formato fijo.
  * @param {Function} handler
  * @param {object} opciones

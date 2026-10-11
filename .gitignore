@@ -11,3 +11,6 @@ package-lock.json
 # Paquetes generados con `npm pack`
 *.tgz
 pack_tgz/
+
+# Worktrees de scripts/dev/comparar-versiones
+.comparar/

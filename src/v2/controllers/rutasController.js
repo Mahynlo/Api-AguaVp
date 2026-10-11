@@ -1,43 +1,37 @@
 /**
  * Controlador de Rutas - V2
- * 
+ *
  * File: src/v2/controllers/rutasController.js
- * 
- * Descripción: Controlador para manejar operaciones relacionadas con rutas con compatibilidad V1.
- * 
- * Cambios en V2:
- * - Migración de SQLite3 a Turso (@libsql/client)
- * - Reemplazo de WebSockets con Server-Sent Events (SSE)
- * - Mantiene SOLO las funcionalidades de V1
- * - Respeta el esquema de la base de datos
- * - Conversión BigInt a Number para compatibilidad JSON
- * 
- * Funciones V1 implementadas (compatibilidad completa):
- * - crearRuta: Crear ruta con puntos y orden
- * - listarRutas: Listar rutas con información de lecturas
- * - agregarMedidorARuta: Agregar medidor a ruta existente
- * - obtenerRutaConMedidores: Obtener ruta completa con medidores ordenados
+ *
+ * Descripción: rutas de lectura (crear, listar, medidores en orden, progreso de captura).
+ * La lógica y el acceso a datos están en services/rutasService.js; aquí quedan la
+ * validación de entrada, las notificaciones SSE y la forma de las respuestas.
  */
 
-import db from '../../database/db-sqlite.js';
+import {
+    crearRuta,
+    listarRutas,
+    agregarMedidorARuta,
+    obtenerRutaConMedidores,
+    modificarRuta,
+    eliminarMedidorDeRuta,
+    reordenarMedidores,
+    obtenerProgresoCapturaRuta
+} from '../services/rutasService.js';
+import { esErrorDeNegocio, responderErrorDeNegocio } from '../../utils/errores.js';
 
-// Managers SSE - Configurados dinámicamente
-let sseManager = null;
+// Managers SSE - Configurados dinámicamente (ver configureSSE en routes/rutas.js)
 let notificationManager = null;
 
-export const setSSEManagers = (sseManagerInstance, notificationManagerInstance) => {
-    sseManager = sseManagerInstance;
+export const setSSEManagers = (_sseManagerInstance, notificationManagerInstance) => {
     notificationManager = notificationManagerInstance;
 };
 
 const rutasController = {
 
-    // =====================================================
-    // FUNCIONES V1 - COMPATIBILIDAD COMPLETA
-    // =====================================================
-
     /**
-     * Crear ruta (V1 compatible)
+     * Crear ruta
+     * POST /api/v2/rutas/crear
      */
     crearRuta: async (req, res) => {
         try {
@@ -55,77 +49,7 @@ const rutasController = {
                 return res.status(400).json({ error: 'Faltan campos requeridos o puntos inválidos' });
             }
 
-            // Obtener IDs únicos de medidores
-            const medidorIds = puntos.map(p => p.id);
-            const placeholders = medidorIds.map(() => '?').join(',');
-
-            // Validar que todos los medidores existen
-            const validarQuery = `SELECT id FROM medidores WHERE id IN (${placeholders})`;
-            const validarResult = await db.execute({
-                sql: validarQuery,
-                args: medidorIds
-            });
-
-            const encontrados = validarResult.rows.map(r => Number(r.id)); // Convertir BigInt a Number
-            const faltantes = medidorIds.filter(id => !encontrados.includes(id));
-
-            if (faltantes.length > 0) {
-                return res.status(400).json({
-                    error: 'Algunos medidores no existen en la base de datos',
-                    faltantes
-                });
-            }
-
-            // Validar que los medidores no estén en otra ruta
-            const duplicadosQuery = `
-                SELECT medidor_id, ruta_id 
-                FROM rutas_puntos 
-                WHERE medidor_id IN (${placeholders})
-            `;
-            const duplicadosResult = await db.execute({
-                sql: duplicadosQuery,
-                args: medidorIds
-            });
-
-            if (duplicadosResult.rows.length > 0) {
-                const medidoresDuplicados = duplicadosResult.rows.map(r => ({
-                    medidor_id: Number(r.medidor_id),
-                    ruta_id: Number(r.ruta_id)
-                }));
-
-                return res.status(409).json({
-                    error: 'Algunos medidores ya están asignados a otras rutas',
-                    medidores_duplicados: medidoresDuplicados
-                });
-            }
-
-            // Crear la ruta
-            const rutaJSON = JSON.stringify(ruta_calculada || []);
-            const instruccionesJSON = JSON.stringify(instrucciones || []);
-
-            const insertRutaQuery = `
-                INSERT INTO rutas (nombre, descripcion, creado_por, distancia_km, ruta_json, instrucciones_json)
-                VALUES (?, ?, ?, ?, ?, ?)
-            `;
-
-            const rutaResult = await db.execute({
-                sql: insertRutaQuery,
-                args: [nombre, descripcion, creado_por, distancia_km, rutaJSON, instruccionesJSON]
-            });
-
-            const ruta_id = Number(rutaResult.lastInsertRowid); // Convertir BigInt a Number
-
-            // Insertar puntos de la ruta
-            // Insertar puntos en una transacción — atómico y mucho más rápido que N awaits
-            if (puntos.length > 0) {
-                const insertPuntoStmt = db.sqlite.prepare(
-                    `INSERT INTO rutas_puntos (ruta_id, medidor_id, orden) VALUES (?, ?, ?)`
-                );
-                const insertarPuntos = db.sqlite.transaction((pts) => {
-                    pts.forEach((p, i) => insertPuntoStmt.run(ruta_id, p.id, i + 1));
-                });
-                insertarPuntos(puntos);
-            }
+            const ruta_id = await crearRuta({ nombre, descripcion, creado_por, distancia_km, ruta_calculada, instrucciones, puntos });
 
             // Datos completos de la ruta para notificaciones SSE
             const rutaCompleta = {
@@ -143,7 +67,7 @@ const rutasController = {
                 fecha_creacion: new Date().toISOString()
             };
 
-            // Enviar notificaciones SSE (reemplaza WebSockets de V1)
+            // Enviar notificaciones SSE
             if (notificationManager) {
                 try {
                     // Notificar a operadores sobre nueva ruta
@@ -168,7 +92,6 @@ const rutasController = {
                 }
             }
 
-            // Respuesta compatible con V1
             return res.status(201).json({
                 mensaje: '✅ Ruta creada correctamente',
                 ruta_id,
@@ -176,302 +99,20 @@ const rutasController = {
             });
 
         } catch (error) {
+            if (esErrorDeNegocio(error)) return responderErrorDeNegocio(res, error);
             console.error('❌ Error al crear ruta v2:', error);
             res.status(500).json({ error: 'Error interno del servidor al crear la ruta' });
         }
     },
 
     /**
-     * Listar rutas (V1 compatible)
-     */
-    /**
-     * Listar rutas con Paginación y Búsqueda (V2)
+     * Listar rutas con paginación y búsqueda
+     * GET /api/v2/rutas/listar?periodo=2025-08&page=1&limit=10&search=...
      */
     listarRutas: async (req, res) => {
         try {
-            const periodoParam = req.query.periodo; // Ejemplo: '2025-08'
-            // Nuevos parámetros para paginación
-            const { page, limit, search, estado, ubicacion } = req.query;
-
-            // Primero obtenemos el período a usar (igual que V1)
-            const periodoQuery = `
-                SELECT COALESCE(?, (
-                    SELECT 
-                        CASE 
-                            WHEN strftime('%Y-%m', 'now') > MAX(periodo) THEN strftime('%Y-%m', 'now')
-                            ELSE MAX(periodo)
-                        END 
-                    FROM lecturas
-                )) AS periodo_a_usar
-            `;
-
-            const periodoResult = await db.execute({
-                sql: periodoQuery,
-                args: [periodoParam || null]
-            });
-
-            const periodo = periodoResult.rows[0]?.periodo_a_usar;
-
-            // --- Lógica de filtrado y paginación ---
-
-            // Si hay parámetros de paginación o búsqueda, o default (legacy fallback si no envian)
-            const pageNum = parseInt(page) || 1;
-            const limitNum = parseInt(limit) || 10; // Default 10 items (tarjetas)
-            const offset = (pageNum - 1) * limitNum;
-            const searchTerm = search ? `%${search}%` : null;
-
-            let baseQuery = `
-                FROM rutas r
-                LEFT JOIN rutas_puntos rp ON rp.ruta_id = r.id
-            `;
-
-            let whereConditions = [];
-            let whereArgs = [];
-
-            if (searchTerm) {
-                whereConditions.push(`(r.nombre LIKE ? OR r.descripcion LIKE ?)`);
-                whereArgs.push(searchTerm, searchTerm);
-            }
-
-            // Nota: Filtros de estado (completas/incompletas) son complejos en SQL directo
-            // por la lógica de conteo de lecturas vs medidores. 
-            // Para mantener rendimiento, filtraremos estado DESPUÉS de obtener los candidatos PAGINADOS si es posible,
-            // pero lo ideal es filtrar antes. 
-            // DADA LA COMPLEJIDAD de calcular "completas" en SQL puro sin subqueries pesadas,
-            // y asumiendo que el número de rutas no es masivo (cientos), 
-            // optaremos por:
-            // 1. Si NO hay filtro de estado, paginamos directo sobre rutas.
-            // 2. Si HAY filtro de estado, necesitamos calcular métricas. 
-            //    Para v2, paginaremos sobre el total de rutas primero y luego el cliente filtra visualmente?
-            //    NO, el cliente espera paginación real.
-            //    Haremos un CTE o subquery para calcular estados si es necesario, 
-            //    PERO por ahora, aplicaremos búsqueda simple y paginación sobre rutas base.
-            //    El filtro de "Estado" en el frontend actual parece ser cliente-side sobre todo lo recibido.
-            //    Mantendremos la paginación sobre el listado BASE de rutas.
-
-            const whereClause = whereConditions.length > 0 ? ' WHERE ' + whereConditions.join(' AND ') : '';
-
-            // 1. Contar total de rutas (para paginación)
-            const countQuery = `SELECT COUNT(DISTINCT r.id) as total ${baseQuery} ${whereClause}`;
-            const countResult = await db.execute({
-                sql: countQuery,
-                args: whereArgs
-            });
-            const totalItems = Number(countResult.rows[0].total);
-
-
-            // 2. Obtener IDs de rutas paginadas
-            const rutasIdsQuery = `
-                SELECT DISTINCT r.id, r.fecha_creacion
-                ${baseQuery}
-                ${whereClause}
-                ORDER BY r.fecha_creacion DESC
-                LIMIT ? OFFSET ?
-            `;
-
-            const rutasIdsResult = await db.execute({
-                sql: rutasIdsQuery,
-                args: [...whereArgs, limitNum, offset]
-            });
-
-            const rutasPageIds = rutasIdsResult.rows.map(r => Number(r.id));
-
-            if (rutasPageIds.length === 0) {
-                return res.json({
-                    periodo: periodo,
-                    rutas: [],
-                    pagination: {
-                        total: totalItems,
-                        page: pageNum,
-                        limit: limitNum,
-                        totalPages: Math.ceil(totalItems / limitNum)
-                    }
-                });
-            }
-
-            // 3. Obtener detalles SOLO de las rutas de esta página
-            const idsPlaceholder = rutasPageIds.map(() => '?').join(',');
-            const dataQuery = `
-                SELECT 
-                    r.id,
-                    r.nombre,
-                    r.descripcion,
-                    r.fecha_creacion,
-                    r.distancia_km,
-                    r.creado_por,
-                    COUNT(DISTINCT rp.medidor_id) AS total_puntos
-                FROM rutas r
-                LEFT JOIN rutas_puntos rp ON rp.ruta_id = r.id
-                WHERE r.id IN (${idsPlaceholder})
-                GROUP BY r.id, r.nombre, r.descripcion, r.fecha_creacion, r.distancia_km, r.creado_por
-                ORDER BY r.fecha_creacion DESC
-            `;
-
-            const rutasResult = await db.execute({
-                sql: dataQuery,
-                args: rutasPageIds
-            });
-
-            // Convertir BigInt a Number y procesar cada ruta
-            const rutas = rutasResult.rows.map(row => ({
-                ...row,
-                id: Number(row.id),
-                creado_por: Number(row.creado_por),
-                total_puntos: Number(row.total_puntos)
-            }));
-
-            // Obtener medidores de TODAS las rutas de la página en una sola query (evita N+1)
-            const idsPlaceholder2 = rutasPageIds.map(() => '?').join(',');
-            const medidoresBulkQuery = `
-                WITH puntos_ruta AS (
-                    SELECT
-                        rp.ruta_id,
-                        rp.medidor_id,
-                        rp.orden
-                    FROM rutas_puntos rp
-                    WHERE rp.ruta_id IN (${idsPlaceholder2})
-
-                    UNION
-
-                    SELECT
-                        l.ruta_id,
-                        l.medidor_id,
-                        COALESCE(
-                            rp.orden,
-                            (
-                                SELECT rp2.orden 
-                                FROM rutas_puntos rp2 
-                                JOIN medidores m2 ON rp2.medidor_id = m2.id 
-                                WHERE m2.cliente_id = COALESCE(
-                                    m.cliente_id,
-                                    (SELECT cmh.cliente_id FROM cliente_medidor_historial cmh WHERE cmh.medidor_id = l.medidor_id ORDER BY cmh.id DESC LIMIT 1),
-                                    (SELECT f.cliente_id FROM facturas f WHERE f.lectura_id = l.id LIMIT 1)
-                                )
-                                AND rp2.ruta_id = l.ruta_id 
-                                LIMIT 1
-                            ),
-                            CASE 
-                                WHEN INSTR(c_pred.numero_predio, '-') > 0 
-                                THEN CAST(SUBSTR(c_pred.numero_predio, INSTR(c_pred.numero_predio, '-') + 1) AS INTEGER) 
-                                ELSE CAST(c_pred.numero_predio AS INTEGER) 
-                            END,
-                            9999
-                        ) AS orden
-                    FROM lecturas l
-                    JOIN medidores m ON l.medidor_id = m.id
-                    LEFT JOIN clientes c_pred ON c_pred.id = COALESCE(
-                        m.cliente_id,
-                        (SELECT cmh.cliente_id FROM cliente_medidor_historial cmh WHERE cmh.medidor_id = l.medidor_id ORDER BY cmh.id DESC LIMIT 1),
-                        (SELECT f.cliente_id FROM facturas f WHERE f.lectura_id = l.id LIMIT 1)
-                    )
-                    LEFT JOIN rutas_puntos rp ON rp.medidor_id = l.medidor_id AND rp.ruta_id = l.ruta_id
-                    WHERE l.periodo = ?
-                      AND l.ruta_id IN (${idsPlaceholder2})
-                )
-                SELECT
-                    pr.ruta_id,
-                    m.numero_serie,
-                    m.id AS medidor_id,
-                    CASE WHEN l.id IS NOT NULL THEN 1 ELSE 0 END AS tiene_lectura
-                FROM puntos_ruta pr
-                JOIN medidores m ON pr.medidor_id = m.id
-                LEFT JOIN lecturas l ON l.medidor_id = m.id
-                    AND l.ruta_id = pr.ruta_id
-                    AND l.periodo = ?
-                ORDER BY pr.ruta_id, pr.orden ASC
-            `;
-
-            const medidoresBulkResult = await db.execute({
-                sql: medidoresBulkQuery,
-                args: [...rutasPageIds, periodo, ...rutasPageIds, periodo]
-            });
-
-            // Obtener cuántas facturas existen por ruta en el período mostrado
-            const facturasBulkQuery = `
-                SELECT
-                    l.ruta_id,
-                    COUNT(f.id) AS facturas_generadas_periodo
-                FROM lecturas l
-                JOIN facturas f ON f.lectura_id = l.id
-                WHERE l.periodo = ?
-                  AND l.ruta_id IN (${idsPlaceholder2})
-                GROUP BY l.ruta_id
-            `;
-
-            const facturasBulkResult = await db.execute({
-                sql: facturasBulkQuery,
-                args: [periodo, ...rutasPageIds]
-            });
-
-            const facturasPorRuta = new Map();
-            for (const row of facturasBulkResult.rows) {
-                facturasPorRuta.set(Number(row.ruta_id), Number(row.facturas_generadas_periodo || 0));
-            }
-
-            // Agrupar medidores por ruta_id en un Map para lookup O(1)
-            const medidoresPorRuta = new Map();
-            for (const row of medidoresBulkResult.rows) {
-                const rid = Number(row.ruta_id);
-                if (!medidoresPorRuta.has(rid)) medidoresPorRuta.set(rid, []);
-                medidoresPorRuta.get(rid).push({
-                    medidor_id: Number(row.medidor_id),
-                    numero_serie: row.numero_serie,
-                    tiene_lectura: row.tiene_lectura
-                });
-            }
-
-            // Construir objetos de ruta con estadísticas calculadas
-            const rutasFinales = rutas.map(ruta => {
-                const medidores = medidoresPorRuta.get(ruta.id) || [];
-                const facturas_generadas_periodo = facturasPorRuta.get(ruta.id) || 0;
-
-                // Si el periodo ya tiene facturación, se considera cerrado para captura:
-                // no se muestran como pendientes medidores agregados posteriormente.
-                const medidoresBase = facturas_generadas_periodo > 0
-                    ? medidores.filter(m => m.tiene_lectura === 1)
-                    : medidores;
-
-                const numeros_serie = medidoresBase.map(m => m.numero_serie);
-                const medidores_completados = medidoresBase.filter(m => m.tiene_lectura === 1).map(m => m.numero_serie);
-                const medidores_faltantes  = medidoresBase.filter(m => m.tiene_lectura === 0).map(m => m.numero_serie);
-                const completadas = medidores_completados.length;
-                const faltantes   = medidores_faltantes.length;
-                const total_puntos = medidoresBase.length;
-                const porcentaje_completado = total_puntos > 0
-                    ? Math.round((completadas / total_puntos) * 100)
-                    : 0;
-                return {
-                    id: ruta.id,
-                    nombre: ruta.nombre,
-                    descripcion: ruta.descripcion,
-                    fecha_creacion: ruta.fecha_creacion,
-                    distancia_km: ruta.distancia_km,
-                    creado_por: ruta.creado_por,
-                    total_puntos,
-                    completadas,
-                    faltantes,
-                    porcentaje_completado,
-                    numeros_serie,
-                    medidores_completados,
-                    medidores_faltantes,
-                    periodo_mostrado: periodo,
-                    facturas_generadas_periodo,
-                    tiene_facturacion_periodo: facturas_generadas_periodo > 0,
-                    periodo_cerrado: facturas_generadas_periodo > 0
-                };
-            });
-
-            return res.status(200).json({
-                periodo: periodo,
-                rutas: rutasFinales,
-                pagination: {
-                    total: totalItems,
-                    page: pageNum,
-                    limit: limitNum,
-                    totalPages: Math.ceil(totalItems / limitNum)
-                }
-            });
-
+            const { periodo: periodoParam, page, limit, search } = req.query;
+            return res.status(200).json(await listarRutas({ periodoParam, page, limit, search }));
         } catch (error) {
             console.error('❌ Error al listar rutas v2:', error);
             res.status(500).json({ error: 'Error interno del servidor' });
@@ -479,7 +120,8 @@ const rutasController = {
     },
 
     /**
-     * Agregar medidor a ruta (V1 compatible)
+     * Agregar medidor a ruta
+     * POST /api/v2/rutas/agregar-medidor
      */
     agregarMedidorARuta: async (req, res) => {
         try {
@@ -489,298 +131,35 @@ const rutasController = {
                 return res.status(400).json({ error: 'Faltan campos requeridos' });
             }
 
-            // Verificar si el medidor ya está en otra ruta
-            const verificarQuery = `
-                SELECT ruta_id 
-                FROM rutas_puntos 
-                WHERE medidor_id = ?
-            `;
-            const verificarResult = await db.execute({
-                sql: verificarQuery,
-                args: [medidor_id]
-            });
-
-            if (verificarResult.rows.length > 0) {
-                const ruta_existente = Number(verificarResult.rows[0].ruta_id);
-                return res.status(409).json({
-                    error: `El medidor ya está asignado a la ruta ${ruta_existente}`,
-                    ruta_existente
-                });
-            }
-
-            const query = `
-                INSERT INTO rutas_puntos (ruta_id, medidor_id, orden)
-                VALUES (?, ?, ?)
-            `;
-
-            await db.execute({
-                sql: query,
-                args: [ruta_id, medidor_id, orden]
-            });
+            await agregarMedidorARuta({ ruta_id, medidor_id, orden });
 
             return res.status(201).json({ mensaje: 'Medidor agregado a la ruta' });
 
         } catch (error) {
+            if (esErrorDeNegocio(error)) return responderErrorDeNegocio(res, error);
             console.error('Error al agregar medidor v2:', error);
             return res.status(500).json({ error: 'No se pudo agregar el medidor. Verifica si ya existe en la ruta.' });
         }
     },
 
     /**
-     * Obtener ruta con medidores (V1 compatible y V2 enriquecido con período)
+     * Obtener ruta con medidores (enriquecido con datos de lectura del período)
+     * GET /api/v2/rutas/:ruta_id/medidores?periodo=2025-08
      */
     obtenerRutaConMedidores: async (req, res) => {
         try {
-            const { ruta_id } = req.params;
-            const periodoParam = req.query.periodo;
-
-            // Determinar período a usar si no se proporcionó
-            let periodo = periodoParam;
-            if (!periodo) {
-                const periodoQuery = `
-                    SELECT COALESCE(?, (
-                        SELECT 
-                            CASE 
-                                WHEN strftime('%Y-%m', 'now') > MAX(periodo) THEN strftime('%Y-%m', 'now')
-                                ELSE MAX(periodo)
-                            END 
-                        FROM lecturas
-                    )) AS periodo_a_usar
-                `;
-                const periodoResult = await db.execute({
-                    sql: periodoQuery,
-                    args: [null]
-                });
-                periodo = periodoResult.rows[0]?.periodo_a_usar || new Date().toISOString().slice(0, 7);
-            }
-
-            const query = `
-                WITH puntos_ruta AS (
-                    SELECT 
-                        rp.ruta_id, 
-                        rp.medidor_id, 
-                        rp.orden 
-                    FROM rutas_puntos rp 
-                    WHERE rp.ruta_id = ?
-
-                    UNION
-
-                    SELECT 
-                        l.ruta_id, 
-                        l.medidor_id, 
-                        COALESCE(
-                            rp.orden,
-                            (
-                                SELECT rp2.orden 
-                                FROM rutas_puntos rp2 
-                                JOIN medidores m2 ON rp2.medidor_id = m2.id 
-                                WHERE m2.cliente_id = COALESCE(
-                                    m_hist.cliente_id,
-                                    (SELECT cmh.cliente_id FROM cliente_medidor_historial cmh WHERE cmh.medidor_id = l.medidor_id ORDER BY cmh.id DESC LIMIT 1),
-                                    (SELECT f.cliente_id FROM facturas f WHERE f.lectura_id = l.id LIMIT 1)
-                                )
-                                AND rp2.ruta_id = l.ruta_id 
-                                LIMIT 1
-                            ),
-                            CASE 
-                                WHEN INSTR(c_pred.numero_predio, '-') > 0 
-                                THEN CAST(SUBSTR(c_pred.numero_predio, INSTR(c_pred.numero_predio, '-') + 1) AS INTEGER) 
-                                ELSE CAST(c_pred.numero_predio AS INTEGER) 
-                            END,
-                            9999
-                        ) AS orden 
-                    FROM lecturas l 
-                    JOIN medidores m_hist ON l.medidor_id = m_hist.id
-                    LEFT JOIN clientes c_pred ON c_pred.id = COALESCE(
-                        m_hist.cliente_id,
-                        (SELECT cmh.cliente_id FROM cliente_medidor_historial cmh WHERE cmh.medidor_id = l.medidor_id ORDER BY cmh.id DESC LIMIT 1),
-                        (SELECT f.cliente_id FROM facturas f WHERE f.lectura_id = l.id LIMIT 1)
-                    )
-                    LEFT JOIN rutas_puntos rp ON rp.medidor_id = l.medidor_id AND rp.ruta_id = l.ruta_id 
-                    WHERE l.ruta_id = ? AND l.periodo = ?
-                )
-                SELECT 
-                    r.id AS ruta_id, 
-                    r.nombre AS ruta_nombre, 
-                    r.descripcion AS ruta_descripcion, 
-                    pr.orden, 
-                    m.id AS medidor_id, 
-                    m.numero_serie, 
-                    m.ubicacion,
-                    m.latitud,
-                    m.longitud,
-                    m.estado_medidor,
-                    m.lectura_base,
-                    m.capacidad_maxima,
-                    COALESCE(c.id, c_hist.id, c_fac.id) AS cliente_id,
-                    COALESCE(c.nombre, c_hist.nombre, c_fac.nombre) AS cliente_nombre,
-                    COALESCE(c.numero_predio, c_hist.numero_predio, c_fac.numero_predio) AS cliente_numero_predio,
-                    COALESCE(c.direccion, c_hist.direccion, c_fac.direccion) AS cliente_direccion,
-                    COALESCE(c.telefono, c_hist.telefono, c_fac.telefono) AS cliente_telefono,
-                    COALESCE(c.estado_cliente, c_hist.estado_cliente, c_fac.estado_cliente, 'Activo') AS estado_cliente,
-                    (
-                        SELECT m_act.numero_serie 
-                        FROM medidores m_act 
-                        WHERE m_act.cliente_id = COALESCE(c.id, c_hist.id, c_fac.id)
-                          AND m_act.id != m.id
-                          AND m_act.estado_medidor = 'Activo'
-                        ORDER BY m_act.id DESC 
-                        LIMIT 1
-                    ) AS medidor_actual_reemplazo,
-                    -- Datos de la lectura tomada específicamente en este período:
-                    lp.id AS lectura_id_periodo,
-                    lp.lectura_actual AS lectura_actual_periodo,
-                    lp.lectura_anterior AS lectura_anterior_periodo,
-                    lp.consumo_m3 AS consumo_periodo,
-                    lp.vuelta_cero AS vuelta_cero_periodo,
-                    lp.estado AS estado_lectura_periodo,
-                    lp.fecha_lectura AS fecha_lectura_periodo,
-                    -- Lectura anterior de referencia (la última registrada ANTES de este período):
-                    (
-                        SELECT l_ant.lectura_actual
-                        FROM lecturas l_ant
-                        WHERE l_ant.medidor_id = m.id
-                          AND (l_ant.periodo < ? OR (l_ant.periodo IS NULL AND l_ant.fecha_lectura < ?))
-                          AND l_ant.lectura_actual IS NOT NULL
-                        ORDER BY l_ant.periodo DESC, l_ant.fecha_lectura DESC
-                        LIMIT 1
-                    ) AS lectura_anterior_referencia,
-                    -- Última lectura absoluta registrada (fallback para compatibilidad):
-                    (
-                        SELECT l_ult.lectura_actual
-                        FROM lecturas l_ult
-                        WHERE l_ult.medidor_id = m.id AND l_ult.lectura_actual IS NOT NULL
-                        ORDER BY l_ult.fecha_lectura DESC
-                        LIMIT 1
-                    ) AS ultima_lectura_real,
-                    (
-                        SELECT l_ult.lectura_anterior
-                        FROM lecturas l_ult
-                        WHERE l_ult.medidor_id = m.id AND l_ult.lectura_actual IS NOT NULL
-                        ORDER BY l_ult.fecha_lectura DESC
-                        LIMIT 1
-                    ) AS ultima_lectura_anterior_real,
-                    (
-                        SELECT l_ult.id
-                        FROM lecturas l_ult
-                        WHERE l_ult.medidor_id = m.id AND l_ult.lectura_actual IS NOT NULL
-                        ORDER BY l_ult.fecha_lectura DESC
-                        LIMIT 1
-                    ) AS ultima_lectura_id_real
-                FROM rutas r
-                JOIN puntos_ruta pr ON r.id = pr.ruta_id
-                JOIN medidores m ON pr.medidor_id = m.id
-                LEFT JOIN clientes c ON m.cliente_id = c.id
-                LEFT JOIN cliente_medidor_historial cmh ON cmh.medidor_id = m.id AND cmh.id = (
-                    SELECT id FROM cliente_medidor_historial WHERE medidor_id = m.id ORDER BY id DESC LIMIT 1
-                )
-                LEFT JOIN clientes c_hist ON cmh.cliente_id = c_hist.id
-                LEFT JOIN lecturas lp ON lp.medidor_id = m.id AND lp.periodo = ? AND lp.ruta_id = r.id
-                LEFT JOIN facturas f_fac ON lp.id IS NOT NULL AND f_fac.lectura_id = lp.id
-                LEFT JOIN clientes c_fac ON f_fac.cliente_id = c_fac.id
-                WHERE r.id = ?
-                ORDER BY pr.orden ASC
-            `;
-
-            const [result, facturasCountResult] = await Promise.all([
-                db.execute({
-                    sql: query,
-                    args: [ruta_id, ruta_id, periodo, periodo, `${periodo}-01`, periodo, ruta_id]
-                }),
-                db.execute({
-                    sql: `SELECT COUNT(f.id) AS facturas_generadas_periodo
-                          FROM facturas f
-                          JOIN lecturas l ON f.lectura_id = l.id
-                          WHERE l.periodo = ? AND l.ruta_id = ?`,
-                    args: [periodo, ruta_id]
-                })
-            ]);
-
-            if (result.rows.length === 0) {
-                return res.status(404).json({ error: 'Ruta no encontrada o sin medidores' });
-            }
-
-            const facturasGeneradasPeriodo = Number(facturasCountResult.rows?.[0]?.facturas_generadas_periodo || 0);
-
-            // Convertir BigInt a Number y construir respuesta compatible
-            const rows = result.rows.map(row => ({
-                ...row,
-                ruta_id: Number(row.ruta_id),
-                medidor_id: Number(row.medidor_id),
-                cliente_id: row.cliente_id !== null && row.cliente_id !== undefined ? Number(row.cliente_id) : null
-            }));
-
-            const ruta = {
-                ruta_id: rows[0].ruta_id,
-                nombre: rows[0].ruta_nombre,
-                descripcion: rows[0].ruta_descripcion,
-                periodo: periodo,
-                facturas_generadas_periodo: facturasGeneradasPeriodo,
-                tiene_facturacion_periodo: facturasGeneradasPeriodo > 0,
-                periodo_cerrado: facturasGeneradasPeriodo > 0,
-                puntos: rows.map(r => {
-                    const tieneLectura = r.lectura_id_periodo !== null && r.lectura_id_periodo !== undefined;
-                    const lectActualNum = r.lectura_actual_periodo !== null && r.lectura_actual_periodo !== undefined ? Number(r.lectura_actual_periodo) : null;
-                    const lectAnteriorRegistrada = r.lectura_anterior_periodo !== null && r.lectura_anterior_periodo !== undefined ? Number(r.lectura_anterior_periodo) : null;
-                    const consumoRegistrado = r.consumo_periodo !== null && r.consumo_periodo !== undefined ? Number(r.consumo_periodo) : null;
-
-                    // Línea base para nueva lectura: anterior histórica a este período > lectura_base > null
-                    const lectAnteriorReferencia = r.lectura_anterior_referencia !== null && r.lectura_anterior_referencia !== undefined
-                        ? Number(r.lectura_anterior_referencia)
-                        : (r.lectura_base !== null && r.lectura_base !== undefined ? Number(r.lectura_base) : null);
-
-                    return {
-                        orden: r.orden,
-                        medidor_id: r.medidor_id,
-                        numero_serie: r.numero_serie,
-                        numero_predio: r.cliente_numero_predio || null,
-                        ubicacion: r.ubicacion,
-                        latitud: r.latitud,
-                        longitud: r.longitud,
-                        estado_medidor: r.estado_medidor,
-                        es_retirado: r.estado_medidor === 'Retirado',
-                        medidor_actual_reemplazo: r.medidor_actual_reemplazo || null,
-                        lectura_base: r.lectura_base !== null && r.lectura_base !== undefined ? Number(r.lectura_base) : null,
-                        capacidad_maxima: r.capacidad_maxima !== null && r.capacidad_maxima !== undefined ? Number(r.capacidad_maxima) : null,
-                        // Datos específicos del período consultado:
-                        tiene_lectura: tieneLectura ? 1 : 0,
-                        lectura_actual: lectActualNum,
-                        lectura_anterior: lectAnteriorRegistrada,
-                        consumo_m3: consumoRegistrado,
-                        vuelta_cero: r.vuelta_cero_periodo === 1,
-                        lectura_id: r.lectura_id_periodo ? Number(r.lectura_id_periodo) : null,
-                        estado_lectura: r.estado_lectura_periodo || (tieneLectura ? 'pendiente' : null),
-                        periodo_consultado: periodo,
-                        // Campos legacy compatibles:
-                        lectura_anterior_disponible: lectAnteriorReferencia,
-                        ultima_lectura_anterior: lectAnteriorRegistrada !== null ? lectAnteriorRegistrada : lectAnteriorReferencia,
-                        ultima_lectura_id: r.lectura_id_periodo ? Number(r.lectura_id_periodo) : (r.ultima_lectura_id_real ? Number(r.ultima_lectura_id_real) : null),
-                        cliente_id: r.cliente_id,
-                        cliente_nombre: r.cliente_nombre,
-                        cliente_numero_predio: r.cliente_numero_predio || null,
-                        cliente_direccion: r.cliente_direccion,
-                        cliente_telefono: r.cliente_telefono,
-                        estado_cliente: r.estado_cliente
-                    };
-                })
-            };
-
-            return res.status(200).json({ ruta });
-
+            return res.status(200).json(await obtenerRutaConMedidores(req.params.ruta_id, req.query.periodo));
         } catch (error) {
+            if (esErrorDeNegocio(error)) return responderErrorDeNegocio(res, error);
             console.error('❌ Error al obtener ruta v2:', error);
             return res.status(500).json({ error: 'Error interno del servidor' });
         }
     },
 
-    // =====================================================
-    // NUEVAS FUNCIONES - V2
-    // =====================================================
-
     /**
-     * Modificar ruta - UPDATE
+     * Modificar ruta
      * PUT /api/v2/rutas/:ruta_id
-     * Body: { nombre?, descripcion?, distancia_km?, ruta_calculada?, instrucciones? }
+     * Body: { nombre?, descripcion?, distancia_km?, ruta_calculada?, instrucciones?, puntos? }
      */
     modificarRuta: async (req, res) => {
         try {
@@ -791,121 +170,14 @@ const rutasController = {
                 return res.status(400).json({ error: 'ID de ruta requerido' });
             }
 
-            // Verificar que la ruta existe
-            const verificarQuery = `SELECT id, nombre FROM rutas WHERE id = ?`;
-            const verificarResult = await db.execute({
-                sql: verificarQuery,
-                args: [ruta_id]
-            });
-
-            if (verificarResult.rows.length === 0) {
-                return res.status(404).json({ error: 'Ruta no encontrada' });
-            }
-
-            // Si se envían puntos, validar que los medidores no estén en otra ruta
-            if (puntos && Array.isArray(puntos) && puntos.length > 0) {
-                const medidorIds = puntos.map(p => p.id);
-                const placeholders = medidorIds.map(() => '?').join(',');
-
-                const checkQuery = `
-                    SELECT m.id, m.numero_serie, r.id as ruta_id, r.nombre as ruta_nombre
-                    FROM medidores m
-                    LEFT JOIN rutas_puntos rp ON m.id = rp.medidor_id
-                    LEFT JOIN rutas r ON rp.ruta_id = r.id
-                    WHERE m.id IN (${placeholders})
-                    AND rp.ruta_id IS NOT NULL
-                    AND rp.ruta_id != ?
-                `;
-
-                const checkResult = await db.execute({
-                    sql: checkQuery,
-                    args: [...medidorIds, ruta_id]
-                });
-
-                if (checkResult.rows.length > 0) {
-                    const conflictos = checkResult.rows.map(row => ({
-                        medidor_id: Number(row.id),
-                        numero_serie: row.numero_serie,
-                        ruta_actual: row.ruta_nombre
-                    }));
-
-                    return res.status(409).json({
-                        error: 'Algunos medidores ya están asignados a otra ruta',
-                        conflictos: conflictos
-                    });
-                }
-            }
-
-            // Construir query de actualización dinámica
-            const updates = [];
-            const args = [];
-
-            if (nombre !== undefined) {
-                updates.push('nombre = ?');
-                args.push(nombre);
-            }
-            if (descripcion !== undefined) {
-                updates.push('descripcion = ?');
-                args.push(descripcion);
-            }
-            if (distancia_km !== undefined) {
-                updates.push('distancia_km = ?');
-                args.push(distancia_km);
-            }
-            if (ruta_calculada !== undefined) {
-                updates.push('ruta_json = ?');
-                args.push(JSON.stringify(ruta_calculada));
-            }
-            if (instrucciones !== undefined) {
-                updates.push('instrucciones_json = ?');
-                args.push(JSON.stringify(instrucciones));
-            }
-
-            // Actualizar información de la ruta si hay cambios
-            if (updates.length > 0) {
-                args.push(ruta_id);
-
-                const updateQuery = `
-                    UPDATE rutas 
-                    SET ${updates.join(', ')}
-                    WHERE id = ?
-                `;
-
-                await db.execute({
-                    sql: updateQuery,
-                    args: args
-                });
-            }
-
-            // Si se envían puntos, reemplazar todos los medidores de la ruta
-            let medidores_actualizados = 0;
-            if (puntos && Array.isArray(puntos)) {
-                // 1. Eliminar todos los medidores actuales de la ruta
-                const deleteQuery = `DELETE FROM rutas_puntos WHERE ruta_id = ?`;
-                await db.execute({
-                    sql: deleteQuery,
-                    args: [ruta_id]
-                });
-
-                // 2. Insertar los nuevos medidores en una transacción
-                if (puntos.length > 0) {
-                    const insertPuntoStmt = db.sqlite.prepare(
-                        `INSERT INTO rutas_puntos (ruta_id, medidor_id, orden) VALUES (?, ?, ?)`
-                    );
-                    const insertarPuntos = db.sqlite.transaction((pts) => {
-                        pts.forEach((p, i) => insertPuntoStmt.run(Number(ruta_id), p.id, i + 1));
-                    });
-                    insertarPuntos(puntos);
-                    medidores_actualizados = puntos.length;
-                }
-            }
+            const { nombreActual, medidores_actualizados } = await modificarRuta(ruta_id, { nombre, descripcion, distancia_km, ruta_calculada, instrucciones, puntos });
 
             // Notificar cambios
             if (notificationManager) {
                 try {
                     const campos = Object.keys(req.body);
                     notificationManager.alertaSistema(
-                        `Ruta "${nombre || verificarResult.rows[0].nombre}" actualizada`,
+                        `Ruta "${nombre || nombreActual}" actualizada`,
                         'info',
                         {
                             ruta_id: Number(ruta_id),
@@ -931,15 +203,15 @@ const rutasController = {
             return res.status(200).json(response);
 
         } catch (error) {
+            if (esErrorDeNegocio(error)) return responderErrorDeNegocio(res, error);
             console.error('❌ Error al modificar ruta:', error);
             return res.status(500).json({ error: 'Error interno del servidor' });
         }
     },
 
     /**
-     * Eliminar medidor de ruta - DELETE relación
+     * Eliminar medidor de ruta (y reordenar los siguientes)
      * DELETE /api/v2/rutas/:ruta_id/medidores/:medidor_id
-     * Quita el medidor y reordena automáticamente
      */
     eliminarMedidorDeRuta: async (req, res) => {
         try {
@@ -949,43 +221,7 @@ const rutasController = {
                 return res.status(400).json({ error: 'ID de ruta y medidor requeridos' });
             }
 
-            // Verificar que el medidor está en la ruta
-            const verificarQuery = `
-                SELECT orden 
-                FROM rutas_puntos 
-                WHERE ruta_id = ? AND medidor_id = ?
-            `;
-            const verificarResult = await db.execute({
-                sql: verificarQuery,
-                args: [ruta_id, medidor_id]
-            });
-
-            if (verificarResult.rows.length === 0) {
-                return res.status(404).json({ error: 'El medidor no está en esta ruta' });
-            }
-
-            const ordenEliminado = verificarResult.rows[0].orden;
-
-            // Eliminar el medidor de la ruta
-            const deleteQuery = `
-                DELETE FROM rutas_puntos 
-                WHERE ruta_id = ? AND medidor_id = ?
-            `;
-            await db.execute({
-                sql: deleteQuery,
-                args: [ruta_id, medidor_id]
-            });
-
-            // Reordenar automáticamente los medidores restantes
-            const reordenarQuery = `
-                UPDATE rutas_puntos 
-                SET orden = orden - 1
-                WHERE ruta_id = ? AND orden > ?
-            `;
-            await db.execute({
-                sql: reordenarQuery,
-                args: [ruta_id, ordenEliminado]
-            });
+            const ordenEliminado = await eliminarMedidorDeRuta(ruta_id, medidor_id);
 
             // Notificar cambios
             if (notificationManager) {
@@ -1012,13 +248,14 @@ const rutasController = {
             });
 
         } catch (error) {
+            if (esErrorDeNegocio(error)) return responderErrorDeNegocio(res, error);
             console.error('❌ Error al eliminar medidor de ruta:', error);
             return res.status(500).json({ error: 'Error interno del servidor' });
         }
     },
 
     /**
-     * Reordenar medidores - UPDATE especializada
+     * Reordenar medidores
      * PUT /api/v2/rutas/:ruta_id/reordenar
      * Body: { orden: [{ medidor_id: 1, orden: 1 }, { medidor_id: 2, orden: 2 }, ...] }
      */
@@ -1034,34 +271,7 @@ const rutasController = {
                 });
             }
 
-            // Verificar que todos los medidores pertenecen a la ruta
-            const medidorIds = orden.map(o => o.medidor_id);
-            const placeholders = medidorIds.map(() => '?').join(',');
-
-            const verificarQuery = `
-                SELECT medidor_id 
-                FROM rutas_puntos 
-                WHERE ruta_id = ? AND medidor_id IN (${placeholders})
-            `;
-            const verificarResult = await db.execute({
-                sql: verificarQuery,
-                args: [ruta_id, ...medidorIds]
-            });
-
-            if (verificarResult.rows.length !== medidorIds.length) {
-                return res.status(400).json({
-                    error: 'Algunos medidores no pertenecen a esta ruta'
-                });
-            }
-
-            // Actualizar el orden de todos los medidores en una sola transacción
-            const reordenarStmt = db.sqlite.prepare(
-                `UPDATE rutas_puntos SET orden = ? WHERE ruta_id = ? AND medidor_id = ?`
-            );
-            const reordenarTodos = db.sqlite.transaction((items) => {
-                items.forEach(item => reordenarStmt.run(item.orden, Number(ruta_id), item.medidor_id));
-            });
-            reordenarTodos(orden);
+            await reordenarMedidores(ruta_id, orden);
 
             // Notificar cambios
             if (notificationManager) {
@@ -1071,7 +281,7 @@ const rutasController = {
                         'info',
                         {
                             ruta_id: Number(ruta_id),
-                            medidores_reordenados: medidorIds.length
+                            medidores_reordenados: orden.length
                         }
                     );
                 } catch (sseError) {
@@ -1083,175 +293,32 @@ const rutasController = {
                 success: true,
                 mensaje: 'Orden de medidores actualizado correctamente',
                 ruta_id: Number(ruta_id),
-                medidores_actualizados: medidorIds.length
+                medidores_actualizados: orden.length
             });
 
         } catch (error) {
+            if (esErrorDeNegocio(error)) return responderErrorDeNegocio(res, error);
             console.error('❌ Error al reordenar medidores:', error);
             return res.status(500).json({ error: 'Error interno del servidor' });
         }
     },
 
     /**
-     * Obtener progreso de captura de ruta - ANALYTICS
+     * Progreso de captura de la ruta
      * GET /api/v2/rutas/:ruta_id/progreso?periodo=2025-12
-     * Estadísticas: medidores leídos/total, % completado
      */
     obtenerProgresoCapturaRuta: async (req, res) => {
         try {
             const { ruta_id } = req.params;
-            const periodoParam = req.query.periodo;
 
             if (!ruta_id) {
                 return res.status(400).json({ error: 'ID de ruta requerido' });
             }
 
-            // Determinar periodo a usar
-            const periodoQuery = `
-                SELECT COALESCE(?, (
-                    SELECT 
-                        CASE 
-                            WHEN strftime('%Y-%m', 'now') > MAX(periodo) THEN strftime('%Y-%m', 'now')
-                            ELSE MAX(periodo)
-                        END 
-                    FROM lecturas
-                )) AS periodo_a_usar
-            `;
-
-            const periodoResult = await db.execute({
-                sql: periodoQuery,
-                args: [periodoParam || null]
-            });
-
-            const periodo = periodoResult.rows[0]?.periodo_a_usar;
-
-            // Obtener información de la ruta
-            const rutaQuery = `
-                SELECT id, nombre, descripcion 
-                FROM rutas 
-                WHERE id = ?
-            `;
-            const rutaResult = await db.execute({
-                sql: rutaQuery,
-                args: [ruta_id]
-            });
-
-            if (rutaResult.rows.length === 0) {
-                return res.status(404).json({ error: 'Ruta no encontrada' });
-            }
-
-            const ruta = rutaResult.rows[0];
-
-            // Si ya existen facturas para la ruta en este periodo, se trata como periodo cerrado.
-            const cierrePeriodoResult = await db.execute({
-                sql: `
-                    SELECT COUNT(*) AS total_facturas
-                    FROM facturas f
-                    JOIN lecturas l ON l.id = f.lectura_id
-                    WHERE l.ruta_id = ? AND l.periodo = ?
-                `,
-                args: [ruta_id, periodo]
-            });
-            const totalFacturasPeriodo = Number(cierrePeriodoResult.rows[0]?.total_facturas || 0);
-            const periodoCerrado = totalFacturasPeriodo > 0;
-
-            // Obtener estadísticas detalladas
-            const statsQuery = `
-                SELECT 
-                    COUNT(DISTINCT rp.medidor_id) as total_medidores,
-                    COUNT(DISTINCT CASE WHEN l.id IS NOT NULL THEN rp.medidor_id END) as medidores_leidos,
-                    COUNT(DISTINCT CASE WHEN l.id IS NULL THEN rp.medidor_id END) as medidores_pendientes
-                FROM rutas_puntos rp
-                LEFT JOIN lecturas l ON l.medidor_id = rp.medidor_id 
-                    AND l.ruta_id = rp.ruta_id 
-                    AND l.periodo = ?
-                WHERE rp.ruta_id = ?
-            `;
-
-            const statsResult = await db.execute({
-                sql: statsQuery,
-                args: [periodo, ruta_id]
-            });
-
-            const stats = statsResult.rows[0];
-            const totalRaw = Number(stats.total_medidores);
-            const leidosRaw = Number(stats.medidores_leidos);
-            const pendientesRaw = Number(stats.medidores_pendientes);
-
-            // Obtener lista detallada de medidores con su estado
-            const medidoresQuery = `
-                SELECT 
-                    m.id as medidor_id,
-                    m.numero_serie,
-                    m.ubicacion,
-                    rp.orden,
-                    c.nombre as cliente_nombre,
-                    CASE WHEN l.id IS NOT NULL THEN 1 ELSE 0 END as tiene_lectura,
-                    l.consumo_m3,
-                    l.fecha_lectura
-                FROM rutas_puntos rp
-                JOIN medidores m ON rp.medidor_id = m.id
-                LEFT JOIN clientes c ON m.cliente_id = c.id
-                LEFT JOIN lecturas l ON l.medidor_id = m.id 
-                    AND l.ruta_id = rp.ruta_id 
-                    AND l.periodo = ?
-                WHERE rp.ruta_id = ?
-                ORDER BY rp.orden ASC
-            `;
-
-            const medidoresResult = await db.execute({
-                sql: medidoresQuery,
-                args: [periodo, ruta_id]
-            });
-
-            const medidoresRaw = medidoresResult.rows.map(row => ({
-                medidor_id: Number(row.medidor_id),
-                numero_serie: row.numero_serie,
-                ubicacion: row.ubicacion,
-                orden: row.orden,
-                cliente_nombre: row.cliente_nombre,
-                estado: row.tiene_lectura === 1 ? 'Leído' : 'Pendiente',
-                consumo: row.consumo_m3,
-                fecha_lectura: row.fecha_lectura
-            }));
-
-            // En periodo cerrado, solo mostrar/contar medidores ya leídos para ese periodo.
-            const medidores = periodoCerrado
-                ? medidoresRaw.filter(m => m.estado === 'Leído')
-                : medidoresRaw;
-
-            const total = periodoCerrado ? medidores.length : totalRaw;
-            const leidos = periodoCerrado ? medidores.length : leidosRaw;
-            const pendientes = periodoCerrado ? 0 : pendientesRaw;
-            const porcentaje = total > 0 ? Math.round((leidos / total) * 100) : 0;
-
-            const medidores_leidos = medidores.filter(m => m.estado === 'Leído');
-            const medidores_pendientes = medidores.filter(m => m.estado === 'Pendiente');
-
-            return res.status(200).json({
-                ruta: {
-                    id: Number(ruta.id),
-                    nombre: ruta.nombre,
-                    descripcion: ruta.descripcion
-                },
-                periodo: periodo,
-                resumen: {
-                    total_medidores: total,
-                    medidores_leidos: leidos,
-                    medidores_pendientes: pendientes,
-                    porcentaje_completado: porcentaje,
-                    porcentaje_pendiente: 100 - porcentaje,
-                    periodo_cerrado: periodoCerrado,
-                    total_facturas_periodo: totalFacturasPeriodo
-                },
-                detalle: {
-                    medidores_leidos: medidores_leidos,
-                    medidores_pendientes: medidores_pendientes
-                },
-                todos_los_medidores: medidores
-            });
+            return res.status(200).json(await obtenerProgresoCapturaRuta(ruta_id, req.query.periodo));
 
         } catch (error) {
+            if (esErrorDeNegocio(error)) return responderErrorDeNegocio(res, error);
             console.error('❌ Error al obtener progreso de ruta:', error);
             return res.status(500).json({ error: 'Error interno del servidor' });
         }

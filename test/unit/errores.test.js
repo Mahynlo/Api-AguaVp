@@ -121,3 +121,24 @@ describe('crearError', () => {
         assert.equal(err.status, 404);
     });
 });
+
+describe('esErrorDeNegocio / responderErrorDeNegocio', () => {
+    it('solo los errores con status son de negocio', async () => {
+        const { esErrorDeNegocio } = await import('../../src/utils/errores.js');
+        assert.equal(esErrorDeNegocio(crearError('x', 404)), true);
+        assert.equal(esErrorDeNegocio(new Error('SQLITE_BUSY')), false);
+        assert.equal(esErrorDeNegocio(undefined), false);
+    });
+
+    it('responde { error, ...datos } con el status del error, en ese orden', async () => {
+        const { responderErrorDeNegocio } = await import('../../src/utils/errores.js');
+        const res = resFalsa();
+        responderErrorDeNegocio(res, crearError('No es posible reconectar.', 403, { datos: { deuda_pendiente: 220, requiere: 'Pagar' } }));
+        assert.equal(res.statusCode, 403);
+        assert.equal(JSON.stringify(res.body), JSON.stringify({ error: 'No es posible reconectar.', deuda_pendiente: 220, requiere: 'Pagar' }));
+
+        const sinDatos = resFalsa();
+        responderErrorDeNegocio(sinDatos, crearError('Medidor no encontrado', 404));
+        assert.deepEqual(sinDatos.body, { error: 'Medidor no encontrado' });
+    });
+});
