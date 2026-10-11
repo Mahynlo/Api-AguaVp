@@ -18,7 +18,7 @@ jest.unstable_mockModule('bcryptjs', () => ({
 
 // Dynamic imports
 const { default: oauthController } = await import('../../src/v2/controllers/oauthController.js');
-const { default: dbTurso } = await import('../../src/database/db-sqlite.js');
+const { default: db } = await import('../../src/database/db-sqlite.js');
 const bcrypt = (await import('bcryptjs')).default;
 
 describe('OAuthController', () => {
@@ -53,7 +53,7 @@ describe('OAuthController', () => {
         };
 
         // Mock User Search
-        dbTurso.execute.mockResolvedValueOnce({
+        db.execute.mockResolvedValueOnce({
             rows: [{
                 id: 1,
                 correo: 'test@test.com',
@@ -66,7 +66,7 @@ describe('OAuthController', () => {
         bcrypt.compare.mockResolvedValue(true);
 
         // Mock Token Inserts (Sesiones, RefreshTokens)
-        dbTurso.execute.mockResolvedValue({ rows: [] });
+        db.execute.mockResolvedValue({ rows: [] });
 
         await oauthController.token(mockReq, mockRes);
 
@@ -86,7 +86,7 @@ describe('OAuthController', () => {
         };
 
         // Mock User Search
-        dbTurso.execute.mockResolvedValueOnce({
+        db.execute.mockResolvedValueOnce({
             rows: [{
                 id: 1,
                 contraseña: 'hashed'
@@ -111,7 +111,7 @@ describe('OAuthController', () => {
         const futureDate = new Date();
         futureDate.setDate(futureDate.getDate() + 1);
 
-        dbTurso.execute.mockResolvedValueOnce({
+        db.execute.mockResolvedValueOnce({
             rows: [{
                 id: 10,
                 token: 'valid_rt',
@@ -123,18 +123,18 @@ describe('OAuthController', () => {
 
         // 2. App ID lookup (internal) - Used in generateTokens logic
         // The controller does: Select id FROM apps WHERE app_id = ?
-        dbTurso.execute.mockResolvedValueOnce({ rows: [{ id: 99 }] });
+        db.execute.mockResolvedValueOnce({ rows: [{ id: 99 }] });
 
         // 3. User Lookup
-        dbTurso.execute.mockResolvedValueOnce({
+        db.execute.mockResolvedValueOnce({
             rows: [{ id: 1, rol: 'admin' }]
         });
 
         // 4. Update RT (Revocation of old)
-        dbTurso.execute.mockResolvedValueOnce({});
+        db.execute.mockResolvedValueOnce({});
 
         // 5. Insert New Session & RT
-        dbTurso.execute.mockResolvedValue({});
+        db.execute.mockResolvedValue({});
 
         await oauthController.token(mockReq, mockRes);
 

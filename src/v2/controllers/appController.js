@@ -14,7 +14,7 @@
 
 import jwt from "jsonwebtoken";
 import { v4 as uuidv4 } from "uuid";
-import dbTurso from "../../database/db-sqlite.js";
+import db from "../../database/db-sqlite.js";
 
 const SECRET_APP_KEY = process.env.SECRET_APP_KEY; // secret para firmar el token
 const APPKEY_INICIAL = process.env.APPKEY_INICIAL; // token inicial para registrar la app
@@ -55,7 +55,7 @@ const appController = {
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             `;
 
-            await dbTurso.execute({
+            await db.execute({
                 sql: query,
                 args: [
                     nuevoAppId,
@@ -109,7 +109,7 @@ const appController = {
                 `;
 
                 try {
-                    await dbTurso.execute({
+                    await db.execute({
                         sql: query,
                         args: [nuevoToken, decoded.app_id]
                     });
@@ -174,7 +174,7 @@ const appController = {
             let dbError = null;
 
             try {
-                await dbTurso.execute({ sql: 'SELECT 1 as test' });
+                await db.execute({ sql: 'SELECT 1 as test' });
             } catch (error) {
                 dbStatus = 'ERROR';
                 dbError = error.message;

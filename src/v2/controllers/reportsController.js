@@ -8,7 +8,7 @@
  * Optimizado para consultas de alto volumen (lotes de impresión).
  */
 
-import dbTurso from "../../database/db-sqlite.js";
+import db from "../../database/db-sqlite.js";
 import { startOfMonth, endOfMonth, subMonths, format, parseISO } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { nowDate } from '../../utils/timezone.js';
@@ -84,7 +84,7 @@ const ReportsController = {
             // JOIN adicional para obtener lectura anterior (optimización: hacerlo en subquery o lógica JS)
             // Dado que SQLite/Turso puede ser limitado, haremos un post-proceso eficiente.
 
-            const result = await dbTurso.execute({ sql: query, args: params });
+            const result = await db.execute({ sql: query, args: params });
             const facturas = result.rows;
 
             // 2. Obtener deuda acumulada para estos clientes
@@ -121,7 +121,7 @@ const ReportsController = {
                     GROUP BY f.cliente_id
                 `;
 
-                const deudaResult = await dbTurso.execute({
+                const deudaResult = await db.execute({
                     sql: deudaAnteriorQuery,
                     args: [...clientesIds, mes]
                 });
@@ -157,7 +157,7 @@ const ReportsController = {
                 `;
 
                 try {
-                    const historyResult = await dbTurso.execute({
+                    const historyResult = await db.execute({
                         sql: historyByClienteQuery,
                         args: [...clientesIds, startHistoryDate, mes]
                     });
@@ -340,7 +340,7 @@ const ReportsController = {
                 pagadoresRes,
                 recaudacionCajaRes
             ] = await Promise.all([
-                dbTurso.execute({
+                db.execute({
                     sql: `
                         SELECT
                             COUNT(*) AS total_facturas,
@@ -354,7 +354,7 @@ const ReportsController = {
                     `,
                     args: argsFacturas
                 }),
-                dbTurso.execute({
+                db.execute({
                     sql: `
                         SELECT
                             COALESCE(SUM(COALESCE(f.total, 0) - COALESCE(f.saldo_pendiente, 0)), 0) AS total_recaudado_facturas
@@ -364,7 +364,7 @@ const ReportsController = {
                     `,
                     args: argsFacturas
                 }),
-                dbTurso.execute({
+                db.execute({
                     sql: `
                         SELECT
                             COALESCE(SUM(p.monto), 0) AS total_recaudado,
@@ -377,7 +377,7 @@ const ReportsController = {
                     `,
                     args: argsPagos
                 }),
-                dbTurso.execute({
+                db.execute({
                     sql: `
                         SELECT
                             p.metodo_pago,
@@ -392,7 +392,7 @@ const ReportsController = {
                     `,
                     args: argsPagos
                 }),
-                dbTurso.execute({
+                db.execute({
                     sql: `
                         SELECT
                             f.estado,
@@ -407,7 +407,7 @@ const ReportsController = {
                     `,
                     args: argsFacturas
                 }),
-                dbTurso.execute({
+                db.execute({
                     sql: `
                         SELECT
                             ${usarPeriodoFacturado ? 'l.periodo' : "strftime('%Y-%m', f.fecha_emision)"} AS periodo,
@@ -421,7 +421,7 @@ const ReportsController = {
                     `,
                     args: argsFacturas
                 }),
-                dbTurso.execute({
+                db.execute({
                     sql: `
                         SELECT
                             ${usarPeriodoFacturado ? 'l.periodo' : "strftime('%Y-%m', f.fecha_emision)"} AS periodo,
@@ -434,7 +434,7 @@ const ReportsController = {
                     `,
                     args: argsFacturas
                 }),
-                dbTurso.execute({
+                db.execute({
                     sql: `
                         SELECT
                             c.id AS cliente_id,
@@ -453,7 +453,7 @@ const ReportsController = {
                     `,
                     args: argsFacturas
                 }),
-                dbTurso.execute({
+                db.execute({
                     sql: `
                         SELECT
                             c.id AS cliente_id,
@@ -480,7 +480,7 @@ const ReportsController = {
                 // Recaudación REAL por mes de pago (flujo de caja): agrupa por la fecha
                 // en que entró el dinero (p.fecha_pago), independiente del periodo de la
                 // deuda. Incluye TODOS los pagos (también parcialidades de convenio).
-                dbTurso.execute({
+                db.execute({
                     sql: `
                         SELECT
                             strftime('%Y-%m', p.fecha_pago) AS mes_pago,
@@ -656,7 +656,7 @@ const ReportsController = {
                 WHERE saldo_pendiente > 0
             `;
 
-            const resumenRes = await dbTurso.execute({ sql: resumenQuery, args: [] });
+            const resumenRes = await db.execute({ sql: resumenQuery, args: [] });
             const resumen = resumenRes.rows[0];
 
             // 2. Top Deudores (Top 10)
@@ -675,7 +675,7 @@ const ReportsController = {
                 ORDER BY deuda_total DESC
                 LIMIT 10
             `;
-            const topDeudoresRes = await dbTurso.execute({ sql: topDeudoresQuery, args: [] });
+            const topDeudoresRes = await db.execute({ sql: topDeudoresQuery, args: [] });
 
             // 3. Antigüedad de la Deuda (Buckets)
             // Calculamos en JS o SQL. SQL en SQLite es verboso pero posible.
@@ -693,7 +693,7 @@ const ReportsController = {
                 WHERE saldo_pendiente > 0 AND estado = 'Vencida'
                 GROUP BY 1
             `;
-            const antiguedadRes = await dbTurso.execute({ sql: antiguedadQuery, args: [hoyLocal, hoyLocal, hoyLocal] });
+            const antiguedadRes = await db.execute({ sql: antiguedadQuery, args: [hoyLocal, hoyLocal, hoyLocal] });
 
             // 4. Operatividad (Cortes/Reconexiones del mes actual)
             const inicioMes = new Date().toISOString().slice(0, 7) + '-01';
@@ -703,7 +703,7 @@ const ReportsController = {
                     SUM(CASE WHEN fecha_reconexion >= ? THEN 1 ELSE 0 END) as reconexiones_mes
                 FROM cortes_servicio
             `;
-            const operatividadRes = await dbTurso.execute({ sql: operatividadQuery, args: [inicioMes, inicioMes] });
+            const operatividadRes = await db.execute({ sql: operatividadQuery, args: [inicioMes, inicioMes] });
 
             res.json({
                 resumen: {
@@ -783,7 +783,7 @@ const ReportsController = {
                 consumoPorRutaRes,
                 clientesUnicosRes
             ] = await Promise.all([
-                dbTurso.execute({
+                db.execute({
                     sql: `
                         SELECT
                             COUNT(f.id) AS total_recibos,
@@ -795,7 +795,7 @@ const ReportsController = {
                     `,
                     args: [inicioPeriodo, finPeriodo]
                 }),
-                dbTurso.execute({
+                db.execute({
                     sql: `
                         SELECT
                             l.periodo,
@@ -810,7 +810,7 @@ const ReportsController = {
                     `,
                     args: [inicioPeriodo, finPeriodo]
                 }),
-                dbTurso.execute({
+                db.execute({
                     sql: `
                         SELECT
                             c.id AS cliente_id,
@@ -829,7 +829,7 @@ const ReportsController = {
                     `,
                     args: [inicioPeriodo, finPeriodo]
                 }),
-                dbTurso.execute({
+                db.execute({
                     sql: `
                         SELECT
                             c.id AS cliente_id,
@@ -849,7 +849,7 @@ const ReportsController = {
                     `,
                     args: [inicioPeriodo, finPeriodo]
                 }),
-                dbTurso.execute({
+                db.execute({
                     sql: `
                         SELECT
                             COALESCE(r.id, 0) AS ruta_id,
@@ -866,7 +866,7 @@ const ReportsController = {
                     `,
                     args: [inicioPeriodo, finPeriodo]
                 }),
-                dbTurso.execute({
+                db.execute({
                     sql: `
                         SELECT COUNT(DISTINCT f.cliente_id) AS total_clientes
                         FROM facturas f
@@ -1042,7 +1042,7 @@ const ReportsController = {
 
             query += ` ORDER BY c.ciudad, c.nombre`;
 
-            const result = await dbTurso.execute({ sql: query, args: params });
+            const result = await db.execute({ sql: query, args: params });
 
             // Agrupación por Localidad
             const porLocalidad = {};

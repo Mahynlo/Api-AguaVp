@@ -1,7 +1,7 @@
 
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import dbTurso from "../../database/db-sqlite.js";
+import db from "../../database/db-sqlite.js";
 import { v4 as uuidv4 } from 'uuid';
 
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -36,7 +36,7 @@ const OAuthController = {
             if (req.appInstancia) {
                 appData = req.appInstancia;
             } else {
-                const appResult = await dbTurso.execute({
+                const appResult = await db.execute({
                     sql: "SELECT * FROM apps WHERE app_id = ? AND activo = 1",
                     args: [appId]
                 });
@@ -70,7 +70,7 @@ async function handlePasswordGrant(req, res, appData) {
     }
 
     // Verificar usuario
-    const userResult = await dbTurso.execute({
+    const userResult = await db.execute({
         sql: "SELECT * FROM usuarios WHERE correo = ?",
         args: [username]
     });
@@ -107,7 +107,7 @@ async function handleRefreshTokenGrant(req, res, appData) {
     }
 
     // Buscar refresh token valido
-    const rtResult = await dbTurso.execute({
+    const rtResult = await db.execute({
         sql: "SELECT * FROM refresh_tokens WHERE token = ? AND revocado = 0",
         args: [refresh_token]
     });
@@ -128,7 +128,7 @@ async function handleRefreshTokenGrant(req, res, appData) {
     // Pero en storedRt guardamos app_id fk (integer). appData puede ser q venga parcial.
     // Vamos a asumir validación laxa o consultar ID.
     // Consulta app interna
-    const appInternalResult = await dbTurso.execute({
+    const appInternalResult = await db.execute({
         sql: "SELECT id FROM apps WHERE app_id = ?",
         args: [appData.app_id || appData.id] // appData.id podria ser text en appKeyMiddleware... wait middleware returns {id: app_id text, nombre...}
     });
@@ -141,14 +141,14 @@ async function handleRefreshTokenGrant(req, res, appData) {
     // Simplification: If we trust the refresh token is valid and unrevoked, we can issue new tokens.
     // Ideally we match the client binding.
 
-    const usuarioResult = await dbTurso.execute({
+    const usuarioResult = await db.execute({
         sql: "SELECT * FROM usuarios WHERE id = ?",
         args: [storedRt.usuario_id]
     });
     const usuario = usuarioResult.rows[0];
 
     // Revocar el refresh token usado (Rotation)
-    await dbTurso.execute({
+    await db.execute({
         sql: "UPDATE refresh_tokens SET revocado = 1, revocado_en = datetime('now'), razon_revocacion = 'Rotation' WHERE id = ?",
         args: [storedRt.id]
     });
@@ -172,7 +172,7 @@ async function generateTokens(usuario, appData, scope) {
     if (appData) {
         // Si appData viene de middleware, id es app_id text.
         // Consultar PK
-        const q = await dbTurso.execute({
+        const q = await db.execute({
             sql: "SELECT id FROM apps WHERE app_id = ?",
             args: [appData.id || appData.app_id]
         });
@@ -190,7 +190,7 @@ async function generateTokens(usuario, appData, scope) {
 
     // Guardar Sesión (Legacy/Hybrid support)
     // Vinculamos el access token a la sesion para que authMiddleware funcione
-    await dbTurso.execute({
+    await db.execute({
         sql: `INSERT INTO sesiones (usuario_id, token, app_id, direccion_ip, dispositivo, tipo_sesion) 
               VALUES (?, ?, ?, ?, ?, 'oauth')`,
         args: [usuario.id, accessToken, appPk, '::1', 'OAuth Client']
@@ -201,7 +201,7 @@ async function generateTokens(usuario, appData, scope) {
     const rtExpireDate = new Date();
     rtExpireDate.setDate(rtExpireDate.getDate() + REFRESH_TOKEN_EXPIRES_DAYS);
 
-    await dbTurso.execute({
+    await db.execute({
         sql: `INSERT INTO refresh_tokens (token, usuario_id, app_id, expira_en) VALUES (?, ?, ?, ?)`,
         args: [refreshToken, usuario.id, appPk, rtExpireDate.toISOString()]
     });

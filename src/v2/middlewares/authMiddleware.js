@@ -20,7 +20,7 @@
  */
 
 import jwt from 'jsonwebtoken';
-import dbTurso from "../../database/db-sqlite.js";
+import db from "../../database/db-sqlite.js";
 import { userHasPermission } from '../services/permissionsService.js';
 
 async function authMiddleware(req, res, next) {
@@ -35,7 +35,7 @@ async function authMiddleware(req, res, next) {
 
     try {
         // 1. Verificar si el token está revocado explícitamente
-        const revokeCheck = await dbTurso.execute({
+        const revokeCheck = await db.execute({
             sql: `SELECT id FROM tokens_revocados WHERE token = ? LIMIT 1`,
             args: [token]
         });
@@ -49,7 +49,7 @@ async function authMiddleware(req, res, next) {
 
         // 2. Verifica si el token es válido y está activo en la base de datos (Legacy Session Check)
         const query = `SELECT * FROM sesiones WHERE token = ? AND activo = 1`;
-        const result = await dbTurso.execute({
+        const result = await db.execute({
             sql: query,
             args: [token]
         });
@@ -79,7 +79,7 @@ async function authMiddleware(req, res, next) {
         //    - Un logout/revocación DESPUÉS del login actual sí invalide la sesión activa.
         //    Los tokens revocados con razon_revocacion = 'rotation' son parte del flujo normal
         //    y NO deben invalidar la sesión activa.
-        const refreshCheck = await dbTurso.execute({
+        const refreshCheck = await db.execute({
             sql: `
                 SELECT id 
                 FROM refresh_tokens 
@@ -109,7 +109,7 @@ async function authMiddleware(req, res, next) {
         };
 
         // Actualizar ultimo_uso de la sesión en cada request (fire-and-forget, sin bloquear)
-        dbTurso.execute({
+        db.execute({
             sql: `UPDATE sesiones SET ultimo_uso = datetime('now') WHERE token = ?`,
             args: [token]
         }).catch(err => console.warn('[authMiddleware] ultimo_uso update failed:', err.message));

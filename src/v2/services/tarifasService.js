@@ -1,4 +1,4 @@
-import dbTurso from '../../database/db-sqlite.js';
+import db from '../../database/db-sqlite.js';
 import { nowDate } from '../../utils/timezone.js';
 
 function serviceError(message, status) {
@@ -40,7 +40,7 @@ function validarRangos(rangos) {
 }
 
 export async function registrarTarifa({ nombre, descripcion, fecha_inicio, fecha_fin }, usuarioId) {
-    const result = await dbTurso.execute({
+    const result = await db.execute({
         sql: `INSERT INTO tarifas (nombre, descripcion, fecha_inicio, fecha_fin, modificado_por, fecha_creacion) VALUES (?, ?, ?, ?, ?, datetime('now'))`,
         args: [nombre, descripcion, fecha_inicio, fecha_fin || null, usuarioId]
     });
@@ -52,11 +52,11 @@ export async function registrarRangosTarifa(tarifa_id, rangos) {
     const error = validarRangos(rangos);
     if (error) throw serviceError(error, 400);
 
-    const exists = await dbTurso.execute({ sql: `SELECT id FROM tarifas WHERE id = ?`, args: [tarifa_id] });
+    const exists = await db.execute({ sql: `SELECT id FROM tarifas WHERE id = ?`, args: [tarifa_id] });
     if (!exists.rows.length) throw serviceError('Tarifa no encontrada', 404);
 
     for (const { consumo_min, consumo_max, precio_por_m3 } of rangos) {
-        await dbTurso.execute({ sql: `INSERT INTO rangos_tarifas (tarifa_id, consumo_min, consumo_max, precio_por_m3) VALUES (?, ?, ?, ?)`, args: [tarifa_id, consumo_min, consumo_max ?? null, precio_por_m3] });
+        await db.execute({ sql: `INSERT INTO rangos_tarifas (tarifa_id, consumo_min, consumo_max, precio_por_m3) VALUES (?, ?, ?, ?)`, args: [tarifa_id, consumo_min, consumo_max ?? null, precio_por_m3] });
     }
 }
 
@@ -71,15 +71,15 @@ export async function obtenerTodasLasTarifas({ page, limit, search } = {}) {
     const where = conditions.length ? ' WHERE ' + conditions.join(' AND ') : '';
 
     const [countResult, dataResult] = await Promise.all([
-        dbTurso.execute({ sql: `SELECT COUNT(*) as total FROM tarifas t${where}`, args }),
-        dbTurso.execute({ sql: `SELECT * FROM tarifas t${where} ORDER BY t.fecha_creacion DESC LIMIT ? OFFSET ?`, args: [...args, limitNum, offset] })
+        db.execute({ sql: `SELECT COUNT(*) as total FROM tarifas t${where}`, args }),
+        db.execute({ sql: `SELECT * FROM tarifas t${where} ORDER BY t.fecha_creacion DESC LIMIT ? OFFSET ?`, args: [...args, limitNum, offset] })
     ]);
 
     const totalItems = Number(countResult.rows[0].total);
     if (!dataResult.rows.length) return { tarifas: [], pagination: { total: totalItems, page: pageNum, limit: limitNum, totalPages: Math.ceil(totalItems / limitNum) } };
 
     const ids = dataResult.rows.map(r => r.id);
-    const rangosResult = await dbTurso.execute({ sql: `SELECT * FROM rangos_tarifas WHERE tarifa_id IN (${ids.map(() => '?').join(',')}) ORDER BY tarifa_id, consumo_min ASC`, args: ids });
+    const rangosResult = await db.execute({ sql: `SELECT * FROM rangos_tarifas WHERE tarifa_id IN (${ids.map(() => '?').join(',')}) ORDER BY tarifa_id, consumo_min ASC`, args: ids });
 
     const rangosPor = {};
     rangosResult.rows.forEach(r => { const id = Number(r.tarifa_id); (rangosPor[id] = rangosPor[id] || []).push(mapRango(r)); });
@@ -94,14 +94,14 @@ export async function obtenerTodasLasTarifas({ page, limit, search } = {}) {
 }
 
 export async function obtenerHistorialTarifas() {
-    const result = await dbTurso.execute({ sql: `SELECT * FROM historial_tarifas ORDER BY fecha_cambio DESC` });
+    const result = await db.execute({ sql: `SELECT * FROM historial_tarifas ORDER BY fecha_cambio DESC` });
     return result.rows.map(r => ({ id: Number(r.id), tarifa_id: r.tarifa_id ? Number(r.tarifa_id) : null, rango_id: r.rango_id ? Number(r.rango_id) : null, fecha_cambio: r.fecha_cambio, consumo_min: r.consumo_min ? Number(r.consumo_min) : null, consumo_max: r.consumo_max ? Number(r.consumo_max) : null, precio_anterior: r.precio_anterior ? Number(r.precio_anterior) : null, precio_nuevo: Number(r.precio_nuevo) }));
 }
 
 export async function modificarTarifa(id, { nombre, descripcion, fecha_inicio, fecha_fin }, usuarioId) {
-    const check = await dbTurso.execute({ sql: `SELECT * FROM tarifas WHERE id = ?`, args: [id] });
+    const check = await db.execute({ sql: `SELECT * FROM tarifas WHERE id = ?`, args: [id] });
     if (!check.rows.length) throw serviceError('Tarifa no encontrada', 404);
-    await dbTurso.execute({ sql: `UPDATE tarifas SET nombre = ?, descripcion = ?, fecha_inicio = ?, fecha_fin = ?, modificado_por = ? WHERE id = ?`, args: [nombre, descripcion, fecha_inicio, fecha_fin || null, usuarioId, id] });
+    await db.execute({ sql: `UPDATE tarifas SET nombre = ?, descripcion = ?, fecha_inicio = ?, fecha_fin = ?, modificado_por = ? WHERE id = ?`, args: [nombre, descripcion, fecha_inicio, fecha_fin || null, usuarioId, id] });
     return { nombre };
 }
 
@@ -118,23 +118,23 @@ export async function modificarRangosTarifa(tarifa_id, rangos) {
         }
     }
 
-    const exists = await dbTurso.execute({ sql: `SELECT id FROM tarifas WHERE id = ?`, args: [tarifa_id] });
+    const exists = await db.execute({ sql: `SELECT id FROM tarifas WHERE id = ?`, args: [tarifa_id] });
     if (!exists.rows.length) throw serviceError('Tarifa no encontrada', 404);
 
     for (const { id, consumo_min, consumo_max, precio_por_m3 } of rangos) {
         if (id != null) {
-            await dbTurso.execute({ sql: `UPDATE rangos_tarifas SET consumo_min = ?, consumo_max = ?, precio_por_m3 = ? WHERE id = ? AND tarifa_id = ?`, args: [consumo_min, consumo_max ?? null, precio_por_m3, id, tarifa_id] });
+            await db.execute({ sql: `UPDATE rangos_tarifas SET consumo_min = ?, consumo_max = ?, precio_por_m3 = ? WHERE id = ? AND tarifa_id = ?`, args: [consumo_min, consumo_max ?? null, precio_por_m3, id, tarifa_id] });
         } else {
-            await dbTurso.execute({ sql: `INSERT INTO rangos_tarifas (tarifa_id, consumo_min, consumo_max, precio_por_m3) VALUES (?, ?, ?, ?)`, args: [tarifa_id, consumo_min, consumo_max ?? null, precio_por_m3] });
+            await db.execute({ sql: `INSERT INTO rangos_tarifas (tarifa_id, consumo_min, consumo_max, precio_por_m3) VALUES (?, ?, ?, ?)`, args: [tarifa_id, consumo_min, consumo_max ?? null, precio_por_m3] });
         }
     }
 }
 
 export async function obtenerTarifaPorId(id) {
     const [tarifaResult, rangosResult, clientesResult] = await Promise.all([
-        dbTurso.execute({ sql: `SELECT id, nombre, descripcion, fecha_inicio, fecha_fin, modificado_por, fecha_creacion FROM tarifas WHERE id = ?`, args: [id] }),
-        dbTurso.execute({ sql: `SELECT id, consumo_min, consumo_max, precio_por_m3 FROM rangos_tarifas WHERE tarifa_id = ? ORDER BY consumo_min ASC`, args: [id] }),
-        dbTurso.execute({ sql: `SELECT id, nombre, ciudad, estado_cliente FROM clientes WHERE tarifa_id = ?`, args: [id] })
+        db.execute({ sql: `SELECT id, nombre, descripcion, fecha_inicio, fecha_fin, modificado_por, fecha_creacion FROM tarifas WHERE id = ?`, args: [id] }),
+        db.execute({ sql: `SELECT id, consumo_min, consumo_max, precio_por_m3 FROM rangos_tarifas WHERE tarifa_id = ? ORDER BY consumo_min ASC`, args: [id] }),
+        db.execute({ sql: `SELECT id, nombre, ciudad, estado_cliente FROM clientes WHERE tarifa_id = ?`, args: [id] })
     ]);
 
     if (!tarifaResult.rows.length) throw serviceError('Tarifa no encontrada', 404);
@@ -149,23 +149,23 @@ export async function obtenerTarifaPorId(id) {
 }
 
 export async function obtenerTarifasActivas() {
-    const result = await dbTurso.execute({ sql: `SELECT t.id, t.nombre, t.descripcion, t.fecha_inicio, t.fecha_fin, COUNT(c.id) as total_clientes FROM tarifas t LEFT JOIN clientes c ON t.id = c.tarifa_id WHERE t.fecha_inicio <= date('now') AND (t.fecha_fin IS NULL OR t.fecha_fin >= date('now')) GROUP BY t.id, t.nombre, t.descripcion, t.fecha_inicio, t.fecha_fin ORDER BY t.fecha_inicio DESC` });
+    const result = await db.execute({ sql: `SELECT t.id, t.nombre, t.descripcion, t.fecha_inicio, t.fecha_fin, COUNT(c.id) as total_clientes FROM tarifas t LEFT JOIN clientes c ON t.id = c.tarifa_id WHERE t.fecha_inicio <= date('now') AND (t.fecha_fin IS NULL OR t.fecha_fin >= date('now')) GROUP BY t.id, t.nombre, t.descripcion, t.fecha_inicio, t.fecha_fin ORDER BY t.fecha_inicio DESC` });
 
     const tarifas = result.rows.map(r => ({ id: Number(r.id), nombre: r.nombre, descripcion: r.descripcion, fecha_inicio: r.fecha_inicio, fecha_fin: r.fecha_fin, total_clientes: Number(r.total_clientes) }));
 
     return await Promise.all(tarifas.map(async (tarifa) => {
-        const rangosResult = await dbTurso.execute({ sql: `SELECT consumo_min, consumo_max, precio_por_m3 FROM rangos_tarifas WHERE tarifa_id = ? ORDER BY consumo_min ASC`, args: [tarifa.id] });
+        const rangosResult = await db.execute({ sql: `SELECT consumo_min, consumo_max, precio_por_m3 FROM rangos_tarifas WHERE tarifa_id = ? ORDER BY consumo_min ASC`, args: [tarifa.id] });
         return { ...tarifa, rangos: rangosResult.rows.map(r => ({ consumo_min: Number(r.consumo_min), consumo_max: r.consumo_max ? Number(r.consumo_max) : null, precio_por_m3: Number(r.precio_por_m3) })) };
     }));
 }
 
 export async function obtenerHistorialTarifa(id) {
-    const tarifaResult = await dbTurso.execute({ sql: `SELECT id, nombre FROM tarifas WHERE id = ?`, args: [id] });
+    const tarifaResult = await db.execute({ sql: `SELECT id, nombre FROM tarifas WHERE id = ?`, args: [id] });
     if (!tarifaResult.rows.length) throw serviceError('Tarifa no encontrada', 404);
 
     const [historialResult, rangosResult] = await Promise.all([
-        dbTurso.execute({ sql: `SELECT h.id, h.fecha_cambio, h.consumo_min, h.consumo_max, h.precio_anterior, h.precio_nuevo, r.id as rango_id FROM historial_tarifas h LEFT JOIN rangos_tarifas r ON h.rango_id = r.id WHERE h.tarifa_id = ? ORDER BY h.fecha_cambio DESC`, args: [id] }),
-        dbTurso.execute({ sql: `SELECT id, consumo_min, consumo_max, precio_por_m3 FROM rangos_tarifas WHERE tarifa_id = ? ORDER BY consumo_min ASC`, args: [id] })
+        db.execute({ sql: `SELECT h.id, h.fecha_cambio, h.consumo_min, h.consumo_max, h.precio_anterior, h.precio_nuevo, r.id as rango_id FROM historial_tarifas h LEFT JOIN rangos_tarifas r ON h.rango_id = r.id WHERE h.tarifa_id = ? ORDER BY h.fecha_cambio DESC`, args: [id] }),
+        db.execute({ sql: `SELECT id, consumo_min, consumo_max, precio_por_m3 FROM rangos_tarifas WHERE tarifa_id = ? ORDER BY consumo_min ASC`, args: [id] })
     ]);
 
     return {
@@ -177,15 +177,15 @@ export async function obtenerHistorialTarifa(id) {
 
 export async function estadisticasTarifas() {
     const [totalR, estadoR, distribucionR, sinTarifaR, rangosR, promedioR, preciosR, cambiosR, masUsadaR] = await Promise.all([
-        dbTurso.execute({ sql: `SELECT COUNT(*) as total FROM tarifas` }),
-        dbTurso.execute({ sql: `SELECT COUNT(CASE WHEN fecha_inicio <= date('now') AND (fecha_fin IS NULL OR fecha_fin >= date('now')) THEN 1 END) as activas, COUNT(CASE WHEN fecha_inicio > date('now') OR (fecha_fin IS NOT NULL AND fecha_fin < date('now')) THEN 1 END) as inactivas FROM tarifas` }),
-        dbTurso.execute({ sql: `SELECT t.id, t.nombre, COUNT(c.id) as total_clientes FROM tarifas t LEFT JOIN clientes c ON t.id = c.tarifa_id GROUP BY t.id, t.nombre ORDER BY total_clientes DESC` }),
-        dbTurso.execute({ sql: `SELECT COUNT(*) as total FROM clientes WHERE tarifa_id IS NULL` }),
-        dbTurso.execute({ sql: `SELECT COUNT(*) as total FROM rangos_tarifas` }),
-        dbTurso.execute({ sql: `SELECT AVG(cantidad_rangos) as promedio FROM (SELECT tarifa_id, COUNT(*) as cantidad_rangos FROM rangos_tarifas GROUP BY tarifa_id)` }),
-        dbTurso.execute({ sql: `SELECT MIN(precio_por_m3) as precio_minimo, MAX(precio_por_m3) as precio_maximo, AVG(precio_por_m3) as precio_promedio FROM rangos_tarifas` }),
-        dbTurso.execute({ sql: `SELECT COUNT(*) as total FROM historial_tarifas WHERE fecha_cambio >= date('now', '-30 days')` }),
-        dbTurso.execute({ sql: `SELECT t.id, t.nombre, COUNT(c.id) as clientes FROM tarifas t INNER JOIN clientes c ON t.id = c.tarifa_id GROUP BY t.id, t.nombre ORDER BY clientes DESC LIMIT 1` })
+        db.execute({ sql: `SELECT COUNT(*) as total FROM tarifas` }),
+        db.execute({ sql: `SELECT COUNT(CASE WHEN fecha_inicio <= date('now') AND (fecha_fin IS NULL OR fecha_fin >= date('now')) THEN 1 END) as activas, COUNT(CASE WHEN fecha_inicio > date('now') OR (fecha_fin IS NOT NULL AND fecha_fin < date('now')) THEN 1 END) as inactivas FROM tarifas` }),
+        db.execute({ sql: `SELECT t.id, t.nombre, COUNT(c.id) as total_clientes FROM tarifas t LEFT JOIN clientes c ON t.id = c.tarifa_id GROUP BY t.id, t.nombre ORDER BY total_clientes DESC` }),
+        db.execute({ sql: `SELECT COUNT(*) as total FROM clientes WHERE tarifa_id IS NULL` }),
+        db.execute({ sql: `SELECT COUNT(*) as total FROM rangos_tarifas` }),
+        db.execute({ sql: `SELECT AVG(cantidad_rangos) as promedio FROM (SELECT tarifa_id, COUNT(*) as cantidad_rangos FROM rangos_tarifas GROUP BY tarifa_id)` }),
+        db.execute({ sql: `SELECT MIN(precio_por_m3) as precio_minimo, MAX(precio_por_m3) as precio_maximo, AVG(precio_por_m3) as precio_promedio FROM rangos_tarifas` }),
+        db.execute({ sql: `SELECT COUNT(*) as total FROM historial_tarifas WHERE fecha_cambio >= date('now', '-30 days')` }),
+        db.execute({ sql: `SELECT t.id, t.nombre, COUNT(c.id) as clientes FROM tarifas t INNER JOIN clientes c ON t.id = c.tarifa_id GROUP BY t.id, t.nombre ORDER BY clientes DESC LIMIT 1` })
     ]);
 
     const estados = estadoR.rows[0];

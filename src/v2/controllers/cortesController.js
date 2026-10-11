@@ -7,7 +7,7 @@
  * Gestiona la detección de candidatos a corte y la ejecución de órdenes.
  */
 
-import dbTurso, { sqlite } from "../../database/db-sqlite.js";
+import db, { sqlite } from "../../database/db-sqlite.js";
 
 const cortesController = {
 
@@ -21,7 +21,7 @@ const cortesController = {
         try {
             // 1. Obtener Configuración Activa
             const configQuery = `SELECT * FROM configuracion_servicio ORDER BY id DESC LIMIT 1`;
-            const configResult = await dbTurso.execute({ sql: configQuery, args: [] });
+            const configResult = await db.execute({ sql: configQuery, args: [] });
 
             // Valores por defecto si no hay config
             const umbralCorte = configResult.rows.length > 0 ? configResult.rows[0].facturas_para_corte : 4;
@@ -68,7 +68,7 @@ const cortesController = {
                     facturas_vencidas DESC
             `;
 
-            const result = await dbTurso.execute({ sql: query, args: [diasGracia, umbralCorte] });
+            const result = await db.execute({ sql: query, args: [diasGracia, umbralCorte] });
 
             // 3. Formatear respuesta
             const candidatos = result.rows.map(row => {
@@ -143,7 +143,7 @@ const cortesController = {
 
             // 1. Obtener datos del medidor y cliente
             const medidorQuery = `SELECT cliente_id, estado_servicio FROM medidores WHERE id = ?`;
-            const medidorRes = await dbTurso.execute({ sql: medidorQuery, args: [medidor_id] });
+            const medidorRes = await db.execute({ sql: medidorQuery, args: [medidor_id] });
 
             if (medidorRes.rows.length === 0) {
                 return res.status(404).json({ error: "Medidor no encontrado" });
@@ -199,7 +199,7 @@ const cortesController = {
 
             // 1. Validar Estado Actual
             const checkQuery = `SELECT * FROM medidores WHERE id = ?`;
-            const checkRes = await dbTurso.execute({ sql: checkQuery, args: [medidor_id] });
+            const checkRes = await db.execute({ sql: checkQuery, args: [medidor_id] });
             if (checkRes.rows.length === 0) {
                 return res.status(404).json({ error: "Medidor no encontrado" });
             }
@@ -219,7 +219,7 @@ const cortesController = {
                 WHERE l.medidor_id = ?
                   AND f.estado != 'Pagado'
             `;
-            const deudaRes = await dbTurso.execute({ sql: deudaQuery, args: [medidor_id] });
+            const deudaRes = await db.execute({ sql: deudaQuery, args: [medidor_id] });
             const deudaTotal = Number(deudaRes.rows[0]?.total_deuda || 0);
 
             // 3. Verificar Convenio Activo
@@ -227,7 +227,7 @@ const cortesController = {
                 SELECT * FROM convenios_pago 
                 WHERE medidor_id = ? AND estado = 'Activo'
             `;
-            const convenioRes = await dbTurso.execute({ sql: convenioQuery, args: [medidor_id] });
+            const convenioRes = await db.execute({ sql: convenioQuery, args: [medidor_id] });
             const tieneConvenio = convenioRes.rows.length > 0;
 
             // REGLA: Solo reconectar si Deuda es 0 O Tiene Convenio
@@ -249,7 +249,7 @@ const cortesController = {
                 SET fecha_reconexion = datetime('now'), reconectado_por = ?, observaciones = ?
                 WHERE medidor_id = ? AND fecha_reconexion IS NULL
             `;
-            await dbTurso.execute({
+            await db.execute({
                 sql: closeCorte,
                 args: [reconectado_por, observaciones || 'Reconexión autorizada', medidor_id]
             });
@@ -257,7 +257,7 @@ const cortesController = {
             // Actualizar medidor
             // El estado 'En Convenio' ya no se usa en el medidor, vuelve a 'Activo'
             const nuevoEstado = 'Activo';
-            await dbTurso.execute({
+            await db.execute({
                 sql: `UPDATE medidores SET estado_servicio = ? WHERE id = ?`,
                 args: [nuevoEstado, medidor_id]
             });

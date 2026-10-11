@@ -1,4 +1,4 @@
-import dbTurso from '../../database/db-sqlite.js';
+import db from '../../database/db-sqlite.js';
 
 const CACHE_TTL_MS = 30 * 1000;
 
@@ -18,7 +18,7 @@ export function clearRolePermissionCache(role) {
 }
 
 export async function getPermissionCatalog() {
-  const result = await dbTurso.execute({
+  const result = await db.execute({
     sql: `
       SELECT permission_key, module, action, description
       FROM permissions_catalog
@@ -40,7 +40,7 @@ export async function getRolePermissions(role) {
   const cached = rolePermissionsCache.get(normalizedRole);
   if (hasFresh(cached)) return cached.permissions;
 
-  const result = await dbTurso.execute({
+  const result = await db.execute({
     sql: `
       SELECT rp.permission_key
       FROM role_permissions rp
@@ -58,7 +58,7 @@ export async function getRolePermissions(role) {
 
 export async function getUserPermissionOverrides(userId) {
   const uid = Number(userId);
-  const result = await dbTurso.execute({
+  const result = await db.execute({
     sql: `
       SELECT upo.permission_key, upo.effect
       FROM user_permission_overrides upo
@@ -118,13 +118,13 @@ export async function setUserPermissionOverrides({ userId, updatedBy, overrides 
   const uid = Number(userId);
   const updater = Number(updatedBy);
 
-  await dbTurso.execute({
+  await db.execute({
     sql: `DELETE FROM user_permission_overrides WHERE user_id = ?`,
     args: [uid]
   });
 
   for (const item of overrides) {
-    await dbTurso.execute({
+    await db.execute({
       sql: `
         INSERT INTO user_permission_overrides (user_id, permission_key, effect, updated_by)
         VALUES (?, ?, ?, ?)

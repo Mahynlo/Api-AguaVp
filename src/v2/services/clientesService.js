@@ -1,4 +1,4 @@
-import dbTurso, { sqlite } from '../../database/db-sqlite.js';
+import db, { sqlite } from '../../database/db-sqlite.js';
 
 function serviceError(message, status) {
     const err = new Error(message);
@@ -11,7 +11,7 @@ function mapCliente(c) {
 }
 
 async function insertarHistorial(tabla, operacion, registroId, modificadoPor, cambios) {
-    await dbTurso.execute({ sql: `INSERT INTO historial_cambios (tabla, operacion, registro_id, modificado_por, cambios) VALUES (?, ?, ?, ?, ?)`, args: [tabla, operacion, registroId, modificadoPor, JSON.stringify(cambios)] });
+    await db.execute({ sql: `INSERT INTO historial_cambios (tabla, operacion, registro_id, modificado_por, cambios) VALUES (?, ?, ?, ?, ?)`, args: [tabla, operacion, registroId, modificadoPor, JSON.stringify(cambios)] });
 }
 
 export async function registrarCliente(datos, usuarioId) {
@@ -22,7 +22,7 @@ export async function registrarCliente(datos, usuarioId) {
         const match = safeNumeroPredio.match(/^(NG|MP|AD)-(\d+)$/);
         if (match) {
             const prefix = match[1];
-            const rows = await dbTurso.execute({ sql: `SELECT id, numero_predio FROM clientes WHERE numero_predio LIKE ?`, args: [`${prefix}-%`] });
+            const rows = await db.execute({ sql: `SELECT id, numero_predio FROM clientes WHERE numero_predio LIKE ?`, args: [`${prefix}-%`] });
             const dupe = rows.rows.find(r => {
                 if (!r.numero_predio) return false;
                 const m = r.numero_predio.toUpperCase().replace(/\s/g, '').match(/^(NG|MP|AD)-0*(\d+)$/);
@@ -31,20 +31,20 @@ export async function registrarCliente(datos, usuarioId) {
             });
             if (dupe) throw serviceError(`Ya existe un cliente registrado con el número de predio "${safeNumeroPredio}"`, 409);
         } else {
-            const dupe = await dbTurso.execute({ sql: `SELECT id FROM clientes WHERE numero_predio = ?`, args: [safeNumeroPredio] });
+            const dupe = await db.execute({ sql: `SELECT id FROM clientes WHERE numero_predio = ?`, args: [safeNumeroPredio] });
             if (dupe.rows.length > 0) throw serviceError(`Ya existe un cliente registrado con el número de predio "${safeNumeroPredio}"`, 409);
         }
     }
 
-    const dupeName = await dbTurso.execute({ sql: `SELECT id FROM clientes WHERE nombre = ? AND telefono = ?`, args: [nombre, telefono] });
+    const dupeName = await db.execute({ sql: `SELECT id FROM clientes WHERE nombre = ? AND telefono = ?`, args: [nombre, telefono] });
     if (dupeName.rows.length > 0) throw serviceError('Ya existe un cliente con ese nombre y teléfono', 409);
 
     if (tarifa_id) {
-        const tarifa = await dbTurso.execute({ sql: `SELECT * FROM tarifas WHERE id = ?`, args: [tarifa_id] });
+        const tarifa = await db.execute({ sql: `SELECT * FROM tarifas WHERE id = ?`, args: [tarifa_id] });
         if (!tarifa.rows.length) throw serviceError('La tarifa especificada no existe', 404);
     }
 
-    const insertResult = await dbTurso.execute({
+    const insertResult = await db.execute({
         sql: `INSERT INTO clientes (numero_predio, nombre, direccion, telefono, ciudad, correo, estado_cliente, tarifa_id, modificado_por) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [safeNumeroPredio, nombre, direccion, telefono, ciudad, correo, estado_cliente || 'Activo', tarifa_id || null, usuarioId]
     });
@@ -70,7 +70,7 @@ export async function obtenerClientes({ page, limit, search, ciudad, estado, est
 
     if (!hayPaginacion) {
         const sqlQuery = `${baseData} ${incluirEliminados ? "" : "WHERE c.estado_cliente != 'Eliminado'"} ORDER BY ${orderClause}`;
-        const result = await dbTurso.execute({ sql: sqlQuery });
+        const result = await db.execute({ sql: sqlQuery });
         return result.rows.map(mapCliente);
     }
 
@@ -96,8 +96,8 @@ export async function obtenerClientes({ page, limit, search, ciudad, estado, est
 
     const where = conditions.length ? ' WHERE ' + conditions.join(' AND ') : '';
     const [countResult, dataResult] = await Promise.all([
-        dbTurso.execute({ sql: `SELECT COUNT(*) as total FROM clientes c${where}`, args }),
-        dbTurso.execute({ sql: `${baseData}${where} ORDER BY ${orderClause} LIMIT ? OFFSET ?`, args: [...args, limitNum, offset] })
+        db.execute({ sql: `SELECT COUNT(*) as total FROM clientes c${where}`, args }),
+        db.execute({ sql: `${baseData}${where} ORDER BY ${orderClause} LIMIT ? OFFSET ?`, args: [...args, limitNum, offset] })
     ]);
 
     return { data: dataResult.rows.map(mapCliente), pagination: { total: Number(countResult.rows[0].total), page: pageNum, limit: limitNum, totalPages: Math.ceil(Number(countResult.rows[0].total) / limitNum) } };
@@ -106,7 +106,7 @@ export async function obtenerClientes({ page, limit, search, ciudad, estado, est
 export async function modificarCliente(clienteId, datos, usuarioId) {
     const { nombre, direccion, telefono, ciudad, correo, estado_cliente, tarifa_id, numero_predio, medidor_id, medidores_liberados } = datos;
 
-    const clienteResult = await dbTurso.execute({ sql: `SELECT * FROM clientes WHERE id = ?`, args: [clienteId] });
+    const clienteResult = await db.execute({ sql: `SELECT * FROM clientes WHERE id = ?`, args: [clienteId] });
     if (!clienteResult.rows.length) throw serviceError('Cliente no encontrado', 404);
     const prev = clienteResult.rows[0];
 
@@ -119,7 +119,7 @@ export async function modificarCliente(clienteId, datos, usuarioId) {
         const match = safeNumeroPredio.match(/^(NG|MP|AD)-(\d+)$/);
         if (match) {
             const prefix = match[1];
-            const rows = await dbTurso.execute({ sql: `SELECT id, numero_predio FROM clientes WHERE numero_predio LIKE ? AND id != ?`, args: [`${prefix}-%`, safeClienteId] });
+            const rows = await db.execute({ sql: `SELECT id, numero_predio FROM clientes WHERE numero_predio LIKE ? AND id != ?`, args: [`${prefix}-%`, safeClienteId] });
             const dupe = rows.rows.find(r => {
                 if (!r.numero_predio) return false;
                 const m = r.numero_predio.toUpperCase().replace(/\s/g, '').match(/^(NG|MP|AD)-0*(\d+)$/);
@@ -128,12 +128,12 @@ export async function modificarCliente(clienteId, datos, usuarioId) {
             });
             if (dupe) throw serviceError(`El número de predio "${safeNumeroPredio}" ya está asignado a otro cliente`, 409);
         } else {
-            const dupe = await dbTurso.execute({ sql: `SELECT id FROM clientes WHERE numero_predio = ? AND id != ?`, args: [safeNumeroPredio, safeClienteId] });
+            const dupe = await db.execute({ sql: `SELECT id FROM clientes WHERE numero_predio = ? AND id != ?`, args: [safeNumeroPredio, safeClienteId] });
             if (dupe.rows.length > 0) throw serviceError(`El número de predio "${safeNumeroPredio}" ya está asignado a otro cliente`, 409);
         }
     }
     if (safeTarifaId) {
-        const tarifa = await dbTurso.execute({ sql: `SELECT * FROM tarifas WHERE id = ?`, args: [safeTarifaId] });
+        const tarifa = await db.execute({ sql: `SELECT * FROM tarifas WHERE id = ?`, args: [safeTarifaId] });
         if (!tarifa.rows.length) throw serviceError('La tarifa especificada no existe', 404);
     }
 
@@ -224,8 +224,8 @@ export async function modificarCliente(clienteId, datos, usuarioId) {
 
 export async function asignarTarifa(clienteId, tarifa_id, usuarioId) {
     const [clienteResult, tarifaResult] = await Promise.all([
-        dbTurso.execute({ sql: `SELECT id, nombre, tarifa_id FROM clientes WHERE id = ?`, args: [clienteId] }),
-        dbTurso.execute({ sql: `SELECT id, nombre, descripcion FROM tarifas WHERE id = ?`, args: [tarifa_id] })
+        db.execute({ sql: `SELECT id, nombre, tarifa_id FROM clientes WHERE id = ?`, args: [clienteId] }),
+        db.execute({ sql: `SELECT id, nombre, descripcion FROM tarifas WHERE id = ?`, args: [tarifa_id] })
     ]);
 
     if (!clienteResult.rows.length) throw serviceError('Cliente no encontrado', 404);
@@ -237,7 +237,7 @@ export async function asignarTarifa(clienteId, tarifa_id, usuarioId) {
 
     if (tarifaAnterior === Number(tarifa_id)) throw serviceError('El cliente ya tiene esta tarifa asignada', 400);
 
-    await dbTurso.execute({ sql: `UPDATE clientes SET tarifa_id = ?, modificado_por = ? WHERE id = ?`, args: [tarifa_id, usuarioId, clienteId] });
+    await db.execute({ sql: `UPDATE clientes SET tarifa_id = ?, modificado_por = ? WHERE id = ?`, args: [tarifa_id, usuarioId, clienteId] });
     await insertarHistorial('clientes', 'UPDATE', clienteId, usuarioId, { tarifa_id: { antes: tarifaAnterior, despues: Number(tarifa_id) }, tarifa_nombre: { antes: null, despues: tarifa.nombre }, tarifa_descripcion: { antes: null, despues: tarifa.descripcion } });
 
     return { cliente_id: Number(clienteId), cliente_nombre: cliente.nombre, tarifa_anterior: tarifaAnterior, tarifa_nueva: Number(tarifa_id), tarifa_nombre: tarifa.nombre, tarifa_descripcion: tarifa.descripcion };
@@ -246,16 +246,16 @@ export async function asignarTarifa(clienteId, tarifa_id, usuarioId) {
 export async function estadisticasClientes() {
     const meses = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
     const [totalR, estadosR, ultMesR, porMesR, porCiudadR, porTarifaR, medidoresR, sinMedidoresR, anoActualR, activosR] = await Promise.all([
-        dbTurso.execute({ sql: `SELECT COUNT(*) as total FROM clientes` }),
-        dbTurso.execute({ sql: `SELECT estado_cliente, COUNT(*) as cantidad FROM clientes GROUP BY estado_cliente` }),
-        dbTurso.execute({ sql: `SELECT COUNT(*) as total FROM clientes WHERE fecha_creacion >= datetime('now', '-1 month')` }),
-        dbTurso.execute({ sql: `SELECT strftime('%Y-%m', fecha_creacion) as mes, COUNT(*) as cantidad FROM clientes WHERE fecha_creacion >= datetime('now', '-12 months') GROUP BY mes ORDER BY mes ASC` }),
-        dbTurso.execute({ sql: `SELECT ciudad, COUNT(*) as cantidad FROM clientes GROUP BY ciudad ORDER BY cantidad DESC` }),
-        dbTurso.execute({ sql: `SELECT t.nombre as tarifa_nombre, t.descripcion as tarifa_descripcion, COUNT(c.id) as cantidad_clientes FROM clientes c LEFT JOIN tarifas t ON c.tarifa_id = t.id GROUP BY t.id, t.nombre, t.descripcion ORDER BY cantidad_clientes DESC` }),
-        dbTurso.execute({ sql: `SELECT COUNT(DISTINCT c.id) as clientes_con_medidores, COUNT(m.id) as total_medidores_asignados FROM clientes c INNER JOIN medidores m ON c.id = m.cliente_id` }),
-        dbTurso.execute({ sql: `SELECT COUNT(*) as total FROM clientes c WHERE NOT EXISTS (SELECT 1 FROM medidores m WHERE m.cliente_id = c.id)` }),
-        dbTurso.execute({ sql: `SELECT strftime('%m', fecha_creacion) as mes_numero, COUNT(*) as cantidad FROM clientes WHERE strftime('%Y', fecha_creacion) = strftime('%Y', 'now') GROUP BY mes_numero ORDER BY mes_numero ASC` }),
-        dbTurso.execute({ sql: `SELECT CASE WHEN estado_cliente = 'Activo' THEN 'activos' ELSE 'inactivos' END as tipo, COUNT(*) as cantidad FROM clientes GROUP BY tipo` })
+        db.execute({ sql: `SELECT COUNT(*) as total FROM clientes` }),
+        db.execute({ sql: `SELECT estado_cliente, COUNT(*) as cantidad FROM clientes GROUP BY estado_cliente` }),
+        db.execute({ sql: `SELECT COUNT(*) as total FROM clientes WHERE fecha_creacion >= datetime('now', '-1 month')` }),
+        db.execute({ sql: `SELECT strftime('%Y-%m', fecha_creacion) as mes, COUNT(*) as cantidad FROM clientes WHERE fecha_creacion >= datetime('now', '-12 months') GROUP BY mes ORDER BY mes ASC` }),
+        db.execute({ sql: `SELECT ciudad, COUNT(*) as cantidad FROM clientes GROUP BY ciudad ORDER BY cantidad DESC` }),
+        db.execute({ sql: `SELECT t.nombre as tarifa_nombre, t.descripcion as tarifa_descripcion, COUNT(c.id) as cantidad_clientes FROM clientes c LEFT JOIN tarifas t ON c.tarifa_id = t.id GROUP BY t.id, t.nombre, t.descripcion ORDER BY cantidad_clientes DESC` }),
+        db.execute({ sql: `SELECT COUNT(DISTINCT c.id) as clientes_con_medidores, COUNT(m.id) as total_medidores_asignados FROM clientes c INNER JOIN medidores m ON c.id = m.cliente_id` }),
+        db.execute({ sql: `SELECT COUNT(*) as total FROM clientes c WHERE NOT EXISTS (SELECT 1 FROM medidores m WHERE m.cliente_id = c.id)` }),
+        db.execute({ sql: `SELECT strftime('%m', fecha_creacion) as mes_numero, COUNT(*) as cantidad FROM clientes WHERE strftime('%Y', fecha_creacion) = strftime('%Y', 'now') GROUP BY mes_numero ORDER BY mes_numero ASC` }),
+        db.execute({ sql: `SELECT CASE WHEN estado_cliente = 'Activo' THEN 'activos' ELSE 'inactivos' END as tipo, COUNT(*) as cantidad FROM clientes GROUP BY tipo` })
     ]);
 
     const totalClientes = Number(totalR.rows[0].total);
@@ -274,65 +274,65 @@ export async function estadisticasClientes() {
 }
 
 export async function eliminarCliente(id, eliminadoPor, razon) {
-    const clienteResult = await dbTurso.execute({ sql: `SELECT * FROM clientes WHERE id = ?`, args: [id] });
+    const clienteResult = await db.execute({ sql: `SELECT * FROM clientes WHERE id = ?`, args: [id] });
     if (!clienteResult.rows.length) throw serviceError('Cliente no encontrado', 404);
     const cliente = clienteResult.rows[0];
 
     if (cliente.estado_cliente === 'Eliminado') throw serviceError('El cliente ya está eliminado', 400);
 
-    const facturas = await dbTurso.execute({ sql: `SELECT COUNT(*) as total FROM facturas WHERE cliente_id = ? AND estado IN ('Pendiente', 'Parcial')`, args: [id] });
+    const facturas = await db.execute({ sql: `SELECT COUNT(*) as total FROM facturas WHERE cliente_id = ? AND estado IN ('Pendiente', 'Parcial')`, args: [id] });
     if (Number(facturas.rows[0].total) > 0) throw Object.assign(serviceError('No se puede eliminar el cliente porque tiene facturas pendientes', 400), { facturas_pendientes: Number(facturas.rows[0].total) });
 
-    const medidores = await dbTurso.execute({ sql: `SELECT COUNT(*) as total FROM medidores WHERE cliente_id = ? AND fecha_eliminacion IS NULL`, args: [id] });
+    const medidores = await db.execute({ sql: `SELECT COUNT(*) as total FROM medidores WHERE cliente_id = ? AND fecha_eliminacion IS NULL`, args: [id] });
     if (Number(medidores.rows[0].total) > 0) throw serviceError('No se puede desactivar/eliminar el cliente porque tiene un medidor activo asignado. Desvincúlelo primero.', 400);
 
-    await dbTurso.execute({ sql: `UPDATE clientes SET estado_cliente = 'Eliminado', fecha_eliminacion = datetime('now'), eliminado_por = ?, razon_eliminacion = ? WHERE id = ?`, args: [eliminadoPor, razon || 'Sin razón especificada', id] });
+    await db.execute({ sql: `UPDATE clientes SET estado_cliente = 'Eliminado', fecha_eliminacion = datetime('now'), eliminado_por = ?, razon_eliminacion = ? WHERE id = ?`, args: [eliminadoPor, razon || 'Sin razón especificada', id] });
     await insertarHistorial('clientes', 'SOFT_DELETE', id, eliminadoPor, { estado_anterior: cliente.estado_cliente, estado_nuevo: 'Eliminado', razon: razon || 'Sin razón especificada' });
 
     return { nombre: cliente.nombre };
 }
 
 export async function restaurarCliente(id, usuarioId) {
-    const clienteResult = await dbTurso.execute({ sql: `SELECT * FROM clientes WHERE id = ?`, args: [id] });
+    const clienteResult = await db.execute({ sql: `SELECT * FROM clientes WHERE id = ?`, args: [id] });
     if (!clienteResult.rows.length) throw serviceError('Cliente no encontrado', 404);
     const cliente = clienteResult.rows[0];
 
     if (cliente.estado_cliente !== 'Eliminado') throw Object.assign(serviceError('El cliente no está eliminado', 400), { estado_actual: cliente.estado_cliente });
 
-    await dbTurso.execute({ sql: `UPDATE clientes SET estado_cliente = 'Activo', fecha_eliminacion = NULL, eliminado_por = NULL, razon_eliminacion = NULL, modificado_por = ? WHERE id = ?`, args: [usuarioId, id] });
+    await db.execute({ sql: `UPDATE clientes SET estado_cliente = 'Activo', fecha_eliminacion = NULL, eliminado_por = NULL, razon_eliminacion = NULL, modificado_por = ? WHERE id = ?`, args: [usuarioId, id] });
     await insertarHistorial('clientes', 'RESTORE', id, usuarioId, { estado_anterior: 'Eliminado', estado_nuevo: 'Activo', razon_eliminacion_anterior: cliente.razon_eliminacion });
 
     return { nombre: cliente.nombre };
 }
 
 export async function obtenerClientesEliminados() {
-    const result = await dbTurso.execute({
+    const result = await db.execute({
         sql: `SELECT c.id, c.numero_predio, c.nombre, c.direccion, c.telefono, c.ciudad, c.correo, c.estado_cliente, c.fecha_eliminacion, c.razon_eliminacion, u.username as eliminado_por_nombre, (SELECT COUNT(*) FROM facturas f WHERE f.cliente_id = c.id) as total_facturas, (SELECT COUNT(*) FROM medidores m WHERE m.cliente_id = c.id) as total_medidores FROM clientes c LEFT JOIN usuarios u ON c.eliminado_por = u.id WHERE c.estado_cliente = 'Eliminado' ORDER BY c.fecha_eliminacion DESC`
     });
     return { total: result.rows.length, clientes_eliminados: result.rows };
 }
 
 export async function purgarCliente(id) {
-    const clienteResult = await dbTurso.execute({ sql: `SELECT * FROM clientes WHERE id = ?`, args: [id] });
+    const clienteResult = await db.execute({ sql: `SELECT * FROM clientes WHERE id = ?`, args: [id] });
     if (!clienteResult.rows.length) throw serviceError('Cliente no encontrado', 404);
     const cliente = clienteResult.rows[0];
 
     if (cliente.estado_cliente !== 'Eliminado') throw serviceError('El cliente debe estar desactivado/en la papelera para poder eliminarlo definitivamente', 400);
 
     // 1. Verificar facturas
-    const facturas = await dbTurso.execute({ sql: `SELECT COUNT(*) as total FROM facturas WHERE cliente_id = ?`, args: [id] });
+    const facturas = await db.execute({ sql: `SELECT COUNT(*) as total FROM facturas WHERE cliente_id = ?`, args: [id] });
     if (Number(facturas.rows[0].total) > 0) {
         throw serviceError('No se puede eliminar definitivamente el cliente porque tiene historial de facturación en el sistema', 400);
     }
 
     // 2. Verificar historial de medidores
-    const historialMedidores = await dbTurso.execute({ sql: `SELECT COUNT(*) as total FROM cliente_medidor_historial WHERE cliente_id = ?`, args: [id] });
+    const historialMedidores = await db.execute({ sql: `SELECT COUNT(*) as total FROM cliente_medidor_historial WHERE cliente_id = ?`, args: [id] });
     if (Number(historialMedidores.rows[0].total) > 0) {
         throw serviceError('No se puede eliminar definitivamente el cliente porque tiene historial de asignación de medidores', 400);
     }
 
     // 3. Ejecutar DELETE físico
-    await dbTurso.execute({ sql: `DELETE FROM clientes WHERE id = ?`, args: [id] });
+    await db.execute({ sql: `DELETE FROM clientes WHERE id = ?`, args: [id] });
     await insertarHistorial('clientes', 'HARD_DELETE', id, null, { nombre: cliente.nombre, direccion: cliente.direccion });
 
     return { nombre: cliente.nombre };

@@ -1,4 +1,4 @@
-import dbTurso from "../../database/db-sqlite.js";
+import db from "../../database/db-sqlite.js";
 import { limitesMensuales } from '../../utils/timezone.js';
 
 function calcularCrecimiento(actual, anterior) {
@@ -11,11 +11,11 @@ async function getConsumoStats(startActual, endActual, startAnterior, endAnterio
     const mesAnterior = startAnterior.substring(0, 7);
 
     const [actualResult, anteriorResult] = await Promise.all([
-        dbTurso.execute({
+        db.execute({
             sql: `SELECT COALESCE(SUM(consumo_m3), 0) as total FROM lecturas WHERE COALESCE(periodo, strftime('%Y-%m', fecha_lectura)) = ?`,
             args: [mesActual]
         }),
-        dbTurso.execute({
+        db.execute({
             sql: `SELECT COALESCE(SUM(consumo_m3), 0) as total FROM lecturas WHERE COALESCE(periodo, strftime('%Y-%m', fecha_lectura)) = ?`,
             args: [mesAnterior]
         })
@@ -31,7 +31,7 @@ async function getConsumoStats(startActual, endActual, startAnterior, endAnterio
         const fechaPrev = new Date(anioAnt, mesAnt - 2, 1);
         const mesPrevio = `${fechaPrev.getFullYear()}-${String(fechaPrev.getMonth() + 1).padStart(2, '0')}`;
         
-        const previoResult = await dbTurso.execute({
+        const previoResult = await db.execute({
             sql: `SELECT COALESCE(SUM(consumo_m3), 0) as total FROM lecturas WHERE COALESCE(periodo, strftime('%Y-%m', fecha_lectura)) = ?`,
             args: [mesPrevio]
         });
@@ -44,12 +44,12 @@ async function getConsumoStats(startActual, endActual, startAnterior, endAnterio
 
 async function getClientesStats(startActual, endActual, startAnterior, endAnterior) {
     const [totalResult, nuevosActualResult, nuevosAnteriorResult] = await Promise.all([
-        dbTurso.execute({ sql: `SELECT COUNT(*) as total FROM clientes WHERE estado_cliente != 'Eliminado'` }),
-        dbTurso.execute({
+        db.execute({ sql: `SELECT COUNT(*) as total FROM clientes WHERE estado_cliente != 'Eliminado'` }),
+        db.execute({
             sql: `SELECT COUNT(*) as total FROM clientes WHERE date(fecha_creacion) >= ? AND date(fecha_creacion) < ?`,
             args: [startActual, endActual]
         }),
-        dbTurso.execute({
+        db.execute({
             sql: `SELECT COUNT(*) as total FROM clientes WHERE date(fecha_creacion) >= ? AND date(fecha_creacion) < ?`,
             args: [startAnterior, endAnterior]
         })
@@ -65,12 +65,12 @@ async function getClientesStats(startActual, endActual, startAnterior, endAnteri
 
 async function getMedidoresStats(startActual, endActual, startAnterior, endAnterior) {
     const [totalResult, nuevosActualResult, nuevosAnteriorResult] = await Promise.all([
-        dbTurso.execute({ sql: `SELECT COUNT(*) as total FROM medidores WHERE estado_medidor != 'Retirado'` }),
-        dbTurso.execute({
+        db.execute({ sql: `SELECT COUNT(*) as total FROM medidores WHERE estado_medidor != 'Retirado'` }),
+        db.execute({
             sql: `SELECT COUNT(*) as total FROM medidores WHERE date(fecha_creacion) >= ? AND date(fecha_creacion) < ?`,
             args: [startActual, endActual]
         }),
-        dbTurso.execute({
+        db.execute({
             sql: `SELECT COUNT(*) as total FROM medidores WHERE date(fecha_creacion) >= ? AND date(fecha_creacion) < ?`,
             args: [startAnterior, endAnterior]
         })
@@ -86,11 +86,11 @@ async function getMedidoresStats(startActual, endActual, startAnterior, endAnter
 
 async function getPagosStats(startActual, endActual, startAnterior, endAnterior) {
     const [actualResult, anteriorResult] = await Promise.all([
-        dbTurso.execute({
+        db.execute({
             sql: `SELECT COALESCE(SUM(monto), 0) as total FROM pagos WHERE date(fecha_pago) >= ? AND date(fecha_pago) < ?`,
             args: [startActual, endActual]
         }),
-        dbTurso.execute({
+        db.execute({
             sql: `SELECT COALESCE(SUM(monto), 0) as total FROM pagos WHERE date(fecha_pago) >= ? AND date(fecha_pago) < ?`,
             args: [startAnterior, endAnterior]
         })
@@ -101,7 +101,7 @@ async function getPagosStats(startActual, endActual, startAnterior, endAnterior)
 }
 
 async function getHistoricoConsumo() {
-    const result = await dbTurso.execute({
+    const result = await db.execute({
         sql: `SELECT COALESCE(periodo, strftime('%Y-%m', fecha_lectura)) as mes, SUM(consumo_m3) as total
               FROM lecturas
               WHERE COALESCE(periodo, strftime('%Y-%m', fecha_lectura)) IS NOT NULL
@@ -114,7 +114,7 @@ async function getHistoricoConsumo() {
 
 async function getConsumoPorRuta(startActual, endActual) {
     const mesActual = startActual.substring(0, 7);
-    let result = await dbTurso.execute({
+    let result = await db.execute({
         sql: `SELECT r.nombre as ruta, COALESCE(SUM(l.consumo_m3), 0) as consumo_total
               FROM lecturas l
               LEFT JOIN rutas r ON l.ruta_id = r.id
@@ -126,7 +126,7 @@ async function getConsumoPorRuta(startActual, endActual) {
     
     // Si el mes actual aún no tiene lecturas, buscar el último periodo con datos
     if (!result.rows.length || result.rows.every(r => Number(r.consumo_total) === 0)) {
-        result = await dbTurso.execute({
+        result = await db.execute({
             sql: `SELECT r.nombre as ruta, COALESCE(SUM(l.consumo_m3), 0) as consumo_total
                   FROM lecturas l
                   LEFT JOIN rutas r ON l.ruta_id = r.id

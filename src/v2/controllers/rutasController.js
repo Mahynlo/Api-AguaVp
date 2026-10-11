@@ -19,7 +19,7 @@
  * - obtenerRutaConMedidores: Obtener ruta completa con medidores ordenados
  */
 
-import dbTurso from '../../database/db-sqlite.js';
+import db from '../../database/db-sqlite.js';
 
 // Managers SSE - Configurados dinámicamente
 let sseManager = null;
@@ -61,7 +61,7 @@ const rutasController = {
 
             // Validar que todos los medidores existen
             const validarQuery = `SELECT id FROM medidores WHERE id IN (${placeholders})`;
-            const validarResult = await dbTurso.execute({
+            const validarResult = await db.execute({
                 sql: validarQuery,
                 args: medidorIds
             });
@@ -82,7 +82,7 @@ const rutasController = {
                 FROM rutas_puntos 
                 WHERE medidor_id IN (${placeholders})
             `;
-            const duplicadosResult = await dbTurso.execute({
+            const duplicadosResult = await db.execute({
                 sql: duplicadosQuery,
                 args: medidorIds
             });
@@ -108,7 +108,7 @@ const rutasController = {
                 VALUES (?, ?, ?, ?, ?, ?)
             `;
 
-            const rutaResult = await dbTurso.execute({
+            const rutaResult = await db.execute({
                 sql: insertRutaQuery,
                 args: [nombre, descripcion, creado_por, distancia_km, rutaJSON, instruccionesJSON]
             });
@@ -118,10 +118,10 @@ const rutasController = {
             // Insertar puntos de la ruta
             // Insertar puntos en una transacción — atómico y mucho más rápido que N awaits
             if (puntos.length > 0) {
-                const insertPuntoStmt = dbTurso.sqlite.prepare(
+                const insertPuntoStmt = db.sqlite.prepare(
                     `INSERT INTO rutas_puntos (ruta_id, medidor_id, orden) VALUES (?, ?, ?)`
                 );
-                const insertarPuntos = dbTurso.sqlite.transaction((pts) => {
+                const insertarPuntos = db.sqlite.transaction((pts) => {
                     pts.forEach((p, i) => insertPuntoStmt.run(ruta_id, p.id, i + 1));
                 });
                 insertarPuntos(puntos);
@@ -205,7 +205,7 @@ const rutasController = {
                 )) AS periodo_a_usar
             `;
 
-            const periodoResult = await dbTurso.execute({
+            const periodoResult = await db.execute({
                 sql: periodoQuery,
                 args: [periodoParam || null]
             });
@@ -253,7 +253,7 @@ const rutasController = {
 
             // 1. Contar total de rutas (para paginación)
             const countQuery = `SELECT COUNT(DISTINCT r.id) as total ${baseQuery} ${whereClause}`;
-            const countResult = await dbTurso.execute({
+            const countResult = await db.execute({
                 sql: countQuery,
                 args: whereArgs
             });
@@ -269,7 +269,7 @@ const rutasController = {
                 LIMIT ? OFFSET ?
             `;
 
-            const rutasIdsResult = await dbTurso.execute({
+            const rutasIdsResult = await db.execute({
                 sql: rutasIdsQuery,
                 args: [...whereArgs, limitNum, offset]
             });
@@ -307,7 +307,7 @@ const rutasController = {
                 ORDER BY r.fecha_creacion DESC
             `;
 
-            const rutasResult = await dbTurso.execute({
+            const rutasResult = await db.execute({
                 sql: dataQuery,
                 args: rutasPageIds
             });
@@ -381,7 +381,7 @@ const rutasController = {
                 ORDER BY pr.ruta_id, pr.orden ASC
             `;
 
-            const medidoresBulkResult = await dbTurso.execute({
+            const medidoresBulkResult = await db.execute({
                 sql: medidoresBulkQuery,
                 args: [...rutasPageIds, periodo, ...rutasPageIds, periodo]
             });
@@ -398,7 +398,7 @@ const rutasController = {
                 GROUP BY l.ruta_id
             `;
 
-            const facturasBulkResult = await dbTurso.execute({
+            const facturasBulkResult = await db.execute({
                 sql: facturasBulkQuery,
                 args: [periodo, ...rutasPageIds]
             });
@@ -495,7 +495,7 @@ const rutasController = {
                 FROM rutas_puntos 
                 WHERE medidor_id = ?
             `;
-            const verificarResult = await dbTurso.execute({
+            const verificarResult = await db.execute({
                 sql: verificarQuery,
                 args: [medidor_id]
             });
@@ -513,7 +513,7 @@ const rutasController = {
                 VALUES (?, ?, ?)
             `;
 
-            await dbTurso.execute({
+            await db.execute({
                 sql: query,
                 args: [ruta_id, medidor_id, orden]
             });
@@ -547,7 +547,7 @@ const rutasController = {
                         FROM lecturas
                     )) AS periodo_a_usar
                 `;
-                const periodoResult = await dbTurso.execute({
+                const periodoResult = await db.execute({
                     sql: periodoQuery,
                     args: [null]
                 });
@@ -683,11 +683,11 @@ const rutasController = {
             `;
 
             const [result, facturasCountResult] = await Promise.all([
-                dbTurso.execute({
+                db.execute({
                     sql: query,
                     args: [ruta_id, ruta_id, periodo, periodo, `${periodo}-01`, periodo, ruta_id]
                 }),
-                dbTurso.execute({
+                db.execute({
                     sql: `SELECT COUNT(f.id) AS facturas_generadas_periodo
                           FROM facturas f
                           JOIN lecturas l ON f.lectura_id = l.id
@@ -793,7 +793,7 @@ const rutasController = {
 
             // Verificar que la ruta existe
             const verificarQuery = `SELECT id, nombre FROM rutas WHERE id = ?`;
-            const verificarResult = await dbTurso.execute({
+            const verificarResult = await db.execute({
                 sql: verificarQuery,
                 args: [ruta_id]
             });
@@ -817,7 +817,7 @@ const rutasController = {
                     AND rp.ruta_id != ?
                 `;
 
-                const checkResult = await dbTurso.execute({
+                const checkResult = await db.execute({
                     sql: checkQuery,
                     args: [...medidorIds, ruta_id]
                 });
@@ -871,7 +871,7 @@ const rutasController = {
                     WHERE id = ?
                 `;
 
-                await dbTurso.execute({
+                await db.execute({
                     sql: updateQuery,
                     args: args
                 });
@@ -882,17 +882,17 @@ const rutasController = {
             if (puntos && Array.isArray(puntos)) {
                 // 1. Eliminar todos los medidores actuales de la ruta
                 const deleteQuery = `DELETE FROM rutas_puntos WHERE ruta_id = ?`;
-                await dbTurso.execute({
+                await db.execute({
                     sql: deleteQuery,
                     args: [ruta_id]
                 });
 
                 // 2. Insertar los nuevos medidores en una transacción
                 if (puntos.length > 0) {
-                    const insertPuntoStmt = dbTurso.sqlite.prepare(
+                    const insertPuntoStmt = db.sqlite.prepare(
                         `INSERT INTO rutas_puntos (ruta_id, medidor_id, orden) VALUES (?, ?, ?)`
                     );
-                    const insertarPuntos = dbTurso.sqlite.transaction((pts) => {
+                    const insertarPuntos = db.sqlite.transaction((pts) => {
                         pts.forEach((p, i) => insertPuntoStmt.run(Number(ruta_id), p.id, i + 1));
                     });
                     insertarPuntos(puntos);
@@ -955,7 +955,7 @@ const rutasController = {
                 FROM rutas_puntos 
                 WHERE ruta_id = ? AND medidor_id = ?
             `;
-            const verificarResult = await dbTurso.execute({
+            const verificarResult = await db.execute({
                 sql: verificarQuery,
                 args: [ruta_id, medidor_id]
             });
@@ -971,7 +971,7 @@ const rutasController = {
                 DELETE FROM rutas_puntos 
                 WHERE ruta_id = ? AND medidor_id = ?
             `;
-            await dbTurso.execute({
+            await db.execute({
                 sql: deleteQuery,
                 args: [ruta_id, medidor_id]
             });
@@ -982,7 +982,7 @@ const rutasController = {
                 SET orden = orden - 1
                 WHERE ruta_id = ? AND orden > ?
             `;
-            await dbTurso.execute({
+            await db.execute({
                 sql: reordenarQuery,
                 args: [ruta_id, ordenEliminado]
             });
@@ -1043,7 +1043,7 @@ const rutasController = {
                 FROM rutas_puntos 
                 WHERE ruta_id = ? AND medidor_id IN (${placeholders})
             `;
-            const verificarResult = await dbTurso.execute({
+            const verificarResult = await db.execute({
                 sql: verificarQuery,
                 args: [ruta_id, ...medidorIds]
             });
@@ -1055,10 +1055,10 @@ const rutasController = {
             }
 
             // Actualizar el orden de todos los medidores en una sola transacción
-            const reordenarStmt = dbTurso.sqlite.prepare(
+            const reordenarStmt = db.sqlite.prepare(
                 `UPDATE rutas_puntos SET orden = ? WHERE ruta_id = ? AND medidor_id = ?`
             );
-            const reordenarTodos = dbTurso.sqlite.transaction((items) => {
+            const reordenarTodos = db.sqlite.transaction((items) => {
                 items.forEach(item => reordenarStmt.run(item.orden, Number(ruta_id), item.medidor_id));
             });
             reordenarTodos(orden);
@@ -1118,7 +1118,7 @@ const rutasController = {
                 )) AS periodo_a_usar
             `;
 
-            const periodoResult = await dbTurso.execute({
+            const periodoResult = await db.execute({
                 sql: periodoQuery,
                 args: [periodoParam || null]
             });
@@ -1131,7 +1131,7 @@ const rutasController = {
                 FROM rutas 
                 WHERE id = ?
             `;
-            const rutaResult = await dbTurso.execute({
+            const rutaResult = await db.execute({
                 sql: rutaQuery,
                 args: [ruta_id]
             });
@@ -1143,7 +1143,7 @@ const rutasController = {
             const ruta = rutaResult.rows[0];
 
             // Si ya existen facturas para la ruta en este periodo, se trata como periodo cerrado.
-            const cierrePeriodoResult = await dbTurso.execute({
+            const cierrePeriodoResult = await db.execute({
                 sql: `
                     SELECT COUNT(*) AS total_facturas
                     FROM facturas f
@@ -1168,7 +1168,7 @@ const rutasController = {
                 WHERE rp.ruta_id = ?
             `;
 
-            const statsResult = await dbTurso.execute({
+            const statsResult = await db.execute({
                 sql: statsQuery,
                 args: [periodo, ruta_id]
             });
@@ -1199,7 +1199,7 @@ const rutasController = {
                 ORDER BY rp.orden ASC
             `;
 
-            const medidoresResult = await dbTurso.execute({
+            const medidoresResult = await db.execute({
                 sql: medidoresQuery,
                 args: [periodo, ruta_id]
             });

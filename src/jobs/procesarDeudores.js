@@ -12,7 +12,7 @@
  */
 
 import cron from 'node-cron';
-import dbTurso from '../database/db-sqlite.js';
+import db from '../database/db-sqlite.js';
 import { nowDate } from '../utils/timezone.js';
 
 let notificationManager = null;
@@ -39,7 +39,7 @@ export const marcarFacturasVencidas = async () => {
           AND estado IN ('Pendiente', 'Parcial')
           AND saldo_pendiente > 0
     `;
-    const result = await dbTurso.execute({ sql: updateQuery, args: [hoyLocal] });
+    const result = await db.execute({ sql: updateQuery, args: [hoyLocal] });
     const cantidad = Number(result.rowsAffected || 0);
     if (cantidad > 0) {
         console.log(`[Job] ${cantidad} factura(s) marcadas como 'Vencida'`);
@@ -62,7 +62,7 @@ export const analizarCarteraVencida = async () => {
 
         // 2. Obtener reglas de configuración
         const configQuery = `SELECT * FROM configuracion_servicio ORDER BY id DESC LIMIT 1`;
-        const configRes = await dbTurso.execute({ sql: configQuery, args: [] });
+        const configRes = await db.execute({ sql: configQuery, args: [] });
         const umbralCorte = configRes.rows.length > 0 ? configRes.rows[0].facturas_para_corte : 4;
         const diasGracia = configRes.rows.length > 0 ? (configRes.rows[0].dias_gracia || 0) : 0;
 
@@ -84,12 +84,12 @@ export const analizarCarteraVencida = async () => {
                 HAVING COUNT(f.id) >= ?
             )
         `;
-        const candidatosRes = await dbTurso.execute({ sql: candidatosQuery, args: [hoyLocal, diasGracia, umbralCorte] });
+        const candidatosRes = await db.execute({ sql: candidatosQuery, args: [hoyLocal, diasGracia, umbralCorte] });
         const numCandidatos = candidatosRes.rows[0]?.total || 0;
 
         // 4. Obtener deuda total vencida
         const deudaQuery = `SELECT SUM(saldo_pendiente) as total FROM facturas WHERE estado = 'Vencida'`;
-        const deudaRes = await dbTurso.execute({ sql: deudaQuery, args: [] });
+        const deudaRes = await db.execute({ sql: deudaQuery, args: [] });
         const deudaTotal = deudaRes.rows[0]?.total || 0;
 
         console.log(`[Job] Candidatos a corte detectados: ${numCandidatos}`);

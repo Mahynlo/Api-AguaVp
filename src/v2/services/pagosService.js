@@ -1,4 +1,4 @@
-import dbTurso, { sqlite } from '../../database/db-sqlite.js';
+import db, { sqlite } from '../../database/db-sqlite.js';
 
 // === Utilidades de precisión decimal ===
 const redondear = (n) => Math.round(n * 100) / 100;
@@ -35,7 +35,7 @@ export function registrarPago({ factura_id, fecha_pago, cantidad_entregada, meto
 }
 
 export async function getPagoCompleto(pagoId) {
-    const result = await dbTurso.execute({
+    const result = await db.execute({
         sql: `SELECT p.*, f.id as factura_numero, c.nombre as cliente_nombre FROM pagos p JOIN facturas f ON p.factura_id = f.id JOIN clientes c ON f.cliente_id = c.id WHERE p.id = ?`,
         args: [pagoId]
     });
@@ -128,15 +128,15 @@ export async function obtenerPagos({ id, periodo, page, limit, search, metodo_pa
     const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
 
     if (id) {
-        const r = await dbTurso.execute({ sql: `${BASE_PAGOS} ${where}`, args: queryParams });
+        const r = await db.execute({ sql: `${BASE_PAGOS} ${where}`, args: queryParams });
         const pago = r.rows.length > 0 ? mapPago(r.rows[0]) : null;
         if (!pago) { const e = new Error('Pago no encontrado'); e.status = 404; throw e; }
         return { tipo: 'unico', pago: { ...pago, periodo_info: { periodo_facturado: pago.periodo_facturado, mes_facturado: pago.periodo_facturado ? formatearMesPeriodo(pago.periodo_facturado) : null } } };
     }
 
     const [countResult, dataResult] = await Promise.all([
-        dbTurso.execute({ sql: `SELECT COUNT(*) as total ${COUNT_JOIN} ${where}`, args: countParams }),
-        dbTurso.execute({ sql: `${BASE_PAGOS} ${where} ORDER BY p.fecha_pago DESC LIMIT ? OFFSET ?`, args: [...queryParams, limitNum, offset] })
+        db.execute({ sql: `SELECT COUNT(*) as total ${COUNT_JOIN} ${where}`, args: countParams }),
+        db.execute({ sql: `${BASE_PAGOS} ${where} ORDER BY p.fecha_pago DESC LIMIT ? OFFSET ?`, args: [...queryParams, limitNum, offset] })
     ]);
 
     const totalItems = Number(countResult.rows[0].total);
@@ -206,7 +206,7 @@ export function modificarPago(id, { fecha_pago, monto, metodo_pago, comentario }
         if (comentario !== undefined) { setClauses.push('comentario = ?'); args.push(comentario); }
         if (setClauses.length <= 1) { const e = new Error('No se proporcionaron campos para actualizar'); e.status = 400; throw e; }
         args.push(id);
-        const result = await dbTurso.execute({ sql: `UPDATE pagos SET ${setClauses.join(', ')} WHERE id = ?`, args });
+        const result = await db.execute({ sql: `UPDATE pagos SET ${setClauses.join(', ')} WHERE id = ?`, args });
         if (result.rowsAffected === 0) { const e = new Error('Pago no encontrado'); e.status = 404; throw e; }
     })();
 }

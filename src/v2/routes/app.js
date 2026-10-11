@@ -1,7 +1,7 @@
 /**
  * Rutas específicas de la aplicación - V2
  * 
- * File: src/v2/routes/appRoutes.js
+ * File: src/v2/routes/app.js
  * 
  * Descripción: Rutas para funcionalidades específicas de la aplicación
  * 

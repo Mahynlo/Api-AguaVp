@@ -3,9 +3,9 @@ import { jest } from '@jest/globals';
 
 const mockExecute = jest.fn();
 
-const dbTurso = {
+const db = {
     execute: mockExecute,
 };
 
-export default dbTurso;
+export default db;
 export { mockExecute };

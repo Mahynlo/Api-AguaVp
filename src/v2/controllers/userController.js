@@ -1,6 +1,6 @@
 import { obtenerUsuarios, obtenerUsuarioPorId, crearUsuario, actualizarUsuario, eliminarUsuario, activarUsuario, purgarUsuario } from '../services/userService.js';
 import { buildUserPermissionsSnapshot, getPermissionCatalog, setUserPermissionOverrides } from '../services/permissionsService.js';
-import dbTurso from "../../database/db-sqlite.js";
+import db from "../../database/db-sqlite.js";
 
 const userController = {
 
@@ -29,7 +29,7 @@ const userController = {
     obtenerPermisosUsuario: async (req, res) => {
         try {
             const targetUserId = Number(req.params.id);
-            const userResult = await dbTurso.execute({ sql: 'SELECT id, rol FROM usuarios WHERE id = ?', args: [targetUserId] });
+            const userResult = await db.execute({ sql: 'SELECT id, rol FROM usuarios WHERE id = ?', args: [targetUserId] });
             if (userResult.rows.length === 0) return res.status(404).json({ error: 'Usuario no encontrado' });
             const targetUser = userResult.rows[0];
             const permissions = await buildUserPermissionsSnapshot(targetUserId, targetUser.rol);
@@ -46,7 +46,7 @@ const userController = {
             const actorId = Number(req.usuario?.id);
             const actorRole = req.usuario?.rol;
             const { overrides = [] } = req.body;
-            const userResult = await dbTurso.execute({ sql: 'SELECT id, rol FROM usuarios WHERE id = ?', args: [targetUserId] });
+            const userResult = await db.execute({ sql: 'SELECT id, rol FROM usuarios WHERE id = ?', args: [targetUserId] });
             if (userResult.rows.length === 0) return res.status(404).json({ error: 'Usuario no encontrado' });
             const targetUser = userResult.rows[0];
 

@@ -13,7 +13,7 @@
  * - getSystemInfo: Información del sistema
  */
 
-import dbTurso from '../database/db-sqlite.js';
+import db from '../database/db-sqlite.js';
 import os from 'os';
 
 /**
@@ -26,7 +26,7 @@ const checkHealth = async (req, res) => {
 
   try {
     // Verificar base de datos
-    await dbTurso.execute("SELECT 1");
+    await db.execute("SELECT 1");
     const responseTime = Date.now() - startTime;
 
     res.status(200).json({
@@ -83,11 +83,11 @@ const checkDatabase = async (req, res) => {
 
   try {
     // Verificar conexión básica
-    await dbTurso.execute("SELECT 1 as test");
+    await db.execute("SELECT 1 as test");
 
     // Verificar que las tablas principales existan
     // Nota: sqlite_master es compatible en Turso/LibSQL
-    const tablesResult = await dbTurso.execute({
+    const tablesResult = await db.execute({
       sql: `SELECT name FROM sqlite_master 
             WHERE type='table' 
             AND name IN ('clientes', 'medidores', 'lecturas', 'facturas', 'pagos', 'usuarios')`,

@@ -9,7 +9,7 @@
 
 import { jest } from '@jest/globals';
 
-// Mock de dbTurso
+// Mock de db
 const mockExecute = jest.fn();
 const mockDbTurso = {
     execute: mockExecute

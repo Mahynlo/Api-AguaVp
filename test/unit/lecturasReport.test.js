@@ -12,7 +12,7 @@ jest.unstable_mockModule('../../src/database/db-sqlite.js', () => ({
 const { default: reportsController } = await import('../../src/v2/controllers/reportsController.js');
 
 // 3. Import Mock to manipulate behavior
-const { default: dbTurso } = await import('../../src/database/db-sqlite.js');
+const { default: db } = await import('../../src/database/db-sqlite.js');
 
 describe('ReportsController - Lista de Lecturas', () => {
     let mockReq;
@@ -82,14 +82,14 @@ describe('ReportsController - Lista de Lecturas', () => {
             }
         ];
 
-        dbTurso.execute.mockResolvedValue({ rows: mockRows });
+        db.execute.mockResolvedValue({ rows: mockRows });
 
         await reportsController.getReporteLecturas(mockReq, mockRes);
 
-        expect(dbTurso.execute).toHaveBeenCalledTimes(1);
+        expect(db.execute).toHaveBeenCalledTimes(1);
 
         // Verify SQL args include calculated previous month (2024-02)
-        const sqlCalls = dbTurso.execute.mock.calls[0][0];
+        const sqlCalls = db.execute.mock.calls[0][0];
         expect(sqlCalls.args).toContain('2024-02');
 
         expect(mockRes.json).toHaveBeenCalledWith(expect.objectContaining({
@@ -119,17 +119,17 @@ describe('ReportsController - Lista de Lecturas', () => {
 
     test('debe filtrar por localidad si se proporciona', async () => {
         mockReq.query.localidad = 'Nacori';
-        dbTurso.execute.mockResolvedValue({ rows: [] });
+        db.execute.mockResolvedValue({ rows: [] });
 
         await reportsController.getReporteLecturas(mockReq, mockRes);
 
-        const sqlCalls = dbTurso.execute.mock.calls[0][0];
+        const sqlCalls = db.execute.mock.calls[0][0];
         expect(sqlCalls.sql).toContain('AND c.ciudad = ?');
         expect(sqlCalls.args).toContain('Nacori');
     });
 
     test('debe manejar errores de base de datos', async () => {
-        dbTurso.execute.mockRejectedValue(new Error('DB Error'));
+        db.execute.mockRejectedValue(new Error('DB Error'));
         await reportsController.getReporteLecturas(mockReq, mockRes);
         expect(mockRes.status).toHaveBeenCalledWith(500);
     });

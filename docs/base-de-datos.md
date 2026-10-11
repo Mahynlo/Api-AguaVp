@@ -9,7 +9,7 @@ Toda la API usa **una sola conexión**: [`src/database/db-sqlite.js`](../src/dat
   - En Electron, `AguaVPServer` fija `DB_PATH` a `%APPDATA%/aguavp/agua-vp.db` antes de cargar el servidor.
 - PRAGMAs: `foreign_keys = ON` y `journal_mode = WAL`.
 - Registra la función SQL `unaccent()` para búsquedas sin acentos.
-- Exporta un wrapper con interfaz `execute({ sql, args })` / `execute(sql)`, que devuelve `{ rows, rowsAffected, lastInsertRowid }`. Es la misma forma que tiene `@libsql/client`, y por eso los servicios llaman a la variable `dbTurso`.
+- Exporta un wrapper con interfaz `execute({ sql, args })` / `execute(sql)`, que devuelve `{ rows, rowsAffected, lastInsertRowid }`. Es la misma forma que tiene `@libsql/client`. Se importa como `import db from .../database/db-sqlite.js` (antes la variable se llamaba `dbTurso`).
 
 `@libsql/client` solo se usa para conectarse a **Turso Cloud** durante la sincronización ([SINCRONIZACION_TURSO_CLOUD.md](SINCRONIZACION_TURSO_CLOUD.md)).
 

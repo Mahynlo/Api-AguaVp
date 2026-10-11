@@ -116,7 +116,7 @@ export const calcularTarifa = (consumo_m3, rangos) => {
  *
  * @param {number}  consumo_m3  Consumo en metros cúbicos
  * @param {number}  tarifa_id   ID de la tarifa en BD
- * @param {object}  db          Instancia de base de datos (dbTurso / dbSqlite)
+ * @param {object}  db          Instancia de base de datos (db / dbSqlite)
  * @returns {Promise<{ total: number, rangos: Array }>}
  * @throws {Error}  Si la tarifa no existe o no tiene rangos
  */

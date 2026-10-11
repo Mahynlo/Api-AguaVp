@@ -7,7 +7,7 @@
  * Gestiona la creación y seguimiento de acuerdos de pago por parcialidades.
  */
 
-import dbTurso, { sqlite } from "../../database/db-sqlite.js";
+import db, { sqlite } from "../../database/db-sqlite.js";
 import { addMonths, format } from 'date-fns';
 import { nowDate, siguienteDiaHabil, calcularVencimiento } from '../../utils/timezone.js';
 
@@ -64,12 +64,12 @@ const conveniosController = {
 
             // 1. Obtener Cliente y Deuda Total
             const infoQuery = `SELECT cliente_id FROM medidores WHERE id = ?`;
-            const infoRes = await dbTurso.execute({ sql: infoQuery, args: [medidorIdNum] });
+            const infoRes = await db.execute({ sql: infoQuery, args: [medidorIdNum] });
 
             if (infoRes.rows.length === 0) return res.status(404).json({ error: "Medidor no encontrado" });
             const cliente_id = infoRes.rows[0].cliente_id;
 
-            const convenioActivoRes = await dbTurso.execute({
+            const convenioActivoRes = await db.execute({
                 sql: `
                     SELECT id, estado
                     FROM convenios_pago
@@ -98,7 +98,7 @@ const conveniosController = {
                 JOIN lecturas l ON f.lectura_id = l.id
                 WHERE l.medidor_id = ? AND f.estado NOT IN ('Pagado', 'En Convenio')
             `;
-            const deudaRes = await dbTurso.execute({ sql: deudaQuery, args: [medidorIdNum] });
+            const deudaRes = await db.execute({ sql: deudaQuery, args: [medidorIdNum] });
             const deudaTotal = Number(deudaRes.rows[0]?.total || 0);
 
             if (deudaTotal <= 0) {
@@ -254,7 +254,7 @@ const conveniosController = {
                 JOIN convenios_pago c ON p.convenio_id = c.id
                 WHERE p.id = ?
             `;
-            const parcialidadRes = await dbTurso.execute({
+            const parcialidadRes = await db.execute({
                 sql: parcialidadQuery,
                 args: [parcialidad_id]
             });
@@ -400,7 +400,7 @@ const conveniosController = {
                 return res.status(400).json({ error: 'medidor_id inválido' });
             }
 
-            const medidorRes = await dbTurso.execute({
+            const medidorRes = await db.execute({
                 sql: `
                     SELECT m.id, m.numero_serie, m.estado_servicio, c.id as cliente_id, c.nombre as cliente_nombre
                     FROM medidores m
@@ -416,7 +416,7 @@ const conveniosController = {
 
             const medidor = medidorRes.rows[0];
 
-            const facturaRes = await dbTurso.execute({
+            const facturaRes = await db.execute({
                 sql: `
                     SELECT f.id, f.fecha_emision, f.fecha_vencimiento, f.total, f.saldo_pendiente, f.estado
                     FROM facturas f
@@ -431,7 +431,7 @@ const conveniosController = {
                 args: [medidor_id]
             });
 
-            const totalFacturasRes = await dbTurso.execute({
+            const totalFacturasRes = await db.execute({
                 sql: `
                     SELECT COALESCE(SUM(f.saldo_pendiente), 0) as total
                     FROM facturas f
@@ -444,7 +444,7 @@ const conveniosController = {
                 args: [medidor_id]
             });
 
-            const convenioRes = await dbTurso.execute({
+            const convenioRes = await db.execute({
                 sql: `
                     SELECT id, estado, saldo_restante, numero_parcialidades, periodicidad
                     FROM convenios_pago
@@ -462,7 +462,7 @@ const conveniosController = {
             if (convenioRes.rows.length > 0) {
                 convenio = convenioRes.rows[0];
 
-                const parcialidadRes = await dbTurso.execute({
+                const parcialidadRes = await db.execute({
                     sql: `
                         SELECT id, numero_parcialidad, monto_esperado, fecha_vencimiento, estado
                         FROM parcialidades_convenio
@@ -473,7 +473,7 @@ const conveniosController = {
                     args: [convenio.id]
                 });
 
-                const totalParcialidadesRes = await dbTurso.execute({
+                const totalParcialidadesRes = await db.execute({
                     sql: `
                         SELECT COALESCE(SUM(monto_esperado), 0) as total
                         FROM parcialidades_convenio
@@ -889,7 +889,7 @@ const conveniosController = {
                 JOIN medidores m ON c.medidor_id = m.id
                 WHERE c.id = ?
             `;
-            const convenioRes = await dbTurso.execute({ sql: convenioQuery, args: [id] });
+            const convenioRes = await db.execute({ sql: convenioQuery, args: [id] });
 
             if (convenioRes.rows.length === 0) {
                 return res.status(404).json({ error: 'Convenio no encontrado' });
@@ -903,7 +903,7 @@ const conveniosController = {
                 WHERE convenio_id = ?
                 ORDER BY numero_parcialidad ASC
             `;
-            const parcialidadesRes = await dbTurso.execute({
+            const parcialidadesRes = await db.execute({
                 sql: parcialidadesQuery,
                 args: [id]
             });

@@ -1,7 +1,7 @@
 /**
  * Rutas de autenticación - V2
  * 
- * File: src/v2/routes/authroutes.js
+ * File: src/v2/routes/auth.js
  * 
  * Descripción:
  * - /login: Iniciar sesión

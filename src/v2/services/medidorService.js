@@ -1,4 +1,4 @@
-import dbTurso from "../../database/db-sqlite.js";
+import db from "../../database/db-sqlite.js";
 
 function serviceError(message, status) {
     const err = new Error(message);
@@ -9,15 +9,15 @@ function serviceError(message, status) {
 export async function registrarMedidor(datos, usuarioId) {
     const { cliente_id, numero_serie, marca, modelo, ubicacion, fecha_instalacion, latitud, longitud, estado_medidor, lectura_base, capacidad_maxima } = datos;
 
-    const existeSerie = await dbTurso.execute({ sql: `SELECT id FROM medidores WHERE numero_serie = ?`, args: [numero_serie] });
+    const existeSerie = await db.execute({ sql: `SELECT id FROM medidores WHERE numero_serie = ?`, args: [numero_serie] });
     if (existeSerie.rows.length > 0) throw serviceError("El número de serie ya está registrado", 409);
 
     if (cliente_id) {
-        const existeCliente = await dbTurso.execute({ sql: `SELECT id FROM clientes WHERE id = ?`, args: [cliente_id] });
+        const existeCliente = await db.execute({ sql: `SELECT id FROM clientes WHERE id = ?`, args: [cliente_id] });
         if (existeCliente.rows.length === 0) throw serviceError("El cliente especificado no existe", 404);
     }
 
-    const insertResult = await dbTurso.execute({
+    const insertResult = await db.execute({
         sql: `INSERT INTO medidores (cliente_id, numero_serie, marca, modelo, ubicacion, fecha_instalacion, latitud, longitud, estado_medidor, lectura_base, capacidad_maxima)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [cliente_id ?? null, numero_serie, marca ?? null, modelo ?? null, ubicacion, fecha_instalacion, latitud, longitud, estado_medidor ?? 'Activo', lectura_base ?? null, capacidad_maxima ?? null]
@@ -27,7 +27,7 @@ export async function registrarMedidor(datos, usuarioId) {
 
     const datosInsertados = { cliente_id: cliente_id ?? null, numero_serie, marca: marca ?? null, modelo: modelo ?? null, ubicacion, fecha_instalacion, latitud, longitud, estado_medidor: estado_medidor ?? 'Activo' };
 
-    await dbTurso.execute({
+    await db.execute({
         sql: `INSERT INTO historial_cambios (tabla, operacion, registro_id, modificado_por, cambios) VALUES (?, ?, ?, ?, ?)`,
         args: ['medidores', 'INSERT', id, usuarioId, JSON.stringify(datosInsertados)]
     });
@@ -66,7 +66,7 @@ export async function obtenerMedidores(query = {}) {
         const sqlQuery = baseSelect + 
             (incluirEliminadosBool ? "" : " WHERE m.fecha_eliminacion IS NULL") + 
             " ORDER BY m.fecha_creacion DESC";
-        const result = await dbTurso.execute({ sql: sqlQuery });
+        const result = await db.execute({ sql: sqlQuery });
         return result.rows.map(mapRow);
     }
 
@@ -104,8 +104,8 @@ export async function obtenerMedidores(query = {}) {
     const where = conditions.length > 0 ? ' WHERE ' + conditions.join(' AND ') : '';
 
     const [countResult, dataResult] = await Promise.all([
-        dbTurso.execute({ sql: `SELECT COUNT(*) as total FROM medidores m LEFT JOIN clientes c ON c.id = m.cliente_id${where}`, args }),
-        dbTurso.execute({ sql: baseSelect + where + ` ORDER BY m.fecha_creacion DESC LIMIT ? OFFSET ?`, args: [...args, limitNum, offset] })
+        db.execute({ sql: `SELECT COUNT(*) as total FROM medidores m LEFT JOIN clientes c ON c.id = m.cliente_id${where}`, args }),
+        db.execute({ sql: baseSelect + where + ` ORDER BY m.fecha_creacion DESC LIMIT ? OFFSET ?`, args: [...args, limitNum, offset] })
     ]);
 
     return {
@@ -122,24 +122,24 @@ export async function obtenerMedidores(query = {}) {
 export async function modificarMedidor(id, datos, usuarioId) {
     const { cliente_id, numero_serie, marca, modelo, ubicacion, fecha_instalacion, latitud, longitud, estado_medidor, estado_servicio, fecha_corte, lectura_base, capacidad_maxima } = datos;
 
-    const medidorResult = await dbTurso.execute({ sql: `SELECT * FROM medidores WHERE id = ?`, args: [id] });
+    const medidorResult = await db.execute({ sql: `SELECT * FROM medidores WHERE id = ?`, args: [id] });
     if (medidorResult.rows.length === 0) throw serviceError("Medidor no encontrado", 404);
     const prev = medidorResult.rows[0];
 
     if (lectura_base !== undefined && String(lectura_base) !== String(prev.lectura_base)) {
-        const count = await dbTurso.execute({ sql: `SELECT COUNT(*) AS total FROM lecturas WHERE medidor_id = ?`, args: [id] });
+        const count = await db.execute({ sql: `SELECT COUNT(*) AS total FROM lecturas WHERE medidor_id = ?`, args: [id] });
         if (Number(count.rows[0].total) > 0) {
             throw serviceError("No se puede modificar la lectura base porque el medidor ya tiene lecturas registradas.", 409);
         }
     }
 
     if (numero_serie && numero_serie !== prev.numero_serie) {
-        const dupe = await dbTurso.execute({ sql: `SELECT id FROM medidores WHERE numero_serie = ? AND id != ?`, args: [numero_serie, id] });
+        const dupe = await db.execute({ sql: `SELECT id FROM medidores WHERE numero_serie = ? AND id != ?`, args: [numero_serie, id] });
         if (dupe.rows.length > 0) throw serviceError("El número de serie ya está en uso", 409);
     }
 
     if (cliente_id && cliente_id !== prev.cliente_id) {
-        const cli = await dbTurso.execute({ sql: `SELECT id FROM clientes WHERE id = ?`, args: [cliente_id] });
+        const cli = await db.execute({ sql: `SELECT id FROM clientes WHERE id = ?`, args: [cliente_id] });
         if (cli.rows.length === 0) throw serviceError("El cliente especificado no existe", 404);
     }
 
@@ -159,7 +159,7 @@ export async function modificarMedidor(id, datos, usuarioId) {
     track('lectura_base', lectura_base, prev.lectura_base);
     track('capacidad_maxima', capacidad_maxima, prev.capacidad_maxima);
 
-    const updateResult = await dbTurso.execute({
+    const updateResult = await db.execute({
         sql: `UPDATE medidores SET
               cliente_id = COALESCE(?, cliente_id),
               numero_serie = COALESCE(?, numero_serie),
@@ -186,7 +186,7 @@ export async function modificarMedidor(id, datos, usuarioId) {
     });
 
     if (Object.keys(cambios).length > 0) {
-        await dbTurso.execute({
+        await db.execute({
             sql: `INSERT INTO historial_cambios (tabla, operacion, registro_id, modificado_por, cambios) VALUES (?, ?, ?, ?, ?)`,
             args: ['medidores', 'UPDATE', id, usuarioId, JSON.stringify(cambios)]
         });
@@ -201,7 +201,7 @@ export async function modificarMedidor(id, datos, usuarioId) {
 }
 
 export async function eliminarMedidor(id, usuarioId, razon) {
-    const medidorResult = await dbTurso.execute({ sql: `SELECT * FROM medidores WHERE id = ?`, args: [id] });
+    const medidorResult = await db.execute({ sql: `SELECT * FROM medidores WHERE id = ?`, args: [id] });
     if (medidorResult.rows.length === 0) throw serviceError("Medidor no encontrado", 404);
     const medidor = medidorResult.rows[0];
 
@@ -211,7 +211,7 @@ export async function eliminarMedidor(id, usuarioId, razon) {
 
     // Actualizar medidor: se marca como 'Retirado' y se envía a la papelera (soft delete),
     // CONSERVANDO su cliente_id para preservar la trazabilidad histórica de lecturas y recibos.
-    await dbTurso.execute({
+    await db.execute({
         sql: `UPDATE medidores SET 
                 estado_medidor = 'Retirado',
                 fecha_eliminacion = datetime('now'),
@@ -223,20 +223,20 @@ export async function eliminarMedidor(id, usuarioId, razon) {
 
     // Cerrar cualquier asignación abierta en cliente_medidor_historial
     if (clienteId) {
-        await dbTurso.execute({
+        await db.execute({
             sql: `UPDATE cliente_medidor_historial SET fecha_fin = date('now') WHERE medidor_id = ? AND fecha_fin IS NULL`,
             args: [id]
         });
     }
 
     // Remover de rutas_puntos de la ruta activa actual (las lecturas de períodos pasados facturados se preservan)
-    await dbTurso.execute({
+    await db.execute({
         sql: `DELETE FROM rutas_puntos WHERE medidor_id = ?`,
         args: [id]
     });
 
     // Registrar en historial_cambios
-    await dbTurso.execute({
+    await db.execute({
         sql: `INSERT INTO historial_cambios (tabla, operacion, registro_id, modificado_por, cambios) VALUES (?, ?, ?, ?, ?)`,
         args: ['medidores', 'SOFT_DELETE_RETIRADO', id, usuarioId, JSON.stringify({
             estado_anterior: medidor.estado_medidor,
@@ -249,13 +249,13 @@ export async function eliminarMedidor(id, usuarioId, razon) {
 }
 
 export async function restaurarMedidor(id, usuarioId) {
-    const medidorResult = await dbTurso.execute({ sql: `SELECT * FROM medidores WHERE id = ?`, args: [id] });
+    const medidorResult = await db.execute({ sql: `SELECT * FROM medidores WHERE id = ?`, args: [id] });
     if (medidorResult.rows.length === 0) throw serviceError("Medidor no encontrado", 404);
     const medidor = medidorResult.rows[0];
 
     if (!medidor.fecha_eliminacion) throw serviceError("El medidor no está eliminado", 400);
 
-    await dbTurso.execute({
+    await db.execute({
         sql: `UPDATE medidores SET 
                 fecha_eliminacion = NULL,
                 eliminado_por = NULL,
@@ -264,7 +264,7 @@ export async function restaurarMedidor(id, usuarioId) {
         args: [id]
     });
 
-    await dbTurso.execute({
+    await db.execute({
         sql: `INSERT INTO historial_cambios (tabla, operacion, registro_id, modificado_por, cambios) VALUES (?, ?, ?, ?, ?)`,
         args: ['medidores', 'RESTORE', id, usuarioId, JSON.stringify({
             razon_eliminacion_anterior: medidor.razon_eliminacion
@@ -275,7 +275,7 @@ export async function restaurarMedidor(id, usuarioId) {
 }
 
 export async function obtenerMedidoresEliminados() {
-    const result = await dbTurso.execute({
+    const result = await db.execute({
         sql: `SELECT m.*, 
                      COALESCE(c.id, c_hist.id) AS cliente_id,
                      COALESCE(c.nombre, c_hist.nombre) AS cliente_nombre,
@@ -295,27 +295,27 @@ export async function obtenerMedidoresEliminados() {
 }
 
 export async function purgarMedidor(id) {
-    const medidorResult = await dbTurso.execute({ sql: `SELECT * FROM medidores WHERE id = ?`, args: [id] });
+    const medidorResult = await db.execute({ sql: `SELECT * FROM medidores WHERE id = ?`, args: [id] });
     if (medidorResult.rows.length === 0) throw serviceError("Medidor no encontrado", 404);
     const medidor = medidorResult.rows[0];
 
     if (!medidor.fecha_eliminacion) throw serviceError("El medidor debe estar en la papelera para poder eliminarlo definitivamente", 400);
 
     // 1. Verificar lecturas
-    const lecturas = await dbTurso.execute({ sql: `SELECT COUNT(*) as total FROM lecturas WHERE medidor_id = ?`, args: [id] });
+    const lecturas = await db.execute({ sql: `SELECT COUNT(*) as total FROM lecturas WHERE medidor_id = ?`, args: [id] });
     if (Number(lecturas.rows[0].total) > 0) {
         throw serviceError("No se puede eliminar definitivamente el medidor porque tiene historial de lecturas registradas", 400);
     }
 
     // 2. Verificar historial de asignación
-    const historial = await dbTurso.execute({ sql: `SELECT COUNT(*) as total FROM cliente_medidor_historial WHERE medidor_id = ?`, args: [id] });
+    const historial = await db.execute({ sql: `SELECT COUNT(*) as total FROM cliente_medidor_historial WHERE medidor_id = ?`, args: [id] });
     if (Number(historial.rows[0].total) > 0) {
         throw serviceError("No se puede eliminar definitivamente el medidor porque tiene historial de asignación a clientes", 400);
     }
 
     // 3. Ejecutar DELETE físico
-    await dbTurso.execute({ sql: `DELETE FROM medidores WHERE id = ?`, args: [id] });
-    await dbTurso.execute({
+    await db.execute({ sql: `DELETE FROM medidores WHERE id = ?`, args: [id] });
+    await db.execute({
         sql: `INSERT INTO historial_cambios (tabla, operacion, registro_id, modificado_por, cambios) VALUES (?, ?, ?, ?, ?)`,
         args: ['medidores', 'HARD_DELETE', id, null, JSON.stringify({ numero_serie: medidor.numero_serie })]
     });

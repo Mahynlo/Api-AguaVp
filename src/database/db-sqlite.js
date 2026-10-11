@@ -193,7 +193,8 @@ const dbWrapper = {
     sqlite: sqlite
 };
 
-// Exportar el wrapper como default (compatible con import dbTurso)
+// Exportar el wrapper como default (import db from "./db-sqlite.js").
+// El export con nombre `db` es la instancia de Drizzle; `sqlite`, la conexión better-sqlite3.
 export default dbWrapper;
 
 // Exportar también las instancias individuales
