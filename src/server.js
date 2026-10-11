@@ -115,7 +115,6 @@ app.use('/api', routes);
 const swaggerSpec = swaggerJsdoc(swaggerOptions);
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
   customSiteTitle: 'API Agua Potable v2.0',
-  customfavIcon: './public/assets/images/icon.png',
   customCss: `
     .swagger-ui .topbar { background-color: #198754; }
     .topbar-wrapper span { color: #fff !important; font-weight: bold; }
