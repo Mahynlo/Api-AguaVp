@@ -1,7 +1,7 @@
 // Script de prueba SIN migraciones
 // Ejecutar: node test-api-module-no-migrations.js
 
-import AguaVPServer from './src/api-module.js';
+import AguaVPServer from '../../src/api-module.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 

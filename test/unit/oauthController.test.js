@@ -2,7 +2,7 @@
 import { jest } from '@jest/globals';
 
 // 1. Mock DB Module BEFORE importing controller
-jest.unstable_mockModule('../../database/db-sqlite.js', () => ({
+jest.unstable_mockModule('../../src/database/db-sqlite.js', () => ({
     default: {
         execute: jest.fn()
     }
@@ -17,8 +17,8 @@ jest.unstable_mockModule('bcryptjs', () => ({
 }));
 
 // Dynamic imports
-const { default: oauthController } = await import('../../v2/controllers/oauthController.js');
-const { default: dbTurso } = await import('../../database/db-sqlite.js');
+const { default: oauthController } = await import('../../src/v2/controllers/oauthController.js');
+const { default: dbTurso } = await import('../../src/database/db-sqlite.js');
 const bcrypt = (await import('bcryptjs')).default;
 
 describe('OAuthController', () => {

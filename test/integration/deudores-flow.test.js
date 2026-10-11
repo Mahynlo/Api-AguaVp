@@ -23,13 +23,13 @@ const mockDbTurso = {
     execute: mockExecute
 };
 
-jest.unstable_mockModule('../../database/db-sqlite.js', () => ({
+jest.unstable_mockModule('../../src/database/db-sqlite.js', () => ({
     default: mockDbTurso
 }));
 
 // Importar después de mockear
-const { default: cortesController } = await import('../../v2/controllers/cortesController.js');
-const { default: conveniosController } = await import('../../v2/controllers/conveniosController.js');
+const { default: cortesController } = await import('../../src/v2/controllers/cortesController.js');
+const { default: conveniosController } = await import('../../src/v2/controllers/conveniosController.js');
 
 describe('Flujo Completo: Sistema de Deudores', () => {
     let app;

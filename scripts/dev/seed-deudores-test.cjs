@@ -4,12 +4,13 @@
  * Crea lecturas y facturas vencidas para 2 clientes (medidores 1 y 2)
  * de modo que aparezcan como candidatos a corte en el sistema.
  * 
- * Uso: node seed-deudores-test.cjs
- * Revertir: node seed-deudores-test.cjs --revert
+ * Uso: node scripts/dev/seed-deudores-test.cjs
+ * Revertir: node scripts/dev/seed-deudores-test.cjs --revert
  */
 
 const Database = require('better-sqlite3');
-const DB_PATH = 'C:\\Users\\malco\\AppData\\Roaming\\aguavp\\agua-vp.db';
+// Ruta: DB_PATH o la base de la app Electron en %APPDATA%/aguavp/agua-vp.db
+const DB_PATH = process.env.DB_PATH || require('path').join(process.env.APPDATA || '', 'aguavp', 'agua-vp.db');
 
 const REVERT = process.argv.includes('--revert');
 
@@ -220,7 +221,7 @@ FLUJO COMPLETO A PROBAR:
   f) Probar Reconexión (solo funciona si hay convenio o deuda $0)
 
 REVERTIR DATOS DE PRUEBA:
-  node seed-deudores-test.cjs --revert
+  node scripts/dev/seed-deudores-test.cjs --revert
 `);
 
 db.close();

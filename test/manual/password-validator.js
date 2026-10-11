@@ -13,7 +13,7 @@ import {
     calculatePasswordStrength,
     generateSecurePassword,
     formatValidationErrors 
-} from './passwordValidator.js';
+} from '../../src/utils/passwordValidator.js';
 
 console.log('='.repeat(80));
 console.log('🔐 TEST DE VALIDADOR DE CONTRASEÑAS');

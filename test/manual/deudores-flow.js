@@ -38,7 +38,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DB_PATH = path.join(__dirname, 'src/database/agua-vp-local.db');
+const DB_PATH = process.env.DB_PATH || path.join(__dirname, '../../src/database/agua-vp-local.db');
 const API = 'http://localhost:3000/api/v2';
 
 // ─── CONFIGURACIÓN ────────────────────────────────────────────────────────────

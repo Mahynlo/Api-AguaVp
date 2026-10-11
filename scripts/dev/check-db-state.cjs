@@ -1,5 +1,7 @@
 const Database = require('better-sqlite3');
-const db = new Database('C:\\Users\\malco\\AppData\\Roaming\\aguavp\\agua-vp.db', { readonly: true });
+// Ruta: DB_PATH o la base de la app Electron en %APPDATA%/aguavp/agua-vp.db
+const DB_PATH = process.env.DB_PATH || require('path').join(process.env.APPDATA || '', 'aguavp', 'agua-vp.db');
+const db = new Database(DB_PATH, { readonly: true });
 
 const tables = ['clientes','medidores','lecturas','facturas','pagos','tarifas','configuracion_servicio','cortes_servicio','convenios_pago','parcialidades_convenio'];
 tables.forEach(t => {

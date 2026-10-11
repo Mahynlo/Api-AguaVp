@@ -1,7 +1,7 @@
 // Script de prueba para el módulo API
 // Ejecutar: node test-api-module.js
 
-import AguaVPServer from './src/api-module.js';
+import AguaVPServer from '../../src/api-module.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 

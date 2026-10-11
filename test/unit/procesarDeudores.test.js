@@ -29,7 +29,7 @@ global.setTimeout = jest.fn((callback, delay) => {
 });
 
 // Importar módulo con mocks
-jest.unstable_mockModule('../../../database/db-sqlite.js', () => ({
+jest.unstable_mockModule('../../src/database/db-sqlite.js', () => ({
     default: mockDbTurso
 }));
 
@@ -37,7 +37,7 @@ jest.unstable_mockModule('node-cron', () => ({
     default: mockCron
 }));
 
-const { analizarCarteraVencida, initDeudoresJob } = await import('../../../jobs/procesarDeudores.js');
+const { analizarCarteraVencida, initDeudoresJob } = await import('../../src/jobs/procesarDeudores.js');
 
 describe('procesarDeudores - Análisis de Cartera', () => {
     beforeEach(() => {

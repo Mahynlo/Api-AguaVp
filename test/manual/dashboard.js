@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import dashboardController from '../v2/controllers/dashboardController.js';
+import dashboardController from '../../src/v2/controllers/dashboardController.js';
 
 const mockReq = {};
 const mockRes = {

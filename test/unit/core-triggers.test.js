@@ -10,10 +10,10 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { CORE_TRIGGERS } from '../../database/sqlite-migrator.js';
+import { CORE_TRIGGERS } from '../../src/database/sqlite-migrator.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const MIGRATIONS = path.join(__dirname, '../../database/migrations');
+const MIGRATIONS = path.join(__dirname, '../../src/database/migrations');
 
 const normalize = (sql) => sql
     .replace(/--[^\n]*/g, '')

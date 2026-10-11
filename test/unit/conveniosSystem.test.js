@@ -13,11 +13,11 @@ const mockDbTurso = {
     execute: mockExecute
 };
 
-jest.unstable_mockModule('../../database/db-sqlite.js', () => ({
+jest.unstable_mockModule('../../src/database/db-sqlite.js', () => ({
     default: mockDbTurso
 }));
 
-const { verificarConvenios } = await import('../../jobs/verificarConvenios.js');
+const { verificarConvenios } = await import('../../src/jobs/verificarConvenios.js');
 
 describe('Sistema de Convenios - Verificación de Cumplimiento', () => {
     beforeEach(() => {

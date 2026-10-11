@@ -17,7 +17,7 @@ import {
     estaVencida,
     inicioDia,
     finDia
-} from '../../utils/timezone.js';
+} from '../../src/utils/timezone.js';
 
 describe('Timezone Helper - America/Mexico_City (GMT-7)', () => {
 

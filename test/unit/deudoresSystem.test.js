@@ -14,11 +14,11 @@ const mockDbTurso = {
     execute: mockExecute
 };
 
-jest.unstable_mockModule('../../database/db-sqlite.js', () => ({
+jest.unstable_mockModule('../../src/database/db-sqlite.js', () => ({
     default: mockDbTurso
 }));
 
-const { analizarCarteraVencida } = await import('../../jobs/procesarDeudores.js');
+const { analizarCarteraVencida } = await import('../../src/jobs/procesarDeudores.js');
 
 describe('Sistema de Deudores - Detección de Candidatos', () => {
     beforeEach(() => {

@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import reportsController from '../v2/controllers/reportsController.js';
+import reportsController from '../../src/v2/controllers/reportsController.js';
 
 const mockReqRecibos = {
     query: {

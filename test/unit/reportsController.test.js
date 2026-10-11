@@ -2,13 +2,13 @@
 import { jest } from '@jest/globals';
 
 // Mock DB Module
-jest.unstable_mockModule('../../database/db-sqlite.js', () => import('../../database/__mocks__/db-sqlite.js'));
+jest.unstable_mockModule('../../src/database/db-sqlite.js', () => import('../__mocks__/db-sqlite.js'));
 
 // Import Controller (Dynamic import after mock)
-const { default: reportsController } = await import('../../v2/controllers/reportsController.js');
+const { default: reportsController } = await import('../../src/v2/controllers/reportsController.js');
 
 // Import Mock to manipulate behavior
-const { mockExecute } = await import('../../database/__mocks__/db-sqlite.js');
+const { mockExecute } = await import('../__mocks__/db-sqlite.js');
 
 describe('ReportsController - Unit Tests', () => {
     let req, res;

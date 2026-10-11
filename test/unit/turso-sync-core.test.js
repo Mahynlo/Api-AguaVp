@@ -22,7 +22,7 @@ import {
     readRemoteMeta,
     REMOTE_META_TABLE,
     LOCAL_STATE_TABLE
-} from '../../v2/services/tursoSyncCore.js';
+} from '../../src/v2/services/tursoSyncCore.js';
 
 const SCHEMA = `
     CREATE TABLE usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT NOT NULL);
@@ -457,7 +457,7 @@ describe('tursoSyncCore — restauración desde la nube', () => {
         // Misma identidad y mismos registros, pero sin la columna (restauración de una versión anterior)
         const sinColumna = newLocal();
         fillLocal(sinColumna, 3);
-        const { setLocalState: set } = await import('../../v2/services/tursoSyncCore.js');
+        const { setLocalState: set } = await import('../../src/v2/services/tursoSyncCore.js');
         getOrCreateInstanciaId(sinColumna);
         set(sinColumna, 'instancia_id', id);
 
