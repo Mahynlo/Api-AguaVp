@@ -24,7 +24,7 @@ src/
 ├── jobs/
 │   ├── procesarDeudores.js   # Detección de candidatos a corte
 │   └── verificarConvenios.js # Vencimiento de parcialidades de convenios
-├── utils/                 # logger, timezone, tarifaUtils, generateToken, passwordValidator
+├── utils/                 # logger, errores, timezone, tarifaUtils, generateToken, passwordValidator
 └── v2/
     ├── index.js           # Router /api/v2
     ├── routes/            # Endpoints por dominio (+ anotaciones Swagger)
@@ -103,6 +103,32 @@ log.error('Error al registrar:', err); // = console.error(...)
 - La consola recibe exactamente los mismos argumentos que con `console.*`, así que la salida no cambia.
 - Además, cada mensaje se emite como evento `api-log` de `AguaVPServer` (`{ nivel, modulo, mensaje }`). Electron puede escucharlo para mostrarlo en su visor de logs.
 - No registres tokens, contraseñas ni datos personales.
+
+## Manejo de errores
+
+[`src/utils/errores.js`](../src/utils/errores.js) evita repetir el mismo `try/catch` en cada controller:
+
+```js
+import { manejarErrores, crearError } from '../../utils/errores.js';
+
+// En el service: lanzar errores con código HTTP
+if (!cliente) throw crearError('Cliente no encontrado', 404);
+
+// En el controller: sin try/catch
+obtenerCliente: manejarErrores(async (req, res) => {
+    res.json(await obtenerCliente(req.params.id));
+}, { mensaje: 'Error al obtener cliente', log: 'Error obteniendo cliente v2:' }),
+```
+
+Respuesta de error según opciones (las mismas que usan hoy los controllers):
+
+| Opciones | Respuesta |
+|---|---|
+| `{ mensaje }` | `status(err.status || 500)` + `{ error: err.message || mensaje }` |
+| `{ mensaje, exponerMensaje: false, statusDelError: false }` | `status(500)` + `{ error: mensaje }` |
+| `{ mensaje, formato: 'success' }` | `status(err.status || 500)` + `{ success: false, message: err.message || mensaje }` |
+
+Al migrar un controller, hay que elegir las opciones que reproducen su `catch` actual. Los casos con campos extra (`cliente`, `detalles`…) se quedan con su `catch` propio. No hay un middleware global de errores a propósito: los errores no atrapados se siguen respondiendo como hasta ahora.
 
 ## Tareas programadas
 
