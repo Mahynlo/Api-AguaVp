@@ -32,6 +32,7 @@
 - New input surfaces must use Zod schemas in `src/v2/validators/**`.
 - Reuse timezone helpers in `src/utils/timezone.js` for date-window calculations.
 - Do not add sensitive tokens or user credential data to logs.
+- In new or refactored code, log with `createLogger(modulo)` from `src/utils/logger.js` instead of `console.*` (same console output, plus the `api-log` event).
 
 ## Key Files to Check First
 - `README.md`

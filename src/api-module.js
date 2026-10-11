@@ -5,6 +5,7 @@ import { EventEmitter } from 'events';
 import Database from 'better-sqlite3';
 import bcrypt from 'bcryptjs';
 import { customMigrate } from './database/sqlite-migrator.js';
+import { setLogReceptor } from './utils/logger.js';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -269,6 +270,10 @@ class AguaVPServer extends EventEmitter {
 
             // 3. Aplicar migraciones
             await this.runMigrations();
+
+            // Mensajes del logger de la API (src/utils/logger.js) → evento 'api-log' ({ nivel, modulo, mensaje }).
+            // Se registra antes de cargar server.js para recibir también los mensajes de arranque.
+            setLogReceptor((nivel, modulo, mensaje) => this.emit('api-log', { nivel, modulo, mensaje }));
 
             // 4. Importar server.js AHORA — db-sqlite.js lee process.env.DB_PATH ya configurado.
             //    Si ya fue importado antes (reinicio), el módulo está en caché pero el

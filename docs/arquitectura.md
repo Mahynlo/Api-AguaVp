@@ -24,7 +24,7 @@ src/
 ├── jobs/
 │   ├── procesarDeudores.js   # Detección de candidatos a corte
 │   └── verificarConvenios.js # Vencimiento de parcialidades de convenios
-├── utils/                 # timezone, tarifaUtils, generateToken, passwordValidator
+├── utils/                 # logger, timezone, tarifaUtils, generateToken, passwordValidator
 └── v2/
     ├── index.js           # Router /api/v2
     ├── routes/            # Endpoints por dominio (+ anotaciones Swagger)
@@ -50,7 +50,7 @@ Electron hace `new AguaVPServer({...}).start()`. `start()` ejecuta, en orden:
 5. `listen()` y emite `started`.
 6. Si hay credenciales de Turso, configura la sincronización (`tursoSyncService`).
 
-Eventos que emite `AguaVPServer`: `log`, `error`, `sync-log`, `starting`, `started`, `stopping`, `stopped`.
+Eventos que emite `AguaVPServer`: `log`, `error`, `sync-log`, `api-log`, `starting`, `started`, `stopping`, `stopped`.
 
 > Electron desempaqueta `node_modules/@aguavp/api-server/src/database/migrations/**` del asar. No hay que mover esa carpeta.
 
@@ -88,6 +88,21 @@ Más detalle en [guias/autenticacion.md](guias/autenticacion.md) y [endpoints/au
 ## Tiempo real (SSE)
 
 Los clientes se conectan a `GET /api/v2/events/stream`. Los controladores publican eventos con el `notificationManager` (`req.app.get('notificationManager')`).
+
+## Logs
+
+Para código nuevo o refactorizado, usa `createLogger` de [`src/utils/logger.js`](../src/utils/logger.js) en lugar de `console.*`:
+
+```js
+import { createLogger } from '../../utils/logger.js';
+const log = createLogger('lecturas');
+log.info('Lectura registrada', id);   // = console.log(...)
+log.error('Error al registrar:', err); // = console.error(...)
+```
+
+- La consola recibe exactamente los mismos argumentos que con `console.*`, así que la salida no cambia.
+- Además, cada mensaje se emite como evento `api-log` de `AguaVPServer` (`{ nivel, modulo, mensaje }`). Electron puede escucharlo para mostrarlo en su visor de logs.
+- No registres tokens, contraseñas ni datos personales.
 
 ## Tareas programadas
 
