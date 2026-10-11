@@ -3,7 +3,7 @@
  * restaurar una base descargada de Turso) sean idénticos a la ÚLTIMA definición de cada trigger
  * en las migraciones. Si una migración corrige un trigger, esta prueba obliga a actualizar CORE_TRIGGERS.
  *
- * Ejecutar: node --test src/test/unit/core-triggers.test.js
+ * Ejecutar: node --test test/unit/core-triggers.test.js
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';

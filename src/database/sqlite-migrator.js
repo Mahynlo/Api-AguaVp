@@ -151,7 +151,7 @@ export function customMigrate(db, migrationsFolder, log = console.log) {
 /**
  * Triggers de negocio que deben existir siempre en la base local.
  * Cada definición DEBE ser igual a la última versión del trigger en src/database/migrations
- * (lo verifica src/test/unit/core-triggers.test.js).
+ * (lo verifica test/unit/core-triggers.test.js).
  */
 export const CORE_TRIGGERS = [
     {

@@ -151,7 +151,7 @@ La nube no tiene triggers (rechazarían pagos históricos o recalcularían saldo
 `validar_pago_contra_saldo`, `validar_pago_parcialidad`, `validar_tipo_pago`, `actualizar_saldo_factura`, `actualizar_estado_factura`, **`actualizar_estado_factura_parcial`**, `registrar_cambios_facturas`, `cerrar_historial_asignacion_anterior`, `registrar_historial_asignacion`.
 
 * Cada definición es **idéntica a la última versión en `src/database/migrations`** (incluye las correcciones de 0018 y 0022).
-* `src/test/unit/core-triggers.test.js` reconstruye el estado final de los triggers desde el journal de migraciones y falla si `CORE_TRIGGERS` difiere. **Al modificar o agregar un trigger en una migración, actualizar `CORE_TRIGGERS`.**
+* `test/unit/core-triggers.test.js` reconstruye el estado final de los triggers desde el journal de migraciones y falla si `CORE_TRIGGERS` difiere. **Al modificar o agregar un trigger en una migración, actualizar `CORE_TRIGGERS`.**
 * Solo se crean triggers ausentes (por nombre); no se reemplazan los existentes.
 * Los triggers `_sync_*` no son de negocio: los gestiona el servicio de sincronización (sección 3).
 
@@ -173,11 +173,11 @@ npm run test:sync
 
 Con `node:test` (no Jest), usando `node:sqlite` en memoria como base local y un archivo libsql como "nube" (sin internet ni cuenta de Turso):
 
-* `src/test/unit/turso-sync-core.test.js`
+* `test/unit/turso-sync-core.test.js`
   * Protección: primera carga sin triggers remotos; base local vacía y respaldo antiguo bloqueados (nube intacta); reemplazo forzado; borrado por diferencia; tabla protegida con faltantes; columna nueva; adopción de copia sin identidad; herencia de identidad.
   * Registro de cambios: tablas excluidas; cero red sin cambios; altas/ediciones/borrados de cualquier tabla; cambios de triggers de negocio y cascadas; reparación por verificación; registros extra conservados en tablas protegidas; carga completa requerida ante otra base o tabla nueva; desvincular; base dañada nunca se sube.
   * Restauración: ida y vuelta local → nube → base nueva (conteos, fila sembrada reemplazada, saldos tal cual, columna nueva con DEFAULT, triggers activos, identidad heredada, tablas excluidas vacías); re-vinculación sin conflicto; nube vacía; resumen sin tablas internas.
-* `src/test/unit/core-triggers.test.js`: `CORE_TRIGGERS` igual a las migraciones y comportamiento (estado "Parcial"/"Pagado", rechazo de sobrepago, historial al asignar/retirar medidor).
+* `test/unit/core-triggers.test.js`: `CORE_TRIGGERS` igual a las migraciones y comportamiento (estado "Parcial"/"Pagado", rechazo de sobrepago, historial al asignar/retirar medidor).
 
 Las suites `node:test` aparecen como fallidas si se ejecutan con Jest (`npm test`); usar su script.
 

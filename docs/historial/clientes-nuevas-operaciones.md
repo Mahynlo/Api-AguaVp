@@ -466,7 +466,7 @@ Las tablas necesarias ya existen:
 Para más información o reportar problemas:
 - Revisar logs del servidor
 - Verificar documentación Swagger
-- Consultar `docs/ANALISIS_OPERACIONES_CRUD.md`
+- Consultar `docs/historial/analisis-operaciones-crud.md`
 
 ---
 

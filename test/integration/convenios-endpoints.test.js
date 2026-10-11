@@ -5,7 +5,7 @@
  * Prueba los endpoints de creación de convenios, obtención de parcialidades
  * y pago de parcialidades
  * 
- * Ejecutar: npm test src/test/integration/convenios-endpoints.test.js
+ * Ejecutar: npm test test/integration/convenios-endpoints.test.js
  */
 
 import { jest } from '@jest/globals';

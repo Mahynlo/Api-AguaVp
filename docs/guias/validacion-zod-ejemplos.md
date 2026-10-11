@@ -1,7 +1,7 @@
 /**
  * Ejemplos de uso del sistema de validación con Zod
  * 
- * File: src/v2/validators/EJEMPLOS.md
+ * Archivo: docs/guias/validacion-zod-ejemplos.md (código en src/v2/validators/)
  * 
  * Este archivo muestra casos de uso comunes del sistema de validación
  */
@@ -419,4 +419,4 @@ export const actualizarClienteSchema = z.object({
 
 ---
 
-**¿Dudas?** Consulta [README.md](./README.md) para más información.
+**¿Dudas?** Consulta [validacion-zod.md](./validacion-zod.md) para más información.

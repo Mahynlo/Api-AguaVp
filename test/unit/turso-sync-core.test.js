@@ -2,7 +2,7 @@
  * Pruebas de protección de datos de la sincronización con Turso (tursoSyncCore.js).
  * La "nube" es un archivo libsql local: no requiere internet ni cuenta de Turso.
  *
- * Ejecutar: node --test src/test/unit/turso-sync-core.test.js
+ * Ejecutar: node --test test/unit/turso-sync-core.test.js
  */
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
