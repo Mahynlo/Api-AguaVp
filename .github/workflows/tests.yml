@@ -1,0 +1,31 @@
+name: Tests
+
+on:
+  push:
+    branches: [main, pruebas]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # node:sqlite (usado por las pruebas) es estable desde Node 22.13
+          node-version: 24
+
+      - name: Instalar dependencias
+        run: npm install --no-fund --no-audit
+
+      - name: Pruebas
+        run: npm test
+
+      - name: Verificar contenido del paquete
+        # Falla si el paquete publicado incluyera bases de datos o tests
+        run: |
+          npm pack --dry-run 2>&1 | tee pack.txt
+          if grep -E "\.db|^npm notice .* test/" pack.txt; then
+            echo "El paquete incluye archivos que no deberían publicarse"; exit 1
+          fi

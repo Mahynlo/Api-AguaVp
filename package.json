@@ -20,6 +20,7 @@
     "dev": "nodemon src/index.js",
     "start": "node src/index.js",
     "migrate": "node scripts/migrate.js",
+    "lint": "eslint .",
     "test": "node --test test/unit/trazabilidad-medidores.test.js test/unit/pagos-facturas.test.js test/unit/lecturas.test.js test/unit/rutas.test.js test/unit/clientes.test.js test/unit/tarifas.test.js test/unit/usuarios-roles-permisos.test.js test/unit/reporte-lecturas.test.js test/unit/turso-sync-core.test.js test/unit/core-triggers.test.js",
     "test:v2": "node --test test/unit/trazabilidad-medidores.test.js test/unit/pagos-facturas.test.js test/unit/lecturas.test.js test/unit/rutas.test.js test/unit/clientes.test.js test/unit/tarifas.test.js test/unit/usuarios-roles-permisos.test.js",
     "test:sync": "node --test test/unit/turso-sync-core.test.js test/unit/core-triggers.test.js",
@@ -59,7 +60,10 @@
     "zod": "^4.3.5"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "drizzle-kit": "^0.31.8",
+    "eslint": "^9.39.5",
+    "globals": "^17.13.0",
     "jest": "^30.0.5",
     "nodemon": "^3.1.10",
     "supertest": "^7.1.4"
