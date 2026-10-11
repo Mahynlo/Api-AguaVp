@@ -8,7 +8,7 @@ tables.forEach(t => {
   try {
     const r = db.prepare('SELECT COUNT(*) as c FROM ' + t).get();
     console.log(t + ': ' + r.c + ' rows');
-  } catch(e) { console.log(t + ': TABLE NOT FOUND'); }
+  } catch { console.log(t + ': TABLE NOT FOUND'); }
 });
 
 console.log('\n--- Facturas por estado ---');

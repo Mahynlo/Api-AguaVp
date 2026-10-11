@@ -92,7 +92,7 @@ export function validatePassword(password) {
     }
 
     // 6. Verificar al menos un carácter especial
-    if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(pass)) {
+    if (!/[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]/.test(pass)) {
         errors.push('La contraseña debe contener al menos un carácter especial (!@#$%^&*()_+-=[]{};\':"|,.<>/?)');
     }
 
@@ -170,7 +170,7 @@ export function calculatePasswordStrength(password) {
     if (/[a-z]/.test(password)) score += 10; // minúsculas
     if (/[A-Z]/.test(password)) score += 10; // mayúsculas
     if (/[0-9]/.test(password)) score += 10; // números
-    if (/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)) score += 10; // especiales
+    if (/[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]/.test(password)) score += 10; // especiales
 
     // Complejidad (hasta 20 puntos)
     const uniqueChars = new Set(password).size;

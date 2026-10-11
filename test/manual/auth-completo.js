@@ -740,6 +740,7 @@ async function ejecutarOpcion(opcion) {
             console.log('\n👋 Saliendo...\n');
             rl.close();
             process.exit(0);
+            break;
         default:
             console.log('❌ Opción no válida');
     }

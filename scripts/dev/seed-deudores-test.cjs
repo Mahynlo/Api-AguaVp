@@ -18,7 +18,6 @@ const db = new Database(DB_PATH);
 db.pragma('foreign_keys = ON');
 
 // Marcador: usamos periodos con prefijo 'TEST-' para identificar datos de prueba
-const SEED_PERIODOS = ['TEST-2025-08','TEST-2025-09','TEST-2025-10','TEST-2025-11','TEST-2025-12'];
 
 if (REVERT) {
     console.log('🔄 Revertiendo datos de prueba de deudores...');

@@ -65,7 +65,7 @@ const getAvailableVersions = () => {
  * Verificar si una versión está disponible
  */
 const isVersionAvailable = (version) => {
-  return versions.available.hasOwnProperty(version);
+  return Object.hasOwn(versions.available, version);
 };
 
 /**

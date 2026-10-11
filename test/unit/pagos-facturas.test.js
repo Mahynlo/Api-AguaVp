@@ -372,7 +372,7 @@ describe('Suite de Verificación: Módulo de Facturación y Pagos', () => {
 
             // Regla de seguridad: Si totalPagado > 0, NO se puede recalcular
             const puedeRecalcular = totalPagado === 0;
-            expect: assert.equal(puedeRecalcular, false);
+            assert.equal(puedeRecalcular, false);
             assert.equal(totalPagado, 50.00);
         });
 
