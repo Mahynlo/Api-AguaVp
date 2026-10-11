@@ -1,6 +1,7 @@
 import db from '../../database/db-sqlite.js';
 import { calcularTarifaDesdeDB } from '../../utils/tarifaUtils.js';
 import { nowDate, calcularVencimiento } from '../../utils/timezone.js';
+import { condicionesFacturas } from './filtrosListado.js';
 
 function serviceError(message, status) {
     const err = new Error(message);
@@ -125,29 +126,24 @@ const BASE_QUERY = `
     LEFT JOIN rangos_tarifas rt ON rt.tarifa_id = f.tarifa_id AND CAST(l.consumo_m3 AS INTEGER) >= rt.consumo_min AND (rt.consumo_max IS NULL OR CAST(l.consumo_m3 AS INTEGER) <= rt.consumo_max)
 `;
 
-export async function obtenerFacturas({ id, periodo, page, limit, search, estado, ciudad }) {
+export async function obtenerFacturas(query = {}) {
+    const { id, periodo, page, limit } = query;
     const pageNum = parseInt(page) || 1;
     const limitNum = parseInt(limit) || 60;
     const offset = (pageNum - 1) * limitNum;
-    const searchTerm = search ? `%${search.toLowerCase()}%` : null;
-    const normalizedSearch = search ? `%${search.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()}%` : null;
-
     const conditions = [];
     const queryParams = [];
-    const countParams = [];
+    let countParams = [];
 
     if (id) {
         conditions.push('f.id = ?');
         queryParams.push(id);
     } else {
-        if (periodo) { conditions.push('l.periodo = ?'); queryParams.push(periodo); countParams.push(periodo); }
-        if (estado?.trim()) { conditions.push('f.estado = ?'); queryParams.push(estado); countParams.push(estado); }
-        if (ciudad?.trim() && ciudad !== 'All') { conditions.push('c.ciudad = ?'); queryParams.push(ciudad); countParams.push(ciudad); }
-        if (searchTerm) {
-            conditions.push(`(unaccent(c.nombre) LIKE ? OR unaccent(c.direccion) LIKE ? OR unaccent(COALESCE(c.telefono,'')) LIKE ? OR unaccent(COALESCE(c.correo,'')) LIKE ? OR CAST(f.id AS TEXT) LIKE ? OR unaccent(m.numero_serie) LIKE ? OR unaccent(COALESCE(m.ubicacion,'')) LIKE ? OR CAST(COALESCE(c.numero_predio,'') AS TEXT) LIKE ?)`);
-            queryParams.push(normalizedSearch, normalizedSearch, normalizedSearch, normalizedSearch, searchTerm, normalizedSearch, normalizedSearch, searchTerm);
-            countParams.push(normalizedSearch, normalizedSearch, normalizedSearch, normalizedSearch, searchTerm, normalizedSearch, normalizedSearch, searchTerm);
-        }
+        // Filtros (período, estado, ciudad, búsqueda, antigüedad, consumo, ruta, tarifa): filtrosListado.js
+        const filtro = condicionesFacturas(query, nowDate());
+        conditions.push(...filtro.conditions);
+        queryParams.push(...filtro.args);
+        countParams = filtro.args;
     }
 
     const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';

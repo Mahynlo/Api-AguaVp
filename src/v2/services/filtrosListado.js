@@ -122,3 +122,88 @@ export function condicionesClientes(query = {}, hoy) {
     }
     return { conditions, args };
 }
+
+// ── Facturas ──────────────────────────────────────────────────────────────────
+
+// Estados equivalentes (el filtro acepta cualquiera de las formas guardadas)
+const ESTADOS_FACTURA = {
+    Vencida: ['Vencida', 'Vencido'],
+    Vencido: ['Vencida', 'Vencido'],
+    Pagado: ['Pagado', 'Pagada'],
+    Pagada: ['Pagado', 'Pagada'],
+    Pendiente: ['Pendiente']
+};
+const RANGOS_CONSUMO = { '0-15': [0, 15], '16-30': [16, 30], '31-60': [31, 60], '61+': [61, null] };
+
+/**
+ * @param {Object} query - parámetros del listado de facturas
+ * @param {string} hoy - fecha local YYYY-MM-DD (antigüedad del vencimiento)
+ * @returns {{ conditions: string[], args: any[] }} (alias: f = facturas, c = clientes, l = lecturas, m = medidores)
+ */
+export function condicionesFacturas(query = {}, hoy) {
+    const { periodo, estado, ciudad, search, antiguedad, consumo, ruta_id, tarifa_id } = query;
+    const conditions = [];
+    const args = [];
+
+    if (periodo) { conditions.push('l.periodo = ?'); args.push(periodo); }
+    if (estado?.trim() && estado !== 'All') {
+        const valores = ESTADOS_FACTURA[estado] || [estado];
+        conditions.push(`f.estado IN (${valores.map(() => '?').join(', ')})`);
+        args.push(...valores);
+    }
+    if (ciudad?.trim() && ciudad !== 'All') { conditions.push('c.ciudad = ?'); args.push(ciudad); }
+    if (search) {
+        const searchTerm = `%${search.toLowerCase()}%`;
+        const t = `%${sinAcentos(search)}%`;
+        conditions.push(`(unaccent(c.nombre) LIKE ? OR unaccent(c.direccion) LIKE ? OR unaccent(COALESCE(c.telefono,'')) LIKE ? OR unaccent(COALESCE(c.correo,'')) LIKE ? OR CAST(f.id AS TEXT) LIKE ? OR unaccent(m.numero_serie) LIKE ? OR unaccent(COALESCE(m.ubicacion,'')) LIKE ? OR CAST(COALESCE(c.numero_predio,'') AS TEXT) LIKE ?)`);
+        args.push(t, t, t, t, searchTerm, t, t, searchTerm);
+    }
+    // Con saldo y vencida hace al menos N días
+    const dias = /^vencida_(\d{1,3})$/.exec(antiguedad || '');
+    if (dias) {
+        conditions.push("f.saldo_pendiente > 0 AND f.fecha_vencimiento <= date(?, '-' || ? || ' days')");
+        args.push(hoy, Number(dias[1]));
+    }
+    const rango = RANGOS_CONSUMO[consumo];
+    if (rango) {
+        conditions.push(rango[1] === null ? 'CAST(l.consumo_m3 AS INTEGER) >= ?' : 'CAST(l.consumo_m3 AS INTEGER) BETWEEN ? AND ?');
+        args.push(...rango.filter(v => v !== null));
+    }
+    if (activo(ruta_id)) {
+        if (ruta_id === 'sin_ruta') conditions.push('l.ruta_id IS NULL');
+        else { conditions.push('l.ruta_id = ?'); args.push(Number(ruta_id)); }
+    }
+    if (activo(tarifa_id)) { conditions.push('f.tarifa_id = ?'); args.push(Number(tarifa_id)); }
+    return { conditions, args };
+}
+
+// ── Pagos ─────────────────────────────────────────────────────────────────────
+
+/**
+ * @param {Object} query - parámetros del listado de pagos
+ * @returns {{ conditions: string[], args: any[] }} (alias: p = pagos, f = facturas, c = clientes, l = lecturas)
+ */
+export function condicionesPagos(query = {}) {
+    const { periodo, metodo_pago, ciudad, search, fecha_desde, fecha_hasta, cobrado_por, tipo } = query;
+    const conditions = [];
+    const args = [];
+
+    if (periodo) { conditions.push('l.periodo = ?'); args.push(periodo); }
+    if (metodo_pago?.trim() && metodo_pago !== 'All') { conditions.push('p.metodo_pago = ?'); args.push(metodo_pago); }
+    if (ciudad?.trim() && ciudad !== 'All') { conditions.push('c.ciudad = ?'); args.push(ciudad); }
+    if (search) {
+        const searchTerm = `%${search.toLowerCase()}%`;
+        const t = `%${sinAcentos(search)}%`;
+        conditions.push('(unaccent(c.nombre) LIKE ? OR CAST(p.id AS TEXT) LIKE ? OR CAST(f.id AS TEXT) LIKE ? OR unaccent(p.metodo_pago) LIKE ?)');
+        args.push(t, searchTerm, searchTerm, t);
+    }
+    // Fecha de cobro (YYYY-MM-DD, inclusive)
+    if (/^\d{4}-\d{2}-\d{2}$/.test(fecha_desde || '')) { conditions.push('substr(p.fecha_pago, 1, 10) >= ?'); args.push(fecha_desde); }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(fecha_hasta || '')) { conditions.push('substr(p.fecha_pago, 1, 10) <= ?'); args.push(fecha_hasta); }
+    if (activo(cobrado_por)) { conditions.push('p.modificado_por = ?'); args.push(Number(cobrado_por)); }
+    // Completo: cubrió el total de la factura; abono: cubrió solo una parte; parcialidad: pago de un convenio
+    if (tipo === 'completo') conditions.push('(p.parcialidad_id IS NULL AND p.monto >= f.total - 0.005)');
+    else if (tipo === 'abono') conditions.push('(p.parcialidad_id IS NULL AND p.monto < f.total - 0.005)');
+    else if (tipo === 'parcialidad') conditions.push('p.parcialidad_id IS NOT NULL');
+    return { conditions, args };
+}
