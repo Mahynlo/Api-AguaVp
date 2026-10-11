@@ -13,7 +13,10 @@
   "files": [
     "src/",
     "!src/**/*.test.js",
-    "!src/test/"
+    "!src/test/",
+    "!src/**/*.db",
+    "!src/**/*.db-shm",
+    "!src/**/*.db-wal"
   ],
   "scripts": {
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js src/test/unit",
