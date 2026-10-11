@@ -27,6 +27,8 @@ import 'dotenv/config';
 
 import express from 'express';
 import http from 'http';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import cors from 'cors';
 import SSEManager from './v2/sse/sseManager.js';
 import SSENotificationManager from './v2/sse/notificationManager.js';
@@ -75,7 +77,9 @@ const swaggerOptions = {
       }
     }
   },
-  apis: ['./src/v2/routes/*.js'],
+  // Ruta absoluta (con "/" para que glob funcione en Windows): con una ruta relativa
+  // al cwd, dentro de Electron no se encontraba ningún archivo y la documentación salía vacía.
+  apis: [path.join(path.dirname(fileURLToPath(import.meta.url)), 'v2', 'routes', '*.js').split(path.sep).join('/')],
 };
 
 
@@ -112,8 +116,16 @@ console.log('[Cron] Job de Convenios activado — verificación periódica de pa
 app.use('/api', routes);
 
 
-const swaggerSpec = swaggerJsdoc(swaggerOptions);
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+// La especificación se genera la primera vez que se abre /api-docs (y se guarda en caché),
+// no al arrancar: así el inicio del servidor no paga el costo de leer las anotaciones.
+let swaggerSpec = null;
+const cargarSwaggerSpec = (req, res, next) => {
+  swaggerSpec ??= swaggerJsdoc(swaggerOptions);
+  req.swaggerDoc = swaggerSpec;
+  next();
+};
+
+app.use('/api-docs', cargarSwaggerSpec, swaggerUi.serve, swaggerUi.setup(null, {
   customSiteTitle: 'API Agua Potable v2.0',
   customCss: `
     .swagger-ui .topbar { background-color: #198754; }
