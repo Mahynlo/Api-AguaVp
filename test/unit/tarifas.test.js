@@ -2,7 +2,7 @@ import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { calcularTarifa as calcularTarifaReal, validarRangosTarifa } from '../../src/utils/tarifaUtils.js';
-import { agregarRangosTarifa, reemplazarRangosTarifa } from '../../src/v2/services/tarifasRangos.js';
+import { agregarRangosTarifa, reemplazarRangosTarifa, eliminarTarifa, usoTarifa } from '../../src/v2/services/tarifasRangos.js';
 
 describe('Suite de Verificación: Módulo Integral de Tarifas, Rangos Escalonados y Facturación', () => {
     let db;
@@ -762,5 +762,63 @@ describe('Tarifas — código real: validación, cálculo y edición de rangos',
             assert.throws(() => reemplazarRangosTarifa(conn, 99, [{ consumo_min: 0, consumo_max: null, precio_por_m3: 1 }]), /no encontrada/);
             assert.deepEqual(rangos(), antes);
         });
+    });
+});
+
+describe('Tarifas — eliminar solo tarifas sin uso (código real)', () => {
+    let conn;
+    const existe = (id) => Boolean(conn.prepare('SELECT 1 FROM tarifas WHERE id = ?').get(id));
+
+    beforeEach(() => {
+        conn = new DatabaseSync(':memory:');
+        conn.exec(`
+            PRAGMA foreign_keys = ON;
+            CREATE TABLE tarifas (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT NOT NULL);
+            CREATE TABLE rangos_tarifas (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tarifa_id INTEGER NOT NULL REFERENCES tarifas(id) ON DELETE CASCADE,
+                consumo_min INTEGER NOT NULL, consumo_max INTEGER, precio_por_m3 NUMERIC NOT NULL);
+            CREATE TABLE historial_tarifas (id INTEGER PRIMARY KEY AUTOINCREMENT, tarifa_id INTEGER REFERENCES tarifas(id),
+                rango_id INTEGER REFERENCES rangos_tarifas(id), fecha_cambio TEXT DEFAULT (datetime('now')),
+                consumo_min INTEGER, consumo_max INTEGER, precio_anterior NUMERIC, precio_nuevo NUMERIC NOT NULL);
+            CREATE TABLE clientes (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT, tarifa_id INTEGER REFERENCES tarifas(id));
+            CREATE TABLE facturas (id INTEGER PRIMARY KEY AUTOINCREMENT, cliente_id INTEGER REFERENCES clientes(id),
+                tarifa_id INTEGER REFERENCES tarifas(id), total NUMERIC);
+            INSERT INTO tarifas (id, nombre) VALUES (1, 'Domestica'), (2, 'Comercial'), (3, 'Social');
+        `);
+        for (const id of [1, 2, 3]) agregarRangosTarifa(conn, id, [{ consumo_min: 0, consumo_max: 15, precio_por_m3: 100 }, { consumo_min: 16, consumo_max: null, precio_por_m3: 6.5 }]);
+        conn.exec(`INSERT INTO clientes (id, nombre, tarifa_id) VALUES (1, 'Cliente 1', 1);
+                   INSERT INTO facturas (cliente_id, tarifa_id, total) VALUES (1, 1, 100);`);
+    });
+
+    it('elimina por completo una tarifa sin clientes ni facturas (rangos e historial incluidos)', () => {
+        const res = eliminarTarifa(conn, 3);
+        assert.deepEqual(res, { nombre: 'Social', rangos: 2, historial: 2 });
+        assert.equal(existe(3), false);
+        assert.equal(conn.prepare('SELECT COUNT(*) AS n FROM rangos_tarifas WHERE tarifa_id = 3').get().n, 0);
+        assert.equal(conn.prepare('SELECT COUNT(*) AS n FROM historial_tarifas WHERE tarifa_id = 3').get().n, 0);
+    });
+
+    it('no elimina una tarifa con clientes asignados', () => {
+        assert.throws(() => eliminarTarifa(conn, 1), (e) => e.status === 409 && /1 cliente\(s\)/.test(e.message));
+        assert.equal(existe(1), true);
+    });
+
+    it('no elimina una tarifa usada en facturas aunque ya no tenga clientes', () => {
+        conn.exec('UPDATE clientes SET tarifa_id = 2 WHERE id = 1');
+        assert.deepEqual(usoTarifa(conn, 1), { clientes: 0, facturas: 1 });
+        assert.throws(() => eliminarTarifa(conn, 1), (e) => e.status === 409 && /1 factura\(s\)/.test(e.message));
+        assert.equal(existe(1), true);
+    });
+
+    it('nunca elimina la última tarifa', () => {
+        eliminarTarifa(conn, 3);
+        conn.exec('DELETE FROM facturas; DELETE FROM clientes;');
+        eliminarTarifa(conn, 2);
+        assert.throws(() => eliminarTarifa(conn, 1), (e) => e.status === 409 && /al menos una tarifa/.test(e.message));
+        assert.equal(existe(1), true);
+    });
+
+    it('responde 404 si la tarifa no existe', () => {
+        assert.throws(() => eliminarTarifa(conn, 99), (e) => e.status === 404);
     });
 });

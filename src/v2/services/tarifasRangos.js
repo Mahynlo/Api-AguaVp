@@ -1,5 +1,5 @@
 /**
- * Escritura de los rangos de una tarifa (sin depender de la conexión global, para poder probarla).
+ * Escritura de rangos y eliminación de tarifas (sin depender de la conexión global, para poder probarlas).
  * `conn` es una conexión SQLite síncrona: better-sqlite3 (producción) o node:sqlite (pruebas).
  *
  * Siempre se valida el conjunto COMPLETO de rangos que queda en la tarifa (validarRangosTarifa)
@@ -112,5 +112,47 @@ export function reemplazarRangosTarifa(conn, tarifa_id, rangos) {
             actualizados++;
         }
         return { agregados, actualizados, eliminados };
+    });
+}
+
+/**
+ * Cuántos clientes y facturas usan una tarifa (lo que impide eliminarla).
+ * @returns {{ clientes: number, facturas: number }}
+ */
+export function usoTarifa(conn, tarifa_id) {
+    return {
+        clientes: Number(conn.prepare('SELECT COUNT(*) AS n FROM clientes WHERE tarifa_id = ?').get(tarifa_id).n),
+        facturas: Number(conn.prepare('SELECT COUNT(*) AS n FROM facturas WHERE tarifa_id = ?').get(tarifa_id).n)
+    };
+}
+
+/**
+ * Elimina por completo una tarifa (con sus rangos y su historial de precios) solo si:
+ *  - no tiene clientes asignados,
+ *  - ninguna factura la usa (protege el historial de cobros, recibos y reportes),
+ *  - no es la única tarifa.
+ * @returns {{ nombre: string, rangos: number, historial: number }}
+ */
+export function eliminarTarifa(conn, tarifa_id) {
+    const tarifa = conn.prepare('SELECT id, nombre FROM tarifas WHERE id = ?').get(tarifa_id);
+    if (!tarifa) throw rangosError('Tarifa no encontrada', 404);
+
+    const { clientes, facturas } = usoTarifa(conn, tarifa_id);
+    const motivos = [];
+    if (clientes > 0) motivos.push(`tiene ${clientes} cliente(s) asignado(s)`);
+    if (facturas > 0) motivos.push(`se usó en ${facturas} factura(s)`);
+    if (motivos.length) {
+        throw rangosError(`No se puede eliminar la tarifa "${tarifa.nombre}": ${motivos.join(' y ')}. ` +
+            'Solo se pueden eliminar tarifas sin clientes ni facturas; para cambiar precios, edita sus rangos.', 409);
+    }
+    if (Number(conn.prepare('SELECT COUNT(*) AS n FROM tarifas').get().n) <= 1) {
+        throw rangosError(`No se puede eliminar la tarifa "${tarifa.nombre}": debe existir al menos una tarifa.`, 409);
+    }
+
+    return enTransaccion(conn, () => {
+        const historial = conn.prepare('DELETE FROM historial_tarifas WHERE tarifa_id = ?').run(tarifa_id).changes;
+        const rangos = conn.prepare('DELETE FROM rangos_tarifas WHERE tarifa_id = ?').run(tarifa_id).changes;
+        conn.prepare('DELETE FROM tarifas WHERE id = ?').run(tarifa_id);
+        return { nombre: tarifa.nombre, rangos: Number(rangos), historial: Number(historial) };
     });
 }

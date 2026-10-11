@@ -1,6 +1,6 @@
 import db, { sqlite } from '../../database/db-sqlite.js';
 import { nowDate } from '../../utils/timezone.js';
-import { agregarRangosTarifa, reemplazarRangosTarifa } from './tarifasRangos.js';
+import { agregarRangosTarifa, reemplazarRangosTarifa, eliminarTarifa as eliminarTarifaSinUso } from './tarifasRangos.js';
 
 function serviceError(message, status) {
     const err = new Error(message);
@@ -50,10 +50,19 @@ export async function obtenerTodasLasTarifas({ page, limit, search } = {}) {
     const rangosPor = {};
     rangosResult.rows.forEach(r => { const id = Number(r.tarifa_id); (rangosPor[id] = rangosPor[id] || []).push(mapRango(r)); });
 
+    const usoResult = await db.execute({
+        sql: `SELECT t.id,
+                     (SELECT COUNT(*) FROM clientes c WHERE c.tarifa_id = t.id) AS clientes,
+                     (SELECT COUNT(*) FROM facturas f WHERE f.tarifa_id = t.id) AS facturas
+              FROM tarifas t WHERE t.id IN (${ids.map(() => '?').join(',')})`,
+        args: ids
+    });
+    const usoPor = Object.fromEntries(usoResult.rows.map(r => [Number(r.id), { clientes: Number(r.clientes), facturas: Number(r.facturas) }]));
+
     const hoy = nowDate();
     const tarifas = dataResult.rows.map(t => {
         const id = Number(t.id);
-        return { id, nombre: t.nombre, descripcion: t.descripcion, fecha_inicio: t.fecha_inicio, fecha_fin: t.fecha_fin, modificado_por: Number(t.modificado_por), fecha_creacion: t.fecha_creacion, activa: hoy >= t.fecha_inicio && (!t.fecha_fin || hoy <= t.fecha_fin), rangos: rangosPor[id] || [] };
+        return { id, nombre: t.nombre, descripcion: t.descripcion, fecha_inicio: t.fecha_inicio, fecha_fin: t.fecha_fin, modificado_por: Number(t.modificado_por), fecha_creacion: t.fecha_creacion, activa: hoy >= t.fecha_inicio && (!t.fecha_fin || hoy <= t.fecha_fin), rangos: rangosPor[id] || [], clientes_asignados: usoPor[id]?.clientes ?? 0, facturas_emitidas: usoPor[id]?.facturas ?? 0 };
     });
 
     return { tarifas, pagination: { total: totalItems, page: pageNum, limit: limitNum, totalPages: Math.ceil(totalItems / limitNum) } };
@@ -69,6 +78,11 @@ export async function modificarTarifa(id, { nombre, descripcion, fecha_inicio, f
     if (!check.rows.length) throw serviceError('Tarifa no encontrada', 404);
     await db.execute({ sql: `UPDATE tarifas SET nombre = ?, descripcion = ?, fecha_inicio = ?, fecha_fin = ?, modificado_por = ? WHERE id = ?`, args: [nombre, descripcion, fecha_inicio, fecha_fin || null, usuarioId, id] });
     return { nombre };
+}
+
+export async function eliminarTarifa(id) {
+    // Solo sin clientes ni facturas y nunca la última tarifa (tarifasRangos.js)
+    return eliminarTarifaSinUso(sqlite, Number(id));
 }
 
 export async function modificarRangosTarifa(tarifa_id, rangos) {

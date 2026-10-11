@@ -1,4 +1,4 @@
-import { registrarTarifa, registrarRangosTarifa, obtenerTodasLasTarifas, obtenerHistorialTarifas, modificarTarifa, modificarRangosTarifa, obtenerTarifaPorId, obtenerTarifasActivas, obtenerHistorialTarifa, estadisticasTarifas } from '../services/tarifasService.js';
+import { registrarTarifa, registrarRangosTarifa, obtenerTodasLasTarifas, obtenerHistorialTarifas, modificarTarifa, modificarRangosTarifa, eliminarTarifa, obtenerTarifaPorId, obtenerTarifasActivas, obtenerHistorialTarifa, estadisticasTarifas } from '../services/tarifasService.js';
 
 let sseManager = null;
 let notificationManager = null;
@@ -70,6 +70,17 @@ const tarifasController = {
             res.json({ mensaje: 'Tarifa modificada exitosamente' });
         } catch (err) {
             console.error('❌ Error al modificar tarifa v2:', err);
+            res.status(err.status || 500).json({ error: err.message || 'Error interno del servidor' });
+        }
+    },
+
+    async eliminarTarifa(req, res) {
+        try {
+            const resultado = await eliminarTarifa(req.params.id);
+            notify(`Tarifa "${resultado.nombre}" eliminada`, 'warning', { tarifa_id: Number(req.params.id), ...resultado, accion: 'tarifa_eliminada' });
+            res.json({ mensaje: `Tarifa "${resultado.nombre}" eliminada`, ...resultado });
+        } catch (err) {
+            console.error('❌ Error al eliminar tarifa v2:', err);
             res.status(err.status || 500).json({ error: err.message || 'Error interno del servidor' });
         }
     },

@@ -827,6 +827,26 @@ router.get("/listar", appKeyMiddleware, configureSSE, authMiddleware, tarifasCon
 router.get("/listarHistorico", appKeyMiddleware, configureSSE, authMiddleware, tarifasController.obtenerHistorialTarifas);
 
 router.put("/modificar/:id", appKeyMiddleware, configureSSE, authMiddleware, requirePermission('tarifas.modificar'), validate(tarifaIdParamSchema, 'params'), validate(actualizarTarifaSchema), tarifasController.modificarTarifa);
+/**
+ * @swagger
+ * /api/v2/tarifas/eliminar/{id}:
+ *   delete:
+ *     summary: Eliminar una tarifa sin clientes ni facturas
+ *     description: Borra la tarifa, sus rangos y su historial de precios. Responde 409 si tiene clientes asignados, si alguna factura la usa o si es la única tarifa.
+ *     tags: [Tarifas]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: integer }
+ *     responses:
+ *       200: { description: Tarifa eliminada }
+ *       404: { description: Tarifa no encontrada }
+ *       409: { description: La tarifa está en uso o es la única }
+ */
+router.delete("/eliminar/:id", appKeyMiddleware, configureSSE, authMiddleware, requirePermission('tarifas.eliminar'), validate(tarifaIdParamSchema, 'params'), tarifasController.eliminarTarifa);
 router.put("/modificar-rangos/:id", appKeyMiddleware, configureSSE, authMiddleware, requirePermission('tarifas.modificar'), tarifasController.modificarRangosTarifa);
 
 /**
