@@ -11,7 +11,7 @@
  */
 
 import jwt from "jsonwebtoken";
-import dbTurso from "../../database/db-sqlite.js";
+import db from "../../database/db-sqlite.js";
 
 const SECRET_APP_KEY = process.env.SECRET_APP_KEY; //secret para firmar el token
 
@@ -26,7 +26,7 @@ async function appKeyMiddleware(req, res, next) {
 
     try {
         // 1. Verificar si el AppKey está en la lista de revocados
-        const revokeCheck = await dbTurso.execute({
+        const revokeCheck = await db.execute({
             sql: `SELECT id FROM tokens_revocados WHERE token = ? LIMIT 1`,
             args: [token]
         });
@@ -44,7 +44,7 @@ async function appKeyMiddleware(req, res, next) {
         // 3. Verifica que la app esté activa
         const query = `SELECT * FROM apps WHERE app_id = ? AND activo = 1`;
 
-        const result = await dbTurso.execute({
+        const result = await db.execute({
             sql: query,
             args: [decoded.app_id]
         });

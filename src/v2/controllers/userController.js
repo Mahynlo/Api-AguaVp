@@ -1,92 +1,65 @@
-import { obtenerUsuarios, obtenerUsuarioPorId, crearUsuario, actualizarUsuario, eliminarUsuario, activarUsuario, purgarUsuario } from '../services/userService.js';
+import { obtenerUsuarios, obtenerUsuarioPorId, obtenerRolUsuario, crearUsuario, actualizarUsuario, eliminarUsuario, activarUsuario, purgarUsuario } from '../services/userService.js';
 import { buildUserPermissionsSnapshot, getPermissionCatalog, setUserPermissionOverrides } from '../services/permissionsService.js';
-import dbTurso from "../../database/db-sqlite.js";
+import { manejarErrores } from '../../utils/errores.js';
+
+// Respuesta de error con mensaje fijo y status 500 (no expone el error interno)
+const errorFijo = (mensaje, log) => ({ mensaje, log, exponerMensaje: false, statusDelError: false });
 
 const userController = {
 
-    obtenerCatalogoPermisos: async (_req, res) => {
-        try {
-            res.json({ success: true, data: await getPermissionCatalog() });
-        } catch (error) {
-            console.error('Error al obtener catálogo de permisos:', error);
-            res.status(500).json({ error: 'Error al obtener catálogo de permisos' });
-        }
-    },
+    obtenerCatalogoPermisos: manejarErrores(async (_req, res) => {
+        res.json({ success: true, data: await getPermissionCatalog() });
+    }, errorFijo('Error al obtener catálogo de permisos', 'Error al obtener catálogo de permisos:')),
 
-    obtenerMisPermisos: async (req, res) => {
+    obtenerMisPermisos: manejarErrores(async (req, res) => {
         const actorId = Number(req.usuario?.id);
         const actorRole = req.usuario?.rol;
         if (!actorId || !actorRole) return res.status(401).json({ error: 'Usuario no autenticado' });
-        try {
-            const permisos = await buildUserPermissionsSnapshot(actorId, actorRole);
-            res.json({ success: true, user_id: actorId, role: actorRole, permissions: permisos });
-        } catch (error) {
-            console.error('Error al obtener permisos del usuario actual:', error);
-            res.status(500).json({ error: 'Error al obtener permisos' });
+        const permisos = await buildUserPermissionsSnapshot(actorId, actorRole);
+        res.json({ success: true, user_id: actorId, role: actorRole, permissions: permisos });
+    }, errorFijo('Error al obtener permisos', 'Error al obtener permisos del usuario actual:')),
+
+    obtenerPermisosUsuario: manejarErrores(async (req, res) => {
+        const targetUserId = Number(req.params.id);
+        const targetUser = await obtenerRolUsuario(targetUserId);
+        if (!targetUser) return res.status(404).json({ error: 'Usuario no encontrado' });
+        const permissions = await buildUserPermissionsSnapshot(targetUserId, targetUser.rol);
+        res.json({ success: true, user_id: targetUserId, role: targetUser.rol, permissions });
+    }, errorFijo('Error al obtener permisos del usuario', 'Error al obtener permisos del usuario:')),
+
+    actualizarPermisosUsuario: manejarErrores(async (req, res) => {
+        const targetUserId = Number(req.params.id);
+        const actorId = Number(req.usuario?.id);
+        const actorRole = req.usuario?.rol;
+        const { overrides = [] } = req.body;
+        const targetUser = await obtenerRolUsuario(targetUserId);
+        if (!targetUser) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+        if (actorRole === 'administrador' && targetUser.rol === 'superadmin') {
+            return res.status(403).json({ error: 'No tienes permiso para modificar los permisos de un superadmin' });
         }
-    },
 
-    obtenerPermisosUsuario: async (req, res) => {
-        try {
-            const targetUserId = Number(req.params.id);
-            const userResult = await dbTurso.execute({ sql: 'SELECT id, rol FROM usuarios WHERE id = ?', args: [targetUserId] });
-            if (userResult.rows.length === 0) return res.status(404).json({ error: 'Usuario no encontrado' });
-            const targetUser = userResult.rows[0];
-            const permissions = await buildUserPermissionsSnapshot(targetUserId, targetUser.rol);
-            res.json({ success: true, user_id: targetUserId, role: targetUser.rol, permissions });
-        } catch (error) {
-            console.error('Error al obtener permisos del usuario:', error);
-            res.status(500).json({ error: 'Error al obtener permisos del usuario' });
+        await setUserPermissionOverrides({ userId: targetUserId, updatedBy: actorId, overrides });
+        const updatedPermissions = await buildUserPermissionsSnapshot(targetUserId, targetUser.rol);
+        res.json({ success: true, message: 'Permisos actualizados correctamente', user_id: targetUserId, permissions: updatedPermissions });
+    }, errorFijo('Error al actualizar permisos del usuario', 'Error al actualizar permisos del usuario:')),
+
+    obtenerUsuarios: manejarErrores(async (req, res) => {
+        const actorRole = req.usuario?.rol;
+        res.json(await obtenerUsuarios({ ...req.query, actorRole }));
+    }, { mensaje: 'Error interno al obtener usuarios', log: 'Error al obtener usuarios:' }),
+
+    obtenerUsuarioPorId: manejarErrores(async (req, res) => {
+        const actorRole = req.usuario?.rol;
+        const targetUser = await obtenerUsuarioPorId(req.params.id);
+        if (actorRole === 'administrador' && targetUser.rol === 'superadmin') {
+            return res.status(403).json({ error: 'No tienes permiso para ver a un superadmin' });
         }
-    },
+        res.json(targetUser);
+    }, { mensaje: 'Error interno', log: 'Error al obtener usuario:' }),
 
-    actualizarPermisosUsuario: async (req, res) => {
-        try {
-            const targetUserId = Number(req.params.id);
-            const actorId = Number(req.usuario?.id);
-            const actorRole = req.usuario?.rol;
-            const { overrides = [] } = req.body;
-            const userResult = await dbTurso.execute({ sql: 'SELECT id, rol FROM usuarios WHERE id = ?', args: [targetUserId] });
-            if (userResult.rows.length === 0) return res.status(404).json({ error: 'Usuario no encontrado' });
-            const targetUser = userResult.rows[0];
-
-            if (actorRole === 'administrador' && targetUser.rol === 'superadmin') {
-                return res.status(403).json({ error: 'No tienes permiso para modificar los permisos de un superadmin' });
-            }
-
-            await setUserPermissionOverrides({ userId: targetUserId, updatedBy: actorId, overrides });
-            const updatedPermissions = await buildUserPermissionsSnapshot(targetUserId, targetUser.rol);
-            res.json({ success: true, message: 'Permisos actualizados correctamente', user_id: targetUserId, permissions: updatedPermissions });
-        } catch (error) {
-            console.error('Error al actualizar permisos del usuario:', error);
-            res.status(500).json({ error: 'Error al actualizar permisos del usuario' });
-        }
-    },
-
-    obtenerUsuarios: async (req, res) => {
-        try {
-            const actorRole = req.usuario?.rol;
-            res.json(await obtenerUsuarios({ ...req.query, actorRole }));
-        } catch (error) {
-            console.error("Error al obtener usuarios:", error);
-            res.status(error.status || 500).json({ error: error.message || "Error interno al obtener usuarios" });
-        }
-    },
-
-    obtenerUsuarioPorId: async (req, res) => {
-        try {
-            const actorRole = req.usuario?.rol;
-            const targetUser = await obtenerUsuarioPorId(req.params.id);
-            if (actorRole === 'administrador' && targetUser.rol === 'superadmin') {
-                return res.status(403).json({ error: 'No tienes permiso para ver a un superadmin' });
-            }
-            res.json(targetUser);
-        } catch (error) {
-            console.error("Error al obtener usuario:", error);
-            res.status(error.status || 500).json({ error: error.message || "Error interno" });
-        }
-    },
-
+    // Se mantiene con try/catch propio: la validación de req.body ocurre fuera del try
+    // y envolverla cambiaría la respuesta ante peticiones sin cuerpo JSON.
     crearUsuario: async (req, res) => {
         const { correo, contrasena, username, rol } = req.body;
         const actorRole = req.usuario?.rol;
@@ -105,81 +78,61 @@ const userController = {
         }
     },
 
-    actualizarUsuario: async (req, res) => {
-        try {
-            const actorRole = req.usuario?.rol;
-            const targetUserId = req.params.id;
+    actualizarUsuario: manejarErrores(async (req, res) => {
+        const actorRole = req.usuario?.rol;
+        const targetUserId = req.params.id;
 
-            const targetUser = await obtenerUsuarioPorId(targetUserId);
-            if (actorRole === 'administrador' && targetUser.rol === 'superadmin') {
-                return res.status(403).json({ error: 'No tienes permiso para modificar a un superadmin' });
-            }
-
-            if (actorRole === 'administrador' && req.body.rol === 'superadmin') {
-                return res.status(403).json({ error: 'No tienes permiso para asignar el rol de superadmin' });
-            }
-
-            await actualizarUsuario(targetUserId, req.body);
-            res.json({ success: true, mensaje: "Usuario actualizado correctamente" });
-        } catch (error) {
-            console.error("Error actualizando usuario:", error);
-            res.status(error.status || 500).json({ error: error.message || "Error al actualizar usuario" });
+        const targetUser = await obtenerUsuarioPorId(targetUserId);
+        if (actorRole === 'administrador' && targetUser.rol === 'superadmin') {
+            return res.status(403).json({ error: 'No tienes permiso para modificar a un superadmin' });
         }
-    },
 
-    eliminarUsuario: async (req, res) => {
-        try {
-            const actorRole = req.usuario?.rol;
-            const targetUserId = req.params.id;
-
-            const targetUser = await obtenerUsuarioPorId(targetUserId);
-            if (actorRole === 'administrador' && targetUser.rol === 'superadmin') {
-                return res.status(403).json({ error: 'No tienes permiso para desactivar a un superadmin' });
-            }
-
-            await eliminarUsuario(targetUserId, req.usuario.id, req.body.razon);
-            res.json({ success: true, mensaje: "Usuario eliminado correctamente" });
-        } catch (error) {
-            console.error("Error eliminando usuario:", error);
-            res.status(error.status || 500).json({ error: error.message || "Error al eliminar usuario" });
+        if (actorRole === 'administrador' && req.body.rol === 'superadmin') {
+            return res.status(403).json({ error: 'No tienes permiso para asignar el rol de superadmin' });
         }
-    },
 
-    activarUsuario: async (req, res) => {
-        try {
-            const actorRole = req.usuario?.rol;
-            const targetUserId = req.params.id;
+        await actualizarUsuario(targetUserId, req.body);
+        res.json({ success: true, mensaje: "Usuario actualizado correctamente" });
+    }, { mensaje: 'Error al actualizar usuario', log: 'Error actualizando usuario:' }),
 
-            const targetUser = await obtenerUsuarioPorId(targetUserId);
-            if (actorRole === 'administrador' && targetUser.rol === 'superadmin') {
-                return res.status(403).json({ error: 'No tienes permiso para reactivar a un superadmin' });
-            }
+    eliminarUsuario: manejarErrores(async (req, res) => {
+        const actorRole = req.usuario?.rol;
+        const targetUserId = req.params.id;
 
-            await activarUsuario(targetUserId);
-            res.json({ success: true, mensaje: "Usuario reactivado correctamente" });
-        } catch (error) {
-            console.error("Error reactivando usuario:", error);
-            res.status(error.status || 500).json({ error: error.message || "Error al reactivar usuario" });
+        const targetUser = await obtenerUsuarioPorId(targetUserId);
+        if (actorRole === 'administrador' && targetUser.rol === 'superadmin') {
+            return res.status(403).json({ error: 'No tienes permiso para desactivar a un superadmin' });
         }
-    },
 
-    purgarUsuario: async (req, res) => {
-        try {
-            const actorRole = req.usuario?.rol;
-            const targetUserId = req.params.id;
+        await eliminarUsuario(targetUserId, req.usuario.id, req.body.razon);
+        res.json({ success: true, mensaje: "Usuario eliminado correctamente" });
+    }, { mensaje: 'Error al eliminar usuario', log: 'Error eliminando usuario:' }),
 
-            const targetUser = await obtenerUsuarioPorId(targetUserId);
-            if (actorRole === 'administrador' && targetUser.rol === 'superadmin') {
-                return res.status(403).json({ error: 'No tienes permiso para eliminar definitivamente a un superadmin' });
-            }
+    activarUsuario: manejarErrores(async (req, res) => {
+        const actorRole = req.usuario?.rol;
+        const targetUserId = req.params.id;
 
-            await purgarUsuario(targetUserId);
-            res.json({ success: true, mensaje: "Usuario eliminado definitivamente de la base de datos" });
-        } catch (error) {
-            console.error("Error purgando usuario:", error);
-            res.status(error.status || 500).json({ error: error.message || "Error al eliminar definitivamente al usuario" });
+        const targetUser = await obtenerUsuarioPorId(targetUserId);
+        if (actorRole === 'administrador' && targetUser.rol === 'superadmin') {
+            return res.status(403).json({ error: 'No tienes permiso para reactivar a un superadmin' });
         }
-    }
+
+        await activarUsuario(targetUserId);
+        res.json({ success: true, mensaje: "Usuario reactivado correctamente" });
+    }, { mensaje: 'Error al reactivar usuario', log: 'Error reactivando usuario:' }),
+
+    purgarUsuario: manejarErrores(async (req, res) => {
+        const actorRole = req.usuario?.rol;
+        const targetUserId = req.params.id;
+
+        const targetUser = await obtenerUsuarioPorId(targetUserId);
+        if (actorRole === 'administrador' && targetUser.rol === 'superadmin') {
+            return res.status(403).json({ error: 'No tienes permiso para eliminar definitivamente a un superadmin' });
+        }
+
+        await purgarUsuario(targetUserId);
+        res.json({ success: true, mensaje: "Usuario eliminado definitivamente de la base de datos" });
+    }, { mensaje: 'Error al eliminar definitivamente al usuario', log: 'Error purgando usuario:' })
 };
 
 export default userController;

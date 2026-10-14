@@ -5,8 +5,8 @@
  * 
  * Descripción:
  * - Este archivo configura el servidor Express y las rutas de la API.
- * - Establece la conexión con el servidor WebSocket.
- * - Configura los middlewares y las rutas de la API.
+ * - Configura los middlewares, SSE (notificaciones en tiempo real),
+ *   los cron jobs y la documentación Swagger.
  * 
  * Funciones:
  * - Carga las variables de entorno desde un archivo .env.
@@ -18,9 +18,7 @@
  * - Se utiliza dotenv para cargar las variables de entorno.
  * - Se utiliza express para crear el servidor.
  * - Se utiliza cors para permitir el acceso desde diferentes dominios.
- * - Se utiliza socket.io para establecer la conexión WebSocket.
- * - Se utiliza sqlite3 para interactuar con la base de datos SQLite.
- * - Se utiliza bcryptjs para cifrar las contraseñas.
+ * - La conexión a la base de datos vive en database/db-sqlite.js (better-sqlite3).
  * 
  */
 
@@ -29,10 +27,10 @@ import 'dotenv/config';
 
 import express from 'express';
 import http from 'http';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import cors from 'cors';
-import { Server } from 'socket.io';
-// import setupSocket from './v1/sockets/socket.js'; // DESACTIVADO TEMPORALMENTE
-// import SocketManager from './v1/sockets/enhanced/socketManager.js'; // DESACTIVADO TEMPORALMENTE
 import SSEManager from './v2/sse/sseManager.js';
 import SSENotificationManager from './v2/sse/notificationManager.js';
 import routes from './routes/index.js';
@@ -43,6 +41,23 @@ import swaggerJsdoc from 'swagger-jsdoc';
 
 import { initDeudoresJob, setNotificationManager as setDeudoresNotificationManager } from './jobs/procesarDeudores.js';
 import { initConveniosJob, setNotificationManager as setConveniosNotificationManager } from './jobs/verificarConvenios.js';
+// Archivos con comentarios @swagger: cada módulo tiene sus rutas en v2/routes/<modulo>.js y,
+// si su documentación está separada, en v2/openapi/<modulo>.js. Se ordenan por módulo para que
+// Swagger muestre las secciones en el mismo orden de siempre.
+// Rutas absolutas (con "/" para que glob funcione en Windows): con rutas relativas al cwd,
+// dentro de Electron no se encontraba ningún archivo y la documentación salía vacía.
+function archivosSwagger() {
+  const v2Dir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'v2');
+  return ['routes', 'openapi']
+    .flatMap((carpeta, prioridad) => {
+      const dir = path.join(v2Dir, carpeta);
+      if (!fs.existsSync(dir)) return [];
+      return fs.readdirSync(dir).filter(f => f.endsWith('.js')).map(f => ({ f, prioridad, ruta: path.join(dir, f) }));
+    })
+    .sort((a, b) => a.f.localeCompare(b.f, 'en') || a.prioridad - b.prioridad)
+    .map(a => a.ruta.split(path.sep).join('/'));
+}
+
 const swaggerOptions = {
   definition: {
     openapi: '3.0.0',
@@ -80,18 +95,12 @@ const swaggerOptions = {
       }
     }
   },
-  apis: ['./src/v2/routes/*.js'], // Cambiado a v2 - v1 desactivada temporalmente
+  apis: archivosSwagger(),
 };
 
 
 const app = express();
 const server = http.createServer(app);
-
-const io = new Server(server, {
-  cors: {
-    origin: '*', // ⚠️ Para producción se debe restringir esto
-  }
-});
 
 // Configurar Express para confiar en proxies (Render, Nginx, etc.)
 // Esto permite que Express use correctamente los headers X-Forwarded-*
@@ -103,19 +112,13 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Inicializar Socket Manager mejorado (v1) - DESACTIVADO TEMPORALMENTE
-// const socketManager = new SocketManager();
-
-// Inicializar SSE Manager (v2)
+// Inicializar SSE Manager
 const sseManager = new SSEManager();
 const sseNotificationManager = new SSENotificationManager(sseManager);
 
 // Hacer disponible los objetos en toda la aplicación
-app.set('io', io);
-// app.set('socketManager', socketManager); // DESACTIVADO TEMPORALMENTE
-app.set('sseManager', sseManager); // Activo para v2
-
-app.set('notificationManager', sseNotificationManager); // Activo para v2
+app.set('sseManager', sseManager);
+app.set('notificationManager', sseNotificationManager);
 
 // Inicializar Cron Jobs
 setDeudoresNotificationManager(sseNotificationManager);
@@ -129,10 +132,17 @@ console.log('[Cron] Job de Convenios activado — verificación periódica de pa
 app.use('/api', routes);
 
 
-const swaggerSpec = swaggerJsdoc(swaggerOptions);
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
-  customSiteTitle: 'API Agua Potable v2.0 (v1 Desactivada)',
-  customfavIcon: './public/assets/images/icon.png',
+// La especificación se genera la primera vez que se abre /api-docs (y se guarda en caché),
+// no al arrancar: así el inicio del servidor no paga el costo de leer las anotaciones.
+let swaggerSpec = null;
+const cargarSwaggerSpec = (req, res, next) => {
+  swaggerSpec ??= swaggerJsdoc(swaggerOptions);
+  req.swaggerDoc = swaggerSpec;
+  next();
+};
+
+app.use('/api-docs', cargarSwaggerSpec, swaggerUi.serve, swaggerUi.setup(null, {
+  customSiteTitle: 'API Agua Potable v2.0',
   customCss: `
     .swagger-ui .topbar { background-color: #198754; }
     .topbar-wrapper span { color: #fff !important; font-weight: bold; }
@@ -150,14 +160,8 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
 }));
 
 
-// WebSocket - Sistema desactivado temporalmente (v1)
-// setupSocket(io);  // Sistema básico para compatibilidad - DESACTIVADO
-// socketManager.initialize(io);  // Sistema mejorado con autenticación y roles - DESACTIVADO
-
 console.log('🚀 Sistemas inicializados:');
-console.log('   - WebSockets (v1): ❌ DESACTIVADO TEMPORALMENTE');
 console.log('   - SSE (v2): ✅ ACTIVO');
-console.log('   - API v1: ❌ DESACTIVADA TEMPORALMENTE');
 console.log('   - API v2: ✅ ACTIVA');
 console.log('   - Cron Deudores: ✅ ACTIVO (Diario 3:00 AM)');
 

@@ -3,23 +3,11 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+// Configuración de drizzle-kit (solo desarrollo):
+//   npm run db:generate  → genera una migración nueva en src/database/migrations
+//   npm run db:studio    → abre Drizzle Studio sobre la base local
+// Las migraciones se aplican con `npm run migrate` (mismo migrador que usa Electron).
 
-// Para Turso
-/*
-export default defineConfig({
-  schema: './src/database/schema/index.js',
-  out: './src/database/migrations',
-  dialect: 'turso',
-  dbCredentials: {
-    url: process.env.TURSO_DATABASE_URL!,
-    authToken: process.env.TURSO_AUTH_TOKEN!,
-  },
-  verbose: true,
-  strict: true,
-});
-*/
-
-// Para SQLite local
 // Convertir path de Windows a file:// URL si es necesario
 function toFileUrl(dbPath: string): string {
   // Si ya es una URL, retornarla

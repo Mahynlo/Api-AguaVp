@@ -1,6 +1,7 @@
-import dbTurso from '../../database/db-sqlite.js';
+import db, { sqlite } from '../../database/db-sqlite.js';
 import { calcularTarifaDesdeDB } from '../../utils/tarifaUtils.js';
 import { nowDate, calcularVencimiento } from '../../utils/timezone.js';
+import { estadoRectificacion } from './lecturasRectificacion.js';
 
 function serviceError(message, status) {
     const err = new Error(message);
@@ -63,20 +64,20 @@ LEFT JOIN clientes c_fac ON f_fac.cliente_id = c_fac.id
 LEFT JOIN rutas r ON l.ruta_id = r.id`;
 
 export async function registrarLectura({ medidor_id, ruta_id, lectura_actual, vuelta_cero = false, consumo_m3: consumo_m3_legacy, fecha_lectura, periodo }, usuarioId) {
-    const medidorResult = await dbTurso.execute({ sql: `SELECT id, lectura_base, capacidad_maxima FROM medidores WHERE id = ?`, args: [medidor_id] });
+    const medidorResult = await db.execute({ sql: `SELECT id, lectura_base, capacidad_maxima FROM medidores WHERE id = ?`, args: [medidor_id] });
     if (!medidorResult.rows.length) throw serviceError('Medidor no encontrado', 404);
     const medidor = medidorResult.rows[0];
 
-    const rutaResult = await dbTurso.execute({ sql: `SELECT id FROM rutas WHERE id = ?`, args: [ruta_id] });
+    const rutaResult = await db.execute({ sql: `SELECT id FROM rutas WHERE id = ?`, args: [ruta_id] });
     if (!rutaResult.rows.length) throw serviceError('Ruta no encontrada', 404);
 
-    const perteneceResult = await dbTurso.execute({ sql: `SELECT 1 FROM rutas_puntos WHERE ruta_id = ? AND medidor_id = ?`, args: [ruta_id, medidor_id] });
+    const perteneceResult = await db.execute({ sql: `SELECT 1 FROM rutas_puntos WHERE ruta_id = ? AND medidor_id = ?`, args: [ruta_id, medidor_id] });
     if (!perteneceResult.rows.length) throw serviceError('El medidor no está asignado a esta ruta', 400);
 
-    const dupeResult = await dbTurso.execute({ sql: `SELECT id FROM lecturas WHERE medidor_id = ? AND periodo = ?`, args: [medidor_id, periodo] });
+    const dupeResult = await db.execute({ sql: `SELECT id FROM lecturas WHERE medidor_id = ? AND periodo = ?`, args: [medidor_id, periodo] });
     if (dupeResult.rows.length) throw serviceError('Ya existe una lectura registrada para este medidor y periodo', 409);
 
-    const cierrePeriodoResult = await dbTurso.execute({
+    const cierrePeriodoResult = await db.execute({
         sql: `SELECT COUNT(*) AS total_facturas FROM facturas f JOIN lecturas l ON l.id = f.lectura_id WHERE l.ruta_id = ? AND l.periodo = ?`,
         args: [ruta_id, periodo]
     });
@@ -100,7 +101,7 @@ export async function registrarLectura({ medidor_id, ruta_id, lectura_actual, vu
             ? `SELECT lectura_actual FROM lecturas WHERE medidor_id = ? AND (periodo < ? OR (periodo IS NULL AND fecha_lectura < ?)) AND lectura_actual IS NOT NULL ORDER BY periodo DESC, fecha_lectura DESC LIMIT 1`
             : `SELECT lectura_actual FROM lecturas WHERE medidor_id = ? AND lectura_actual IS NOT NULL ORDER BY fecha_lectura DESC LIMIT 1`;
         const prevArgs = periodo ? [medidor_id, periodo, `${periodo}-01`] : [medidor_id];
-        const prevResult = await dbTurso.execute({ sql: prevQuery, args: prevArgs });
+        const prevResult = await db.execute({ sql: prevQuery, args: prevArgs });
         let lectAnterior = null;
         if (prevResult.rows.length && prevResult.rows[0].lectura_actual !== null) {
             lectAnterior = parseFloat(prevResult.rows[0].lectura_actual);
@@ -132,13 +133,13 @@ export async function registrarLectura({ medidor_id, ruta_id, lectura_actual, vu
         if (isNaN(consumo_m3_final) || consumo_m3_final <= 0) throw serviceError('consumo_m3 debe ser mayor a cero', 400);
     }
 
-    const insertResult = await dbTurso.execute({
+    const insertResult = await db.execute({
         sql: `INSERT INTO lecturas (medidor_id, ruta_id, consumo_m3, lectura_anterior, lectura_actual, vuelta_cero, fecha_lectura, periodo, modificado_por, estado) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [medidor_id, ruta_id, consumo_m3_final, lectura_anterior_val, lectura_actual_val, vuelta_cero_val, fecha_lectura, periodo || null, usuarioId, 'pendiente']
     });
     const lectura_id = Number(insertResult.lastInsertRowid);
 
-    const lecturaCompletaResult = await dbTurso.execute({
+    const lecturaCompletaResult = await db.execute({
         sql: `SELECT l.*, m.numero_serie as medidor_numero, m.ubicacion as medidor_ubicacion, c.nombre as cliente_nombre, c.tarifa_id as cliente_tarifa_id, m.cliente_id as cliente_id, r.nombre as ruta_nombre FROM lecturas l LEFT JOIN medidores m ON l.medidor_id = m.id LEFT JOIN clientes c ON m.cliente_id = c.id LEFT JOIN rutas r ON l.ruta_id = r.id WHERE l.id = ?`,
         args: [lectura_id]
     });
@@ -156,15 +157,20 @@ export async function registrarLectura({ medidor_id, ruta_id, lectura_actual, vu
 
 export async function obtenerLecturas({ id } = {}) {
     if (id) {
-        const r = await dbTurso.execute({ sql: `${BASE_LECTURAS} WHERE l.id = ?`, args: [id] });
+        const r = await db.execute({ sql: `${BASE_LECTURAS} WHERE l.id = ?`, args: [id] });
         if (!r.rows.length) throw serviceError('Lectura no encontrada', 404);
         return { tipo: 'unico', lectura: mapLectura(r.rows[0]) };
     }
-    const r = await dbTurso.execute(`${BASE_LECTURAS} ORDER BY l.fecha_lectura DESC`);
+    const r = await db.execute(`${BASE_LECTURAS} ORDER BY l.fecha_lectura DESC`);
     return { tipo: 'lista', lecturas: r.rows.map(mapLectura) };
 }
 
 export async function modificarLectura(id, { medidor_id, lectura_actual, consumo_m3, fecha_lectura, periodo }, usuarioId) {
+    // Solo la lectura más reciente del medidor y con factura sin pagos (ver lecturasRectificacion.js)
+    const estado = estadoRectificacion(sqlite, id);
+    if (!estado) throw serviceError('Lectura no encontrada', 404);
+    if (estado.motivo) throw serviceError(estado.motivo, 409);
+
     const setClauses = [];
     const args = [];
     if (medidor_id !== undefined)    { setClauses.push('medidor_id = ?');    args.push(medidor_id); }
@@ -176,10 +182,10 @@ export async function modificarLectura(id, { medidor_id, lectura_actual, consumo
     setClauses.push('modificado_por = ?'); args.push(usuarioId);
     args.push(id);
 
-    const result = await dbTurso.execute({ sql: `UPDATE lecturas SET ${setClauses.join(', ')} WHERE id = ?`, args });
+    const result = await db.execute({ sql: `UPDATE lecturas SET ${setClauses.join(', ')} WHERE id = ?`, args });
     if (result.rowsAffected === 0) throw serviceError('Lectura no encontrada', 404);
 
-    const r = await dbTurso.execute({
+    const r = await db.execute({
         sql: `SELECT l.*, m.numero_serie as medidor_numero, c.nombre as cliente_nombre FROM lecturas l LEFT JOIN medidores m ON l.medidor_id = m.id LEFT JOIN clientes c ON m.cliente_id = c.id WHERE l.id = ?`,
         args: [id]
     });
@@ -187,7 +193,7 @@ export async function modificarLectura(id, { medidor_id, lectura_actual, consumo
 }
 
 export async function obtenerLecturasPorRutaYPeriodo({ ruta_id, periodo }) {
-    const result = await dbTurso.execute({
+    const result = await db.execute({
         sql: `SELECT 
                 l.id, 
                 l.fecha_lectura, 
@@ -214,28 +220,28 @@ export async function obtenerLecturasPorRutaYPeriodo({ ruta_id, periodo }) {
 async function _generarFacturaUnica({ lectura_id, cliente_id, tarifa_id, consumo_m3, fecha_emision, modificado_por }) {
     if (!fecha_emision) fecha_emision = nowDate();
 
-    const facturaExistente = await dbTurso.execute({ sql: `SELECT id FROM facturas WHERE lectura_id = ?`, args: [lectura_id] });
+    const facturaExistente = await db.execute({ sql: `SELECT id FROM facturas WHERE lectura_id = ?`, args: [lectura_id] });
     if (facturaExistente.rows.length) return { success: false, error: 'Ya existe una factura para esta lectura' };
 
     let total;
     try {
-        const resultado = await calcularTarifaDesdeDB(consumo_m3, tarifa_id, dbTurso);
+        const resultado = await calcularTarifaDesdeDB(consumo_m3, tarifa_id, db);
         total = resultado.total;
     } catch (e) {
         return { success: false, error: e.message };
     }
 
-    const configResult = await dbTurso.execute({ sql: `SELECT dias_vencimiento_factura FROM configuracion_servicio WHERE activo = 1 ORDER BY id DESC LIMIT 1`, args: [] });
+    const configResult = await db.execute({ sql: `SELECT dias_vencimiento_factura FROM configuracion_servicio WHERE activo = 1 ORDER BY id DESC LIMIT 1`, args: [] });
     const diasVencimiento = configResult.rows.length ? (Number(configResult.rows[0].dias_vencimiento_factura) || 15) : 15;
     const fecha_vencimiento_str = calcularVencimiento(diasVencimiento, fecha_emision);
 
-    const insertResult = await dbTurso.execute({
+    const insertResult = await db.execute({
         sql: `INSERT INTO facturas (lectura_id, cliente_id, tarifa_id, fecha_emision, fecha_vencimiento, estado, total, saldo_pendiente, modificado_por) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [lectura_id, cliente_id, tarifa_id, fecha_emision, fecha_vencimiento_str, 'Pendiente', total, total, modificado_por]
     });
     const factura_id = Number(insertResult.lastInsertRowid);
 
-    const facturaCompletaResult = await dbTurso.execute({
+    const facturaCompletaResult = await db.execute({
         sql: `SELECT f.*, c.nombre as cliente_nombre, c.correo as cliente_correo, t.nombre as tarifa_nombre, l.consumo_m3, l.periodo, m.numero_serie as medidor_numero FROM facturas f JOIN clientes c ON f.cliente_id = c.id JOIN tarifas t ON f.tarifa_id = t.id JOIN lecturas l ON f.lectura_id = l.id JOIN medidores m ON l.medidor_id = m.id WHERE f.id = ?`,
         args: [factura_id]
     });
@@ -258,7 +264,7 @@ export async function generarFacturasParaLecturasSinFactura({ periodo, ruta_id, 
     const queryArgs = [periodo];
     if (ruta_id) { condiciones.push('l.ruta_id = ?'); queryArgs.push(ruta_id); }
 
-    const result = await dbTurso.execute({
+    const result = await db.execute({
         sql: `SELECT 
                 l.id as lectura_id, 
                 l.consumo_m3, 
@@ -271,7 +277,8 @@ export async function generarFacturasParaLecturasSinFactura({ periodo, ruta_id, 
                 f.id as factura_existente_id, 
                 f.total as factura_existente_total, 
                 f.saldo_pendiente as factura_existente_saldo, 
-                f.estado as factura_existente_estado 
+                f.estado as factura_existente_estado, 
+                (SELECT MIN(s.periodo) FROM lecturas s WHERE s.medidor_id = l.medidor_id AND s.periodo > l.periodo) as periodo_posterior 
               FROM lecturas l 
               LEFT JOIN medidores m ON l.medidor_id = m.id 
               LEFT JOIN facturas f ON l.id = f.lectura_id 
@@ -295,7 +302,7 @@ export async function generarFacturasParaLecturasSinFactura({ periodo, ruta_id, 
             const facturaExistenteId = lectura.factura_existente_id ? Number(lectura.factura_existente_id) : null;
 
             if (recalcular && facturaExistenteId) {
-                const pagosResult = await dbTurso.execute({ sql: 'SELECT COALESCE(SUM(monto), 0) AS total_pagado FROM pagos WHERE factura_id = ?', args: [facturaExistenteId] });
+                const pagosResult = await db.execute({ sql: 'SELECT COALESCE(SUM(monto), 0) AS total_pagado FROM pagos WHERE factura_id = ?', args: [facturaExistenteId] });
                 const totalPagado = Number(pagosResult.rows[0]?.total_pagado || 0);
 
                 if (totalPagado > 0) {
@@ -304,15 +311,22 @@ export async function generarFacturasParaLecturasSinFactura({ periodo, ruta_id, 
                     continue;
                 }
 
-                const nuevoTotalResult = await calcularTarifaDesdeDB(Number(lectura.consumo_m3), lectura.tarifa_id, dbTurso);
+                // Período cerrado para este medidor: ya tiene la lectura de un período posterior
+                if (lectura.periodo_posterior) {
+                    resultados.facturas_fallidas++;
+                    resultados.detalles.push({ lectura_id: Number(lectura.lectura_id), factura_id: facturaExistenteId, cliente_nombre: lectura.cliente_nombre, medidor_numero: lectura.medidor_numero, error: `No se puede recalcular: el medidor ya tiene la lectura de ${lectura.periodo_posterior} y el período ${periodo} quedó cerrado.`, estado: 'fallida' });
+                    continue;
+                }
+
+                const nuevoTotalResult = await calcularTarifaDesdeDB(Number(lectura.consumo_m3), lectura.tarifa_id, db);
                 const nuevoTotal = Number(nuevoTotalResult.total);
                 const totalAnterior = Number(lectura.factura_existente_total || 0);
                 const saldoAnterior = Number(lectura.factura_existente_saldo || 0);
                 const estadoAnterior = lectura.factura_existente_estado || 'Pendiente';
 
-                await dbTurso.execute({ sql: `UPDATE facturas SET tarifa_id = ?, total = ?, saldo_pendiente = ?, estado = ?, modificado_por = ? WHERE id = ?`, args: [Number(lectura.tarifa_id), nuevoTotal, nuevoTotal, 'Pendiente', usuarioId, facturaExistenteId] });
-                await dbTurso.execute({ sql: `INSERT INTO historial_cambios (tabla, operacion, registro_id, modificado_por, cambios) VALUES (?, ?, ?, ?, ?)`, args: ['facturas', 'RECALCULO', facturaExistenteId, usuarioId, JSON.stringify({ accion: 'recalculo_factura_desde_lectura', lectura_id: Number(lectura.lectura_id), factura_id: facturaExistenteId, periodo, motivo_recalculo: motivoRecalculo || null, consumo_m3: Number(lectura.consumo_m3), antes: { total: totalAnterior, saldo_pendiente: saldoAnterior, estado: estadoAnterior }, despues: { total: nuevoTotal, saldo_pendiente: nuevoTotal, estado: 'Pendiente' } })] });
-                await dbTurso.execute({ sql: 'UPDATE lecturas SET estado = ? WHERE id = ?', args: ['facturada', Number(lectura.lectura_id)] });
+                await db.execute({ sql: `UPDATE facturas SET tarifa_id = ?, total = ?, saldo_pendiente = ?, estado = ?, modificado_por = ? WHERE id = ?`, args: [Number(lectura.tarifa_id), nuevoTotal, nuevoTotal, 'Pendiente', usuarioId, facturaExistenteId] });
+                await db.execute({ sql: `INSERT INTO historial_cambios (tabla, operacion, registro_id, modificado_por, cambios) VALUES (?, ?, ?, ?, ?)`, args: ['facturas', 'RECALCULO', facturaExistenteId, usuarioId, JSON.stringify({ accion: 'recalculo_factura_desde_lectura', lectura_id: Number(lectura.lectura_id), factura_id: facturaExistenteId, periodo, motivo_recalculo: motivoRecalculo || null, consumo_m3: Number(lectura.consumo_m3), antes: { total: totalAnterior, saldo_pendiente: saldoAnterior, estado: estadoAnterior }, despues: { total: nuevoTotal, saldo_pendiente: nuevoTotal, estado: 'Pendiente' } })] });
+                await db.execute({ sql: 'UPDATE lecturas SET estado = ? WHERE id = ?', args: ['facturada', Number(lectura.lectura_id)] });
 
                 resultados.facturas_recalculadas++;
                 resultados.detalles.push({ lectura_id: Number(lectura.lectura_id), factura_id: facturaExistenteId, cliente_nombre: lectura.cliente_nombre, medidor_numero: lectura.medidor_numero, consumo_m3: Number(lectura.consumo_m3), total_anterior: totalAnterior, total_nuevo: nuevoTotal, estado: 'recalculada' });
@@ -324,7 +338,7 @@ export async function generarFacturasParaLecturasSinFactura({ periodo, ruta_id, 
             if (facturaResult.success) {
                 resultados.facturas_generadas++;
                 resultados.detalles.push({ lectura_id: Number(lectura.lectura_id), cliente_nombre: lectura.cliente_nombre, medidor_numero: lectura.medidor_numero, consumo_m3: Number(lectura.consumo_m3), factura_id: facturaResult.factura_id, total: facturaResult.total, estado: 'generada' });
-                await dbTurso.execute({ sql: 'UPDATE lecturas SET estado = ? WHERE id = ?', args: ['facturada', Number(lectura.lectura_id)] });
+                await db.execute({ sql: 'UPDATE lecturas SET estado = ? WHERE id = ?', args: ['facturada', Number(lectura.lectura_id)] });
             } else {
                 resultados.facturas_fallidas++;
                 resultados.detalles.push({ lectura_id: Number(lectura.lectura_id), cliente_nombre: lectura.cliente_nombre, medidor_numero: lectura.medidor_numero, consumo_m3: Number(lectura.consumo_m3), error: facturaResult.error, estado: 'fallida' });
@@ -332,7 +346,7 @@ export async function generarFacturasParaLecturasSinFactura({ periodo, ruta_id, 
         } catch (error) {
             console.error(`Error procesando lectura ${lectura.lectura_id}:`, error);
             resultados.facturas_fallidas++;
-            resultados.detalles.push({ lectura_id: Number(lectura.lectura_id), cliente_nombre: lectura.cliente_nombre, error: 'Error interno al procesar', estado: 'fallida' });
+            resultados.detalles.push({ lectura_id: Number(lectura.lectura_id), cliente_nombre: lectura.cliente_nombre, error: error.message || 'Error interno al procesar', estado: 'fallida' });
         }
     }
 
@@ -340,7 +354,7 @@ export async function generarFacturasParaLecturasSinFactura({ periodo, ruta_id, 
 }
 
 export async function obtenerLecturasPorMedidor(medidor_id, limit = 100) {
-    const medidorResult = await dbTurso.execute({
+    const medidorResult = await db.execute({
         sql: `SELECT m.id, m.numero_serie, 
                      COALESCE(m.cliente_id, cmh.cliente_id, f_fac.cliente_id) AS cliente_id, 
                      COALESCE(c.nombre, c_hist.nombre, c_fac.nombre) AS cliente_nombre 
@@ -360,7 +374,7 @@ export async function obtenerLecturasPorMedidor(medidor_id, limit = 100) {
     if (!medidorResult.rows.length) throw serviceError('Medidor no encontrado', 404);
     const medidor = medidorResult.rows[0];
 
-    const lecturasResult = await dbTurso.execute({
+    const lecturasResult = await db.execute({
         sql: `SELECT l.id, l.consumo_m3, l.periodo, l.fecha_lectura, f.id as factura_id, f.total as monto_total, f.estado as factura_estado FROM lecturas l LEFT JOIN facturas f ON l.id = f.lectura_id WHERE l.medidor_id = ? ORDER BY l.fecha_lectura DESC LIMIT ?`,
         args: [medidor_id, parseInt(limit)]
     });
@@ -382,11 +396,11 @@ export async function obtenerLecturasPorMedidor(medidor_id, limit = 100) {
 }
 
 export async function obtenerLecturasPorCliente(cliente_id, periodo) {
-    const clienteResult = await dbTurso.execute({ sql: `SELECT id, nombre FROM clientes WHERE id = ?`, args: [cliente_id] });
+    const clienteResult = await db.execute({ sql: `SELECT id, nombre FROM clientes WHERE id = ?`, args: [cliente_id] });
     if (!clienteResult.rows.length) throw serviceError('Cliente no encontrado', 404);
     const cliente = clienteResult.rows[0];
 
-    const medidoresResult = await dbTurso.execute({
+    const medidoresResult = await db.execute({
         sql: `SELECT DISTINCT m.id, m.numero_serie, m.ubicacion 
               FROM medidores m
               WHERE m.cliente_id = ?
@@ -396,6 +410,7 @@ export async function obtenerLecturasPorCliente(cliente_id, periodo) {
     });
     if (!medidoresResult.rows.length) throw Object.assign(serviceError('Cliente no tiene medidores asignados', 404), { cliente: { id: Number(cliente.id), nombre: cliente.nombre } });
 
+    const medidores = medidoresResult.rows.map(m => Number(m.id));
     const placeholders = medidores.map(() => '?').join(',');
     const args = [...medidores, cliente_id, cliente_id, cliente_id];
     let sql = `SELECT 
@@ -432,7 +447,7 @@ export async function obtenerLecturasPorCliente(cliente_id, periodo) {
     if (periodo) { sql += ` AND l.periodo = ?`; args.push(periodo); }
     sql += ` ORDER BY l.fecha_lectura DESC`;
 
-    const lecturasResult = await dbTurso.execute({ sql, args });
+    const lecturasResult = await db.execute({ sql, args });
     const lecturas = lecturasResult.rows.map(r => ({ id: Number(r.id), medidor: { id: Number(r.medidor_id), numero_serie: r.numero_serie, ubicacion: r.ubicacion }, consumo_m3: Number(r.consumo_m3), periodo: r.periodo, fecha_lectura: r.fecha_lectura, factura: r.factura_id ? { id: Number(r.factura_id), monto_total: Number(r.monto_total), estado: r.factura_estado } : null }));
 
     const consumoPorPeriodo = lecturas.reduce((acc, l) => {
@@ -456,14 +471,14 @@ export async function obtenerLecturasPorCliente(cliente_id, periodo) {
 
 export async function estadisticasLecturas() {
     const [totalR, porPeriodoR, facturacionR, consumoR, topR, mesActualR, sinLecturaR, rangosR] = await Promise.all([
-        dbTurso.execute({ sql: `SELECT COUNT(*) as total FROM lecturas` }),
-        dbTurso.execute({ sql: `SELECT periodo, COUNT(*) as cantidad_lecturas, SUM(consumo_m3) as consumo_total, AVG(consumo_m3) as consumo_promedio FROM lecturas GROUP BY periodo ORDER BY periodo DESC LIMIT 12` }),
-        dbTurso.execute({ sql: `SELECT COUNT(*) as total_lecturas, SUM(CASE WHEN f.id IS NOT NULL THEN 1 ELSE 0 END) as con_factura, SUM(CASE WHEN f.id IS NULL THEN 1 ELSE 0 END) as sin_factura FROM lecturas l LEFT JOIN facturas f ON l.id = f.lectura_id` }),
-        dbTurso.execute({ sql: `SELECT SUM(consumo_m3) as consumo_total, AVG(consumo_m3) as consumo_promedio, MIN(consumo_m3) as consumo_minimo, MAX(consumo_m3) as consumo_maximo FROM lecturas` }),
-        dbTurso.execute({ sql: `SELECT l.id, l.consumo_m3, l.periodo, m.numero_serie, c.nombre as cliente_nombre FROM lecturas l INNER JOIN medidores m ON l.medidor_id = m.id LEFT JOIN clientes c ON m.cliente_id = c.id ORDER BY l.consumo_m3 DESC LIMIT 10` }),
-        dbTurso.execute({ sql: `SELECT COUNT(*) as total FROM lecturas WHERE periodo = strftime('%Y-%m', 'now')` }),
-        dbTurso.execute({ sql: `SELECT COUNT(*) as total FROM medidores m WHERE m.estado_medidor = 'Activo' AND NOT EXISTS (SELECT 1 FROM lecturas l WHERE l.medidor_id = m.id AND l.periodo = strftime('%Y-%m', 'now'))` }),
-        dbTurso.execute({ sql: `SELECT CASE WHEN consumo_m3 < 10 THEN '0-10 m³' WHEN consumo_m3 < 20 THEN '10-20 m³' WHEN consumo_m3 < 30 THEN '20-30 m³' WHEN consumo_m3 < 50 THEN '30-50 m³' ELSE '50+ m³' END as rango, COUNT(*) as cantidad FROM lecturas GROUP BY rango ORDER BY rango` })
+        db.execute({ sql: `SELECT COUNT(*) as total FROM lecturas` }),
+        db.execute({ sql: `SELECT periodo, COUNT(*) as cantidad_lecturas, SUM(consumo_m3) as consumo_total, AVG(consumo_m3) as consumo_promedio FROM lecturas GROUP BY periodo ORDER BY periodo DESC LIMIT 12` }),
+        db.execute({ sql: `SELECT COUNT(*) as total_lecturas, SUM(CASE WHEN f.id IS NOT NULL THEN 1 ELSE 0 END) as con_factura, SUM(CASE WHEN f.id IS NULL THEN 1 ELSE 0 END) as sin_factura FROM lecturas l LEFT JOIN facturas f ON l.id = f.lectura_id` }),
+        db.execute({ sql: `SELECT SUM(consumo_m3) as consumo_total, AVG(consumo_m3) as consumo_promedio, MIN(consumo_m3) as consumo_minimo, MAX(consumo_m3) as consumo_maximo FROM lecturas` }),
+        db.execute({ sql: `SELECT l.id, l.consumo_m3, l.periodo, m.numero_serie, c.nombre as cliente_nombre FROM lecturas l INNER JOIN medidores m ON l.medidor_id = m.id LEFT JOIN clientes c ON m.cliente_id = c.id ORDER BY l.consumo_m3 DESC LIMIT 10` }),
+        db.execute({ sql: `SELECT COUNT(*) as total FROM lecturas WHERE periodo = strftime('%Y-%m', 'now')` }),
+        db.execute({ sql: `SELECT COUNT(*) as total FROM medidores m WHERE m.estado_medidor = 'Activo' AND NOT EXISTS (SELECT 1 FROM lecturas l WHERE l.medidor_id = m.id AND l.periodo = strftime('%Y-%m', 'now'))` }),
+        db.execute({ sql: `SELECT CASE WHEN consumo_m3 < 10 THEN '0-10 m³' WHEN consumo_m3 < 20 THEN '10-20 m³' WHEN consumo_m3 < 30 THEN '20-30 m³' WHEN consumo_m3 < 50 THEN '30-50 m³' ELSE '50+ m³' END as rango, COUNT(*) as cantidad FROM lecturas GROUP BY rango ORDER BY rango` })
     ]);
 
     const totalLecturas = Number(totalR.rows[0].total);
@@ -484,7 +499,7 @@ export async function validarCobranzaPeriodoAnterior(ruta_id, periodo) {
     if (!periodo) throw serviceError('Periodo requerido', 400);
 
     // Buscar cuál fue realmente el último periodo facturado para esta ruta antes del periodo actual
-    const resultUltimoPeriodo = await dbTurso.execute({
+    const resultUltimoPeriodo = await db.execute({
         sql: `SELECT MAX(l.periodo) as last_period FROM facturas f JOIN lecturas l ON f.lectura_id = l.id WHERE l.ruta_id = ? AND l.periodo < ?`,
         args: [ruta_id, periodo]
     });
@@ -502,11 +517,11 @@ export async function validarCobranzaPeriodoAnterior(ruta_id, periodo) {
         };
     }
 
-    const resultPendientes = await dbTurso.execute({
+    const resultPendientes = await db.execute({
         sql: `SELECT COUNT(*) as total_pendientes FROM facturas f JOIN lecturas l ON f.lectura_id = l.id WHERE l.ruta_id = ? AND l.periodo = ? AND f.estado != 'Pagado' AND f.estado != 'Cancelado'`,
         args: [ruta_id, periodoAnterior]
     });
-    const resultTotal = await dbTurso.execute({
+    const resultTotal = await db.execute({
         sql: `SELECT COUNT(*) as total_facturas FROM facturas f JOIN lecturas l ON f.lectura_id = l.id WHERE l.ruta_id = ? AND l.periodo = ?`,
         args: [ruta_id, periodoAnterior]
     });
@@ -545,13 +560,13 @@ export async function obtenerEstadoPeriodosLecturas() {
 
     let totalMedidores = 0;
     try {
-        const rowMed = await dbTurso.execute({ 
+        const rowMed = await db.execute({ 
             sql: `SELECT COUNT(*) as cnt FROM medidores WHERE estado_medidor = 'Activo' AND fecha_eliminacion IS NULL` 
         });
         totalMedidores = Number(rowMed.rows?.[0]?.cnt || 0);
     } catch {
         try {
-            const rowMed = await dbTurso.execute({ sql: `SELECT COUNT(*) as cnt FROM medidores WHERE fecha_eliminacion IS NULL` });
+            const rowMed = await db.execute({ sql: `SELECT COUNT(*) as cnt FROM medidores WHERE fecha_eliminacion IS NULL` });
             totalMedidores = Number(rowMed.rows?.[0]?.cnt || 0);
         } catch {
             totalMedidores = 0;
@@ -561,7 +576,7 @@ export async function obtenerEstadoPeriodosLecturas() {
     // 1. Resumen de lecturas por período
     let lecturasRows = [];
     try {
-        const res = await dbTurso.execute({
+        const res = await db.execute({
             sql: `
                 SELECT 
                     periodo,
@@ -581,7 +596,7 @@ export async function obtenerEstadoPeriodosLecturas() {
     // 2. Resumen de facturas por período (uniendo con lecturas para obtener el periodo)
     let facturasRows = [];
     try {
-        const res = await dbTurso.execute({
+        const res = await db.execute({
             sql: `
                 SELECT 
                     l.periodo,

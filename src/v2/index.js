@@ -31,8 +31,8 @@ import express from 'express';
 import { getVersionInfo } from '../config/versions.js';
 
 // Importar rutas v2
-import appRoutes from './routes/appRoutes.js';
-import authRoutes from './routes/authroutes.js';
+import appRoutes from './routes/app.js';
+import authRoutes from './routes/auth.js';
 import clientesRoutes from './routes/clientes.js';
 import medidoresRoutes from './routes/medidores.js';
 import tarifasRoutes from './routes/tarifas.js';
@@ -44,7 +44,7 @@ import eventsRoutes from './routes/events.js'; // Nueva ruta para SSE
 import dashboardRoutes from './routes/dashboard.js'; // Nueva ruta para Dashboard
 import reportsRoutes from './routes/reports.js'; // Nueva ruta para Reportes
 import deudoresRoutes from './routes/deudores.js'; // Nueva ruta para Deudores
-import oauthRoutes from './routes/oauthRoutes.js'; // Rutas OAuth 2.0
+import oauthRoutes from './routes/oauth.js'; // Rutas OAuth 2.0
 import usersRoutes from './routes/users.js'; // Nueva ruta Gestión Usuarios
 import syncRoutes from './routes/sync.js'; // Sincronización Turso Cloud
 

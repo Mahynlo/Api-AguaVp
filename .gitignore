@@ -2,7 +2,15 @@ node_modules/
 .env
 dist/
 package-lock.json
-db-local.js
+
+# Bases de datos locales (nunca en git ni en el paquete npm)
 *.db
 *.db-shm
 *.db-wal
+
+# Paquetes generados con `npm pack`
+*.tgz
+pack_tgz/
+
+# Worktrees de scripts/dev/comparar-versiones
+.comparar/

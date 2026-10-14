@@ -1,4 +1,4 @@
-import { registrarTarifa, registrarRangosTarifa, obtenerTodasLasTarifas, obtenerHistorialTarifas, modificarTarifa, modificarRangosTarifa, obtenerTarifaPorId, obtenerTarifasActivas, obtenerHistorialTarifa, estadisticasTarifas } from '../services/tarifasService.js';
+import { registrarTarifa, registrarRangosTarifa, obtenerTodasLasTarifas, obtenerHistorialTarifas, modificarTarifa, modificarRangosTarifa, eliminarTarifa, obtenerTarifaPorId, obtenerTarifasActivas, obtenerHistorialTarifa, estadisticasTarifas } from '../services/tarifasService.js';
 
 let sseManager = null;
 let notificationManager = null;
@@ -35,7 +35,7 @@ const tarifasController = {
         try {
             await registrarRangosTarifa(tarifa_id, rangos);
             notify(`Tarifa ID ${tarifa_id} configurada con ${rangos.length} rangos`, 'info', { tarifa_id, total_rangos: rangos.length, rangos_resumen: rangos.map(r => ({ min: r.consumo_min, max: r.consumo_max, precio: r.precio_por_m3 })), accion: 'tarifa_configurada' });
-            res.json({ mensaje: 'Rangos registrados correctamente (error-BK)', tarifa_id, rangos_procesados: rangos.length });
+            res.json({ mensaje: 'Rangos registrados correctamente', tarifa_id, rangos_procesados: rangos.length });
         } catch (err) {
             console.error('❌ Error al registrar rangos v2:', err);
             if (err.message?.includes('UNIQUE')) return res.status(409).json({ error: 'Ya existe un rango similar para esta tarifa (error-BK)' });
@@ -74,13 +74,24 @@ const tarifasController = {
         }
     },
 
+    async eliminarTarifa(req, res) {
+        try {
+            const resultado = await eliminarTarifa(req.params.id);
+            notify(`Tarifa "${resultado.nombre}" eliminada`, 'warning', { tarifa_id: Number(req.params.id), ...resultado, accion: 'tarifa_eliminada' });
+            res.json({ mensaje: `Tarifa "${resultado.nombre}" eliminada`, ...resultado });
+        } catch (err) {
+            console.error('❌ Error al eliminar tarifa v2:', err);
+            res.status(err.status || 500).json({ error: err.message || 'Error interno del servidor' });
+        }
+    },
+
     async modificarRangosTarifa(req, res) {
         const { tarifa_id, rangos } = req.body;
         if (!tarifa_id || !Array.isArray(rangos) || !rangos.length) return res.status(400).json({ error: 'Faltan datos de tarifa o rangos (error-BK)' });
         try {
-            await modificarRangosTarifa(tarifa_id, rangos);
-            notify(`Rangos de tarifa modificados para tarifa ID: ${tarifa_id}`, 'info', { tarifa_id: Number(tarifa_id), rangos_modificados: rangos.length, accion: 'rangos_tarifa_modificados' });
-            res.json({ mensaje: 'Rangos modificados/agregados exitosamente (error-BK)' });
+            const cambios = await modificarRangosTarifa(tarifa_id, rangos);
+            notify(`Rangos de tarifa modificados para tarifa ID: ${tarifa_id}`, 'info', { tarifa_id: Number(tarifa_id), rangos_modificados: rangos.length, ...cambios, accion: 'rangos_tarifa_modificados' });
+            res.json({ mensaje: 'Rangos guardados correctamente', cambios });
         } catch (err) {
             console.error('❌ Error al modificar rangos v2:', err);
             res.status(err.status || 500).json({ error: err.message || 'Error interno del servidor' });

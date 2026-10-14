@@ -1,56 +1,54 @@
 # Project Guidelines (api-AguaVP)
 
 ## Code Style
-- Use JavaScript ES modules and preserve current folder boundaries (`v1`, `v2`, `database`, `utils`, `jobs`).
-- Prefer extending existing validators/controllers/routes rather than introducing parallel patterns.
+- Use JavaScript ES modules and preserve current folder boundaries (`v2`, `database`, `utils`, `jobs`, `routes`, `controllers`).
+- Prefer extending existing validators/controllers/services/routes rather than introducing parallel patterns.
 - Keep endpoint naming and controller organization consistent with current domain files.
 
 ## Build, Run, and Tests
 - Install dependencies: `npm install`
-- Dev server: `npm run dev`
-- Production start: `npm start`
-- Build bundle: `npm run build`
-- Run tests: `npm run test`
-- Password validator tests: `npm run test:password`
-- Drizzle operations:
-  - Generate migrations: `npm run db:generate`
-  - Apply migrations: `npm run db:push`
-  - Apply triggers/views: `npm run db:triggers`
+- Apply migrations to the local dev DB: `npm run migrate`
+- Dev server: `npm run dev` / production start: `npm start`
+- Tests (node:test): `npm test` — subsets: `npm run test:v2`, `npm run test:sync`
+- Legacy Jest suites: `npm run test:jest` (several are outdated)
+- Drizzle Kit (dev only):
+  - Generate a migration from the schema: `npm run db:generate`
   - Open studio: `npm run db:studio`
+- Never use `drizzle-kit push`/`migrate` against a client DB: migrations are applied by `customMigrate` (`src/database/sqlite-migrator.js`).
 
 ## Architecture
-- Active API is `v2` (`/api/v2/*`) with modular routes/controllers/validators.
-- `v1` exists for legacy compatibility but is currently not the primary implementation path.
-- Request flow should remain:
+- The package entry point is `src/api-module.js` (`AguaVPServer`), embedded by the Electron app.
+- The only API is `v2` (`/api/v2/*`). `/api/v1` returns 503; v1 code lives in git tag `v1-final`.
+- Request flow:
   1. Route definition in `src/v2/routes/**`
   2. Input validation in `src/v2/validators/**` + middleware
-  3. Business logic in `src/v2/controllers/**`
-  4. Data access through `src/database/**`
-- Real-time updates in v2 use SSE (`src/v2/sse/**`), not WebSockets.
+  3. HTTP handling in `src/v2/controllers/**`, business logic in `src/v2/services/**`
+  4. Data access through `src/database/db-sqlite.js`
+- Real-time updates use SSE (`src/v2/sse/**`).
+- Migrations live in `src/database/migrations/` (Drizzle journal). Never edit or rename an applied migration.
 
 ## Security and Validation Conventions
 - Keep dual access model in mind: app key (`x-app-key`) + JWT auth middleware.
 - New input surfaces must use Zod schemas in `src/v2/validators/**`.
 - Reuse timezone helpers in `src/utils/timezone.js` for date-window calculations.
 - Do not add sensitive tokens or user credential data to logs.
+- In new or refactored controllers, wrap handlers with `manejarErrores(handler, opciones)` and throw `crearError(msg, status)` from services (`src/utils/errores.js`); choose options that reproduce the existing error response exactly.
+- In new or refactored code, log with `createLogger(modulo)` from `src/utils/logger.js` instead of `console.*` (same console output, plus the `api-log` event).
 
 ## Key Files to Check First
 - `README.md`
-- `src/README.md`
-- `src/server.js`
-- `src/routes/index.js`
-- `src/v2/routes/**`
-- `src/v2/controllers/**`
-- `src/v2/validators/**`
-- `drizzle.config.ts`
+- `docs/arquitectura.md`, `docs/base-de-datos.md`
+- `src/api-module.js`, `src/server.js`, `src/routes/index.js`
+- `src/v2/index.js`, `src/v2/routes/**`, `src/v2/services/**`
 
 ## Link, Do Not Duplicate
-- Security roadmap: `docs/PLAN_SEGURIDAD_PRODUCCION.md`
-- Endpoint contracts: `docs/**/endpoints.md`
-- Auth details: `docs/auth/**`
-- Validation documentation: `docs/validacion/**` and `src/v2/validators/README.md`
-- SQLite local test flow: `SQLITE_TEST_GUIDE.md`
+- Docs index: `docs/README.md`
+- Endpoint contracts: `docs/endpoints/**`
+- Guides (auth, validation, timezone, rate limiter): `docs/guias/**`
+- Turso sync spec: `docs/SINCRONIZACION_TURSO_CLOUD.md`
+- Past proposals/plans: `docs/historial/**`
 
 ## Cross-Repo Context
-- This API is consumed by sibling Electron app `AguaVP` through a local package tarball.
-- Backward compatibility changes to response shapes should be coordinated with `../AguaVP/src/preload/index.js` and renderer consumers.
+- This API is consumed by sibling Electron app `AguaVP` (`../Agua_vp_Actualizacion/AguaVP`) as `@aguavp/api-server` (tgz built with `npm pack`).
+- Electron unpacks `node_modules/@aguavp/api-server/src/database/migrations/**` from asar: keep that path.
+- Backward compatibility changes to response shapes should be coordinated with the Electron renderer and `src/main/api-client/**`.

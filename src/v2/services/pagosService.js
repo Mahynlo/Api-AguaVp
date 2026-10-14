@@ -1,4 +1,5 @@
-import dbTurso, { sqlite } from '../../database/db-sqlite.js';
+import db, { sqlite } from '../../database/db-sqlite.js';
+import { condicionesPagos } from './filtrosListado.js';
 
 // === Utilidades de precisión decimal ===
 const redondear = (n) => Math.round(n * 100) / 100;
@@ -35,7 +36,7 @@ export function registrarPago({ factura_id, fecha_pago, cantidad_entregada, meto
 }
 
 export async function getPagoCompleto(pagoId) {
-    const result = await dbTurso.execute({
+    const result = await db.execute({
         sql: `SELECT p.*, f.id as factura_numero, c.nombre as cliente_nombre FROM pagos p JOIN facturas f ON p.factura_id = f.id JOIN clientes c ON f.cliente_id = c.id WHERE p.id = ?`,
         args: [pagoId]
     });
@@ -100,49 +101,48 @@ const COUNT_JOIN = `FROM pagos p JOIN facturas f ON p.factura_id = f.id JOIN cli
 
 const mapPago = r => ({ ...r, id: Number(r.id), factura_id: Number(r.factura_id), modificado_por: Number(r.modificado_por) });
 
-export async function obtenerPagos({ id, periodo, page, limit, search, metodo_pago, ciudad }) {
+export async function obtenerPagos(query = {}) {
+    const { id, periodo, page, limit } = query;
     const pageNum = parseInt(page) || 1;
     const limitNum = parseInt(limit) || 60;
     const offset = (pageNum - 1) * limitNum;
-    const searchTerm = search ? `%${search.toLowerCase()}%` : null;
-    const normalizedSearch = search ? `%${search.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()}%` : null;
-
     const conditions = [];
     const queryParams = [];
-    const countParams = [];
+    let countParams = [];
 
     if (id) {
         conditions.push('p.id = ?');
         queryParams.push(id);
     } else {
-        if (periodo) { conditions.push('l.periodo = ?'); queryParams.push(periodo); countParams.push(periodo); }
-        if (metodo_pago?.trim()) { conditions.push('p.metodo_pago = ?'); queryParams.push(metodo_pago); countParams.push(metodo_pago); }
-        if (ciudad?.trim() && ciudad !== 'All') { conditions.push('c.ciudad = ?'); queryParams.push(ciudad); countParams.push(ciudad); }
-        if (searchTerm) {
-            conditions.push('(unaccent(c.nombre) LIKE ? OR CAST(p.id AS TEXT) LIKE ? OR CAST(f.id AS TEXT) LIKE ? OR unaccent(p.metodo_pago) LIKE ?)');
-            queryParams.push(normalizedSearch, searchTerm, searchTerm, normalizedSearch);
-            countParams.push(normalizedSearch, searchTerm, searchTerm, normalizedSearch);
-        }
+        // Filtros (período, método, ciudad, búsqueda, fecha de cobro, cobrado por, tipo): filtrosListado.js
+        const filtro = condicionesPagos(query);
+        conditions.push(...filtro.conditions);
+        queryParams.push(...filtro.args);
+        countParams = filtro.args;
     }
 
     const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
 
     if (id) {
-        const r = await dbTurso.execute({ sql: `${BASE_PAGOS} ${where}`, args: queryParams });
+        const r = await db.execute({ sql: `${BASE_PAGOS} ${where}`, args: queryParams });
         const pago = r.rows.length > 0 ? mapPago(r.rows[0]) : null;
         if (!pago) { const e = new Error('Pago no encontrado'); e.status = 404; throw e; }
         return { tipo: 'unico', pago: { ...pago, periodo_info: { periodo_facturado: pago.periodo_facturado, mes_facturado: pago.periodo_facturado ? formatearMesPeriodo(pago.periodo_facturado) : null } } };
     }
 
-    const [countResult, dataResult] = await Promise.all([
-        dbTurso.execute({ sql: `SELECT COUNT(*) as total ${COUNT_JOIN} ${where}`, args: countParams }),
-        dbTurso.execute({ sql: `${BASE_PAGOS} ${where} ORDER BY p.fecha_pago DESC LIMIT ? OFFSET ?`, args: [...queryParams, limitNum, offset] })
+    const [countResult, dataResult, cobradoresResult] = await Promise.all([
+        db.execute({ sql: `SELECT COUNT(*) as total, COALESCE(SUM(p.monto), 0) AS monto_total ${COUNT_JOIN} ${where}`, args: countParams }),
+        db.execute({ sql: `${BASE_PAGOS} ${where} ORDER BY p.fecha_pago DESC LIMIT ? OFFSET ?`, args: [...queryParams, limitNum, offset] }),
+        db.execute({ sql: `SELECT u.id, u.username, COUNT(*) AS pagos FROM pagos p JOIN usuarios u ON u.id = p.modificado_por GROUP BY u.id, u.username ORDER BY u.username` })
     ]);
 
     const totalItems = Number(countResult.rows[0].total);
+    // Suma de TODOS los pagos que cumplen el filtro (el resumen de abajo es solo de la página)
+    const totalFiltrado = toDecimal(countResult.rows[0].monto_total || 0);
+    const cobradores = cobradoresResult.rows.map(r => ({ id: Number(r.id), username: r.username, pagos: Number(r.pagos) }));
     const pagos = dataResult.rows.map(mapPago);
 
-    if (!pagos.length) return { tipo: 'lista', pagos: [], pagination: { total: 0, page: pageNum, limit: limitNum, totalPages: 0 }, resumen: { total_pagado: 0, cantidad_pagos: 0, promedio_pago: 0 }, periodos_encontrados: [], resumen_por_periodo: {}, filtro: periodo ? { tipo: 'periodo', valor: periodo, mes_facturado: formatearMesPeriodo(periodo) } : null };
+    if (!pagos.length) return { tipo: 'lista', pagos: [], pagination: { total: 0, page: pageNum, limit: limitNum, totalPages: 0 }, resumen: { total_pagado: 0, cantidad_pagos: 0, promedio_pago: 0, total_filtrado: 0 }, cobradores, periodos_encontrados: [], resumen_por_periodo: {}, filtro: periodo ? { tipo: 'periodo', valor: periodo, mes_facturado: formatearMesPeriodo(periodo) } : null };
 
     const totalPagado = toDecimal(pagos.reduce((s, p) => suma(s, toDecimal(p.monto || 0)), 0));
     const periodosUnicos = [...new Set(pagos.map(p => p.periodo_facturado).filter(Boolean))].sort();
@@ -157,7 +157,8 @@ export async function obtenerPagos({ id, periodo, page, limit, search, metodo_pa
         tipo: 'lista',
         pagos: pagos.map(p => ({ ...p, mes_facturado: p.periodo_facturado ? formatearMesPeriodo(p.periodo_facturado) : null })),
         pagination: { total: totalItems, page: pageNum, limit: limitNum, totalPages: Math.ceil(totalItems / limitNum) },
-        resumen: { total_pagado: totalPagado, cantidad_pagos: pagos.length, promedio_pago: toDecimal(totalPagado / pagos.length) },
+        resumen: { total_pagado: totalPagado, cantidad_pagos: pagos.length, promedio_pago: toDecimal(totalPagado / pagos.length), total_filtrado: totalFiltrado },
+        cobradores,
         periodos_encontrados: periodosUnicos,
         resumen_por_periodo: resumenPorPeriodo,
         filtro: periodo ? { tipo: 'periodo', valor: periodo, mes_facturado: formatearMesPeriodo(periodo) } : null
@@ -206,7 +207,7 @@ export function modificarPago(id, { fecha_pago, monto, metodo_pago, comentario }
         if (comentario !== undefined) { setClauses.push('comentario = ?'); args.push(comentario); }
         if (setClauses.length <= 1) { const e = new Error('No se proporcionaron campos para actualizar'); e.status = 400; throw e; }
         args.push(id);
-        const result = await dbTurso.execute({ sql: `UPDATE pagos SET ${setClauses.join(', ')} WHERE id = ?`, args });
+        const result = await db.execute({ sql: `UPDATE pagos SET ${setClauses.join(', ')} WHERE id = ?`, args });
         if (result.rowsAffected === 0) { const e = new Error('Pago no encontrado'); e.status = 404; throw e; }
     })();
 }

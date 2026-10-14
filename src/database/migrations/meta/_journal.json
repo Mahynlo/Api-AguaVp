@@ -162,6 +162,13 @@
       "when": 1783200000000,
       "tag": "0022_fix_medidor_historial_triggers",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1791590400000,
+      "tag": "0023_tarifas_eliminar_permiso",
+      "breakpoints": true
     }
   ]
 }

@@ -1,6 +1,7 @@
-import dbTurso from '../../database/db-sqlite.js';
+import db from '../../database/db-sqlite.js';
 import { calcularTarifaDesdeDB } from '../../utils/tarifaUtils.js';
 import { nowDate, calcularVencimiento } from '../../utils/timezone.js';
+import { condicionesFacturas } from './filtrosListado.js';
 
 function serviceError(message, status) {
     const err = new Error(message);
@@ -9,7 +10,7 @@ function serviceError(message, status) {
 }
 
 async function getDiasVencimiento() {
-    const result = await dbTurso.execute({ sql: `SELECT dias_vencimiento_factura FROM configuracion_servicio WHERE activo = 1 ORDER BY id DESC LIMIT 1` });
+    const result = await db.execute({ sql: `SELECT dias_vencimiento_factura FROM configuracion_servicio WHERE activo = 1 ORDER BY id DESC LIMIT 1` });
     return result.rows.length > 0 ? (Number(result.rows[0].dias_vencimiento_factura) || 15) : 15;
 }
 
@@ -46,27 +47,32 @@ function formatearFactura(factura) {
 export async function generarFactura({ lectura_id, cliente_id, tarifa_id, consumo_m3, fecha_emision }, usuarioId) {
     const fechaEmision = fecha_emision || nowDate();
 
-    if (await dbTurso.execute({ sql: `SELECT id FROM facturas WHERE lectura_id = ?`, args: [lectura_id] }).then(r => r.rows.length > 0))
+    if (await db.execute({ sql: `SELECT id FROM facturas WHERE lectura_id = ?`, args: [lectura_id] }).then(r => r.rows.length > 0))
         throw serviceError('Ya existe una factura para este cliente en ese periodo.', 409);
 
-    if (!(await dbTurso.execute({ sql: `SELECT id FROM tarifas WHERE id = ?`, args: [tarifa_id] })).rows.length)
+    if (!(await db.execute({ sql: `SELECT id FROM tarifas WHERE id = ?`, args: [tarifa_id] })).rows.length)
         throw serviceError('La tarifa no existe', 404);
-    if (!(await dbTurso.execute({ sql: `SELECT id FROM clientes WHERE id = ?`, args: [cliente_id] })).rows.length)
+    if (!(await db.execute({ sql: `SELECT id FROM clientes WHERE id = ?`, args: [cliente_id] })).rows.length)
         throw serviceError('El cliente no existe', 404);
-    if (!(await dbTurso.execute({ sql: `SELECT id FROM lecturas WHERE id = ?`, args: [lectura_id] })).rows.length)
+    if (!(await db.execute({ sql: `SELECT id FROM lecturas WHERE id = ?`, args: [lectura_id] })).rows.length)
         throw serviceError('La lectura no existe', 404);
 
-    const { total } = await calcularTarifaDesdeDB(consumo_m3, tarifa_id, dbTurso);
+    let total;
+    try {
+        ({ total } = await calcularTarifaDesdeDB(consumo_m3, tarifa_id, db));
+    } catch (e) {
+        throw serviceError(e.message, 422);
+    }
     const diasVencimiento = await getDiasVencimiento();
     const fecha_vencimiento = calcularVencimiento(diasVencimiento, fechaEmision);
 
-    const insertResult = await dbTurso.execute({
+    const insertResult = await db.execute({
         sql: `INSERT INTO facturas (lectura_id, cliente_id, tarifa_id, fecha_emision, fecha_vencimiento, estado, total, saldo_pendiente, modificado_por) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [lectura_id, cliente_id, tarifa_id, fechaEmision, fecha_vencimiento, 'Pendiente', total, total, usuarioId]
     });
     const factura_id = Number(insertResult.lastInsertRowid);
 
-    const facturaResult = await dbTurso.execute({
+    const facturaResult = await db.execute({
         sql: `SELECT f.*, c.nombre as cliente_nombre, c.correo as cliente_correo, t.nombre as tarifa_nombre, l.consumo_m3, l.periodo, m.numero_serie as medidor_numero
               FROM facturas f JOIN clientes c ON f.cliente_id = c.id JOIN tarifas t ON f.tarifa_id = t.id JOIN lecturas l ON f.lectura_id = l.id JOIN medidores m ON l.medidor_id = m.id WHERE f.id = ?`,
         args: [factura_id]
@@ -120,44 +126,39 @@ const BASE_QUERY = `
     LEFT JOIN rangos_tarifas rt ON rt.tarifa_id = f.tarifa_id AND CAST(l.consumo_m3 AS INTEGER) >= rt.consumo_min AND (rt.consumo_max IS NULL OR CAST(l.consumo_m3 AS INTEGER) <= rt.consumo_max)
 `;
 
-export async function obtenerFacturas({ id, periodo, page, limit, search, estado, ciudad }) {
+export async function obtenerFacturas(query = {}) {
+    const { id, periodo, page, limit } = query;
     const pageNum = parseInt(page) || 1;
     const limitNum = parseInt(limit) || 60;
     const offset = (pageNum - 1) * limitNum;
-    const searchTerm = search ? `%${search.toLowerCase()}%` : null;
-    const normalizedSearch = search ? `%${search.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()}%` : null;
-
     const conditions = [];
     const queryParams = [];
-    const countParams = [];
+    let countParams = [];
 
     if (id) {
         conditions.push('f.id = ?');
         queryParams.push(id);
     } else {
-        if (periodo) { conditions.push('l.periodo = ?'); queryParams.push(periodo); countParams.push(periodo); }
-        if (estado?.trim()) { conditions.push('f.estado = ?'); queryParams.push(estado); countParams.push(estado); }
-        if (ciudad?.trim() && ciudad !== 'All') { conditions.push('c.ciudad = ?'); queryParams.push(ciudad); countParams.push(ciudad); }
-        if (searchTerm) {
-            conditions.push(`(unaccent(c.nombre) LIKE ? OR unaccent(c.direccion) LIKE ? OR unaccent(COALESCE(c.telefono,'')) LIKE ? OR unaccent(COALESCE(c.correo,'')) LIKE ? OR CAST(f.id AS TEXT) LIKE ? OR unaccent(m.numero_serie) LIKE ? OR unaccent(COALESCE(m.ubicacion,'')) LIKE ? OR CAST(COALESCE(c.numero_predio,'') AS TEXT) LIKE ?)`);
-            queryParams.push(normalizedSearch, normalizedSearch, normalizedSearch, normalizedSearch, searchTerm, normalizedSearch, normalizedSearch, searchTerm);
-            countParams.push(normalizedSearch, normalizedSearch, normalizedSearch, normalizedSearch, searchTerm, normalizedSearch, normalizedSearch, searchTerm);
-        }
+        // Filtros (período, estado, ciudad, búsqueda, antigüedad, consumo, ruta, tarifa): filtrosListado.js
+        const filtro = condicionesFacturas(query, nowDate());
+        conditions.push(...filtro.conditions);
+        queryParams.push(...filtro.args);
+        countParams = filtro.args;
     }
 
     const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
 
     if (id) {
-        const result = await dbTurso.execute({ sql: `${BASE_QUERY} ${where}`, args: queryParams });
+        const result = await db.execute({ sql: `${BASE_QUERY} ${where}`, args: queryParams });
         if (result.rows.length === 0) throw serviceError('Factura no encontrada', 404);
         return { tipo: 'unica', factura: formatearFactura(result.rows[0]) };
     }
 
     const countJoin = `FROM facturas f JOIN clientes c ON f.cliente_id=c.id JOIN lecturas l ON f.lectura_id=l.id LEFT JOIN medidores m ON l.medidor_id=m.id`;
     const [countResult, dataResult, statsResult] = await Promise.all([
-        dbTurso.execute({ sql: `SELECT COUNT(*) as total ${countJoin} ${where}`, args: countParams }),
-        dbTurso.execute({ sql: `${BASE_QUERY} ${where} ORDER BY f.fecha_emision DESC LIMIT ? OFFSET ?`, args: [...queryParams, limitNum, offset] }),
-        dbTurso.execute({
+        db.execute({ sql: `SELECT COUNT(*) as total ${countJoin} ${where}`, args: countParams }),
+        db.execute({ sql: `${BASE_QUERY} ${where} ORDER BY f.fecha_emision DESC LIMIT ? OFFSET ?`, args: [...queryParams, limitNum, offset] }),
+        db.execute({
             sql: `SELECT SUM(f.total) as monto_total, SUM(f.saldo_pendiente) as total_pendiente,
                   COUNT(CASE WHEN f.estado='Pendiente' THEN 1 END) as cantidad_pendientes,
                   COUNT(CASE WHEN f.estado IN ('Pagada','Pagado') THEN 1 END) as cantidad_pagadas,
@@ -184,7 +185,7 @@ export async function obtenerFacturas({ id, periodo, page, limit, search, estado
 }
 
 export async function modificarFactura(id, { estado, total }, usuarioId) {
-    const check = await dbTurso.execute({ sql: `SELECT * FROM facturas WHERE id = ?`, args: [id] });
+    const check = await db.execute({ sql: `SELECT * FROM facturas WHERE id = ?`, args: [id] });
     if (check.rows.length === 0) throw serviceError('Factura no encontrada', 404);
-    await dbTurso.execute({ sql: `UPDATE facturas SET estado = ?, total = ?, modificado_por = ? WHERE id = ?`, args: [estado, total || 0, usuarioId, id] });
+    await db.execute({ sql: `UPDATE facturas SET estado = ?, total = ?, modificado_por = ? WHERE id = ?`, args: [estado, total || 0, usuarioId, id] });
 }

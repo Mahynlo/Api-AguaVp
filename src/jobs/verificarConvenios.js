@@ -16,7 +16,7 @@
  */
 
 import cron from 'node-cron';
-import dbTurso from '../database/db-sqlite.js';
+import db from '../database/db-sqlite.js';
 import { nowDate } from '../utils/timezone.js';
 
 let notificationManager = null;
@@ -52,7 +52,7 @@ export const verificarConvenios = async () => {
             AND c.estado = 'Activo'
         `;
 
-        const vencidasRes = await dbTurso.execute({ sql: parcialidadesVencidasQuery, args: [hoyLocal] });
+        const vencidasRes = await db.execute({ sql: parcialidadesVencidasQuery, args: [hoyLocal] });
         const parcialidadesVencidas = vencidasRes.rows;
 
         if (parcialidadesVencidas.length === 0) {
@@ -64,7 +64,7 @@ export const verificarConvenios = async () => {
 
         // 2. Marcar parcialidades como 'Vencida'
         for (const parcialidad of parcialidadesVencidas) {
-            await dbTurso.execute({
+            await db.execute({
                 sql: `UPDATE parcialidades_convenio SET estado = 'Vencida' WHERE id = ?`,
                 args: [parcialidad.parcialidad_id]
             });
@@ -75,7 +75,7 @@ export const verificarConvenios = async () => {
 
         // 4. Marcar convenios como 'Incumplido'
         for (const convenioId of conveniosAfectados) {
-            await dbTurso.execute({
+            await db.execute({
                 sql: `UPDATE convenios_pago SET estado = 'Incumplido' WHERE id = ?`,
                 args: [convenioId]
             });

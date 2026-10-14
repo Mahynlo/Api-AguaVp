@@ -1,6 +1,6 @@
 {
   "name": "@aguavp/api-server",
-  "version": "1.0.13",
+  "version": "1.0.18",
   "description": "Agua VP API Server - Controlable SQLite server with auto-migrations",
   "type": "module",
   "exports": {
@@ -12,39 +12,37 @@
   "main": "./src/api-module.js",
   "files": [
     "src/",
-    "!src/**/*.test.js",
-    "!src/test/"
+    "!src/**/*.db",
+    "!src/**/*.db-shm",
+    "!src/**/*.db-wal"
   ],
   "scripts": {
-    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js src/test/unit",
-    "test:unit": "node --experimental-vm-modules node_modules/jest/bin/jest.js src/test/unit",
-    "test:trazabilidad": "node --test src/test/unit/trazabilidad-medidores.test.js",
-    "test:pagos": "node --test src/test/unit/pagos-facturas.test.js",
-    "test:lecturas": "node --test src/test/unit/lecturas.test.js",
-    "test:rutas": "node --test src/test/unit/rutas.test.js",
-    "test:clientes": "node --test src/test/unit/clientes.test.js",
-    "test:tarifas": "node --test src/test/unit/tarifas.test.js",
-    "test:usuarios": "node --test src/test/unit/usuarios-roles-permisos.test.js",
-    "test:sync": "node --test src/test/unit/turso-sync-core.test.js src/test/unit/core-triggers.test.js",
-    "test:v2": "node --test src/test/unit/trazabilidad-medidores.test.js src/test/unit/pagos-facturas.test.js src/test/unit/lecturas.test.js src/test/unit/rutas.test.js src/test/unit/clientes.test.js src/test/unit/tarifas.test.js src/test/unit/usuarios-roles-permisos.test.js",
     "dev": "nodemon src/index.js",
     "start": "node src/index.js",
-    "test:password": "node src/utils/testPasswordValidator.js",
-    "migrate": "node src/database/migrations/runMigration.js",
-    "db:pull": "drizzle-kit pull",
+    "migrate": "node scripts/migrate.js",
+    "lint": "eslint .",
+    "test": "node --test test/unit/trazabilidad-medidores.test.js test/unit/pagos-facturas.test.js test/unit/lecturas.test.js test/unit/lecturas-por-cliente.test.js test/unit/lecturas-rectificacion.test.js test/unit/rutas.test.js test/unit/clientes.test.js test/unit/tarifas.test.js test/unit/filtros-listado.test.js test/unit/usuarios-roles-permisos.test.js test/unit/reporte-lecturas.test.js test/unit/timezone.test.js test/unit/logger.test.js test/unit/errores.test.js test/unit/turso-sync-core.test.js test/unit/core-triggers.test.js test/http/app.test.js test/http/users.test.js test/http/oauth.test.js test/http/deudores.test.js test/http/reports.test.js test/http/rutas.test.js",
+    "test:v2": "node --test test/unit/trazabilidad-medidores.test.js test/unit/pagos-facturas.test.js test/unit/lecturas.test.js test/unit/rutas.test.js test/unit/clientes.test.js test/unit/tarifas.test.js test/unit/usuarios-roles-permisos.test.js",
+    "test:sync": "node --test test/unit/turso-sync-core.test.js test/unit/core-triggers.test.js",
+    "test:http": "node --test test/http/*.test.js",
+    "test:trazabilidad": "node --test test/unit/trazabilidad-medidores.test.js",
+    "test:pagos": "node --test test/unit/pagos-facturas.test.js",
+    "test:lecturas": "node --test test/unit/lecturas.test.js test/unit/lecturas-por-cliente.test.js",
+    "test:rutas": "node --test test/unit/rutas.test.js test/http/rutas.test.js",
+    "test:clientes": "node --test test/unit/clientes.test.js",
+    "test:tarifas": "node --test test/unit/tarifas.test.js",
+    "test:usuarios": "node --test test/unit/usuarios-roles-permisos.test.js test/http/users.test.js",
+    "test:jest": "node --experimental-vm-modules node_modules/jest/bin/jest.js \"test/(integration|unit/(conveniosSystem|dashboardController|deudoresSystem|lecturasReport|oauthController|procesarDeudores|reportsController))\" --testPathIgnorePatterns=/.comparar/",
+    "test:password": "node test/manual/password-validator.js",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
-    "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
-    "db:triggers": "node src/database/migrations/applyTriggers.js",
-    "build": "esbuild src/index.js --bundle --platform=node --outfile=dist/server.cjs --format=cjs"
+    "db:pull": "drizzle-kit pull"
   },
   "keywords": [],
   "author": "Mahinalo Softwere Solutions",
   "license": "ISC",
   "dependencies": {
     "@libsql/client": "^0.15.15",
-    "bcrypt": "^6.0.0",
     "bcryptjs": "^3.0.2",
     "better-sqlite3": "^12.6.2",
     "cors": "^2.8.5",
@@ -57,18 +55,18 @@
     "jsonwebtoken": "^9.0.2",
     "node-cron": "^4.2.1",
     "resend": "^6.12.2",
-    "socket.io": "^4.8.1",
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-express": "^5.0.1",
     "uuid": "^11.1.0",
     "zod": "^4.3.5"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "drizzle-kit": "^0.31.8",
-    "esbuild": "^0.27.2",
+    "eslint": "^9.39.5",
+    "globals": "^17.13.0",
     "jest": "^30.0.5",
     "nodemon": "^3.1.10",
-    "supertest": "^7.1.4",
-    "ws": "^8.18.3"
+    "supertest": "^7.1.4"
   }
 }

@@ -66,7 +66,7 @@ const pagosController = {
         try {
             const result = await obtenerPagos({ id: req.params.id, ...req.query });
             if (result.tipo === 'unico') return res.json(result.pago);
-            const response = { pagos: result.pagos, pagination: result.pagination, resumen: result.resumen, periodos_encontrados: result.periodos_encontrados, resumen_por_periodo: result.resumen_por_periodo };
+            const response = { pagos: result.pagos, pagination: result.pagination, resumen: result.resumen, cobradores: result.cobradores, periodos_encontrados: result.periodos_encontrados, resumen_por_periodo: result.resumen_por_periodo };
             if (result.filtro) response.filtro_aplicado = result.filtro;
             res.json(response);
         } catch (error) {
