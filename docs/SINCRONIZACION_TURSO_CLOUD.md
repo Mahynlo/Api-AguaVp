@@ -17,7 +17,7 @@ Especificación técnica del subsistema de copia de seguridad en Turso Cloud int
 | `src/v2/controllers/syncController.js` | Respuestas HTTP (409 en conflicto). |
 | `src/v2/routes/sync.js` | Rutas y control de acceso. |
 | `src/database/sqlite-migrator.js` | `CORE_TRIGGERS` + `ensureCoreTriggers()` (recrea triggers de negocio en bases descargadas de la nube). |
-| `src/api-module.js` | Configura el servicio al arrancar si hay credenciales (`tursoDatabaseUrl`, `tursoAuthToken`, `tursoAutoSync`, `tursoSyncIntervalMs`). |
+| `src/api-module.js` | Configura el servicio al arrancar si hay credenciales (`tursoDatabaseUrl`, `tursoAuthToken`, `tursoAutoSync`, `tursoSyncIntervalMs`, `tursoInitialSyncDelayMs`). |
 
 ```
 App Electron (apiManager)                       Turso Cloud
@@ -107,7 +107,7 @@ Se ejecuta cuando no hay `last_sync` para la URL actual, cuando `requiere_carga_
 
 ## 5. Sincronización Incremental (`syncIncremental` → `incrementalRemote`)
 
-Cada `syncIntervalMs` (15 min) o a petición:
+Cada `syncIntervalMs` (15 min), una vez `tursoInitialSyncDelayMs` después de arrancar la API (60 s por defecto, `0` lo desactiva; no aplica al reconfigurar en caliente con `/configure`) o a petición:
 
 1. Sin `last_sync` válido o con `requiere_carga_completa = 1` → carga semilla protegida.
 2. `ensureChangeTracking`: si crea triggers (tabla nueva) → `needsSeed: 'tracking_installed'` → carga semilla.

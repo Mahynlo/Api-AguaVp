@@ -65,6 +65,15 @@ let syncState = {
 };
 
 let syncTimer = null;
+let initialSyncTimer = null;
+
+/** Un ciclo automático (temporizador o primera sincronización tras arrancar): nunca lanza. */
+function cicloAutomatico() {
+    return syncIncremental().catch(err => {
+        registrarFallo(err.message);
+        logWarn(`Error en sincronización automática: ${err.message}`);
+    });
+}
 
 // Registro: consola + registrador externo (la app de escritorio lo conecta a su visor de logs)
 let externalLogger = null;
@@ -173,7 +182,10 @@ export async function testConnection(url, token) {
 
 /**
  * Inicializa o reconfigura el servicio de sincronización
- * @param {Object} config - { tursoUrl, tursoToken, autoSync, syncIntervalMs }
+ * @param {Object} config - { tursoUrl, tursoToken, autoSync, syncIntervalMs, initialSyncDelayMs }
+ *   initialSyncDelayMs: solo al arrancar la API. Ejecuta un primer ciclo automático tras esa espera,
+ *   para que las sesiones más cortas que `syncIntervalMs` también suban sus cambios pendientes.
+ *   Al reconfigurar en caliente no se pasa: vincular una nube no dispara una subida inmediata.
  */
 export function configure(config = {}) {
     if (config.tursoUrl !== undefined) syncConfig.tursoUrl = (config.tursoUrl || '').trim();
@@ -186,6 +198,10 @@ export function configure(config = {}) {
     if (syncTimer) {
         clearInterval(syncTimer);
         syncTimer = null;
+    }
+    if (initialSyncTimer) {
+        clearTimeout(initialSyncTimer);
+        initialSyncTimer = null;
     }
     syncState.conflicto = null;
 
@@ -204,12 +220,16 @@ export function configure(config = {}) {
             if (tracking.created.length > 0) setLocalState(sqlite, 'requiere_carga_completa', '1');
 
             if (syncConfig.autoSync) {
-                syncTimer = setInterval(() => {
-                    syncIncremental().catch(err => {
-                        registrarFallo(err.message);
-                        logWarn(`Error en sincronización automática: ${err.message}`);
-                    });
-                }, syncConfig.syncIntervalMs);
+                syncTimer = setInterval(cicloAutomatico, syncConfig.syncIntervalMs);
+
+                const espera = Number(config.initialSyncDelayMs);
+                if (Number.isFinite(espera) && espera > 0) {
+                    initialSyncTimer = setTimeout(() => {
+                        initialSyncTimer = null;
+                        cicloAutomatico();
+                    }, espera);
+                    initialSyncTimer.unref?.();
+                }
             }
         } catch (err) {
             logError('Error inicializando cliente Turso', err);
