@@ -53,6 +53,8 @@ class AguaVPServer extends EventEmitter {
             tursoAuthToken: config.tursoAuthToken || process.env.TURSO_AUTH_TOKEN || '',
             tursoAutoSync: config.tursoAutoSync !== false,
             tursoSyncIntervalMs: config.tursoSyncIntervalMs || 15 * 60 * 1000,
+            // Primer ciclo automático tras arrancar (0 = desactivado)
+            tursoInitialSyncDelayMs: config.tursoInitialSyncDelayMs ?? 60 * 1000,
             tursoEquipoId: config.tursoEquipoId || '',
 
             // Otras opciones
@@ -312,6 +314,7 @@ class AguaVPServer extends EventEmitter {
                                     tursoToken: this.config.tursoAuthToken,
                                     autoSync: this.config.tursoAutoSync,
                                     syncIntervalMs: this.config.tursoSyncIntervalMs,
+                                    initialSyncDelayMs: this.config.tursoInitialSyncDelayMs,
                                     equipoId: this.config.tursoEquipoId || undefined
                                 });
                                 this.emit('log', '☁️ Sincronización en la Nube (Turso Cloud) activada');
